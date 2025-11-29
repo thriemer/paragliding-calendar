@@ -4,9 +4,11 @@
 //! paragliding site evaluation, and travel planning recommendations.
 
 pub mod error;
+pub mod config;
 
 // Re-export core types for public API
 pub use error::TravelAiError;
+pub use config::TravelAiConfig;
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

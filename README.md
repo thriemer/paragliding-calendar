@@ -51,21 +51,55 @@ travelai --verbose weather --location "Chamonix"
 
 ### Configuration
 
-TravelAI uses a configuration file for API keys and default settings. The configuration file will be located at:
+TravelAI uses a configuration file for API keys and default settings. To set up configuration:
+
+1. **Copy the sample configuration:**
+   ```bash
+   # Create config directory
+   mkdir -p ~/.config/travelai
+   
+   # Copy sample configuration
+   cp config/default.toml ~/.config/travelai/config.toml
+   ```
+
+2. **Edit the configuration file:**
+   ```bash
+   # Open in your preferred editor
+   nano ~/.config/travelai/config.toml
+   ```
+
+3. **Set your OpenWeatherMap API key:**
+   - Get a free API key at: https://openweathermap.org/api
+   - Replace `your_openweathermap_api_key_here` with your actual API key
+
+#### Configuration Locations
 
 - Linux/macOS: `~/.config/travelai/config.toml`
 - Windows: `%APPDATA%/travelai/config.toml`
 
-Example configuration structure:
+#### Environment Variable Override
 
-```toml
-[weather]
-api_key = "your_openweathermap_api_key"
+You can override any configuration setting using environment variables with the `TRAVELAI_` prefix:
 
-[defaults]
-search_radius_km = 50
-max_sites = 10
+```bash
+# Set API key via environment variable
+export TRAVELAI_WEATHER__API_KEY="your_api_key_here"
+
+# Set cache TTL via environment variable  
+export TRAVELAI_CACHE__TTL_HOURS=12
+
+# Set log level
+export TRAVELAI_LOGGING__LEVEL=debug
 ```
+
+#### Configuration Structure
+
+See `config/default.toml` for the complete configuration with detailed comments. Key sections:
+
+- `[weather]` - OpenWeatherMap API settings
+- `[cache]` - Data caching configuration  
+- `[logging]` - Log level and format settings
+- `[defaults]` - Application default values
 
 ## Development
 
