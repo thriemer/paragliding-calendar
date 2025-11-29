@@ -1,0 +1,20 @@
+[package]
+name = "travelai"
+version = "0.1.0"
+edition = "2024"
+authors = ["TravelAI Team"]
+description = "Intelligent paragliding and outdoor adventure travel planning CLI"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+anyhow = "1.0"
+thiserror = "1.0"
+
+[lints.clippy]
+# Pedantic lints that are useful for code quality
+pedantic = { level = "warn", priority = -1 }
+# Specific overrides
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

@@ -1,0 +1,25 @@
+//! `TravelAI` - Intelligent paragliding and outdoor adventure travel planning
+//!
+//! This library provides the core functionality for weather analysis,
+//! paragliding site evaluation, and travel planning recommendations.
+
+pub mod error;
+
+// Re-export core types for public API
+pub use error::TravelAiError;
+
+/// Library version
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Core result type used throughout the library
+pub type Result<T> = std::result::Result<T, TravelAiError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_version_is_set() {
+        assert!(!VERSION.is_empty());
+    }
+}
