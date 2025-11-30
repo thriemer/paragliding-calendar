@@ -551,4 +551,3 @@ impl DayRating {
         }
     }
 }
-

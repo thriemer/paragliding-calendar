@@ -49,13 +49,17 @@ pub struct DHVFlyingSite {
     #[serde(rename = "SiteUrl")]
     pub site_url: Option<String>,
     #[serde(rename = "Location")]
-    pub location: DHVLocation,
+    pub locations: Vec<DHVLocation>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct DHVLocation {
+    #[serde(rename = "LocationName")]
+    pub location_name: Option<String>,
     #[serde(rename = "Coordinates")]
     pub coordinates: String, // Format: "longitude,latitude"
+    #[serde(rename = "LocationType")]
+    pub location_type: Option<u8>, // 1 = launch, 2 = landing
     #[serde(rename = "Altitude")]
     pub altitude: Option<f64>,
     #[serde(rename = "Directions")]
@@ -77,14 +81,22 @@ pub struct DHVLocation {
 impl DHVFlyingSite {
     /// Convert DHV site to unified ParaglidingSite
     pub fn to_paragliding_site(&self) -> Result<ParaglidingSite> {
-        let coordinates = self.location.parse_coordinates()?;
-        let launch_directions = self.location.parse_launch_directions();
+        // Find the launch location (LocationType = 1)
+        let launch_location = self.locations.iter()
+            .find(|loc| loc.location_type == Some(1))
+            .or_else(|| self.locations.first()) // Fallback to first location if no launch type found
+            .ok_or_else(|| TravelAIError::ParseError(format!(
+                "No launch location found for site {}", self.site_id
+            )))?;
+
+        let coordinates = launch_location.parse_coordinates()?;
+        let launch_directions = launch_location.parse_launch_directions();
 
         Ok(ParaglidingSite {
             id: format!("dhv_{}", self.site_id),
             name: self.site_name.clone(),
             coordinates,
-            elevation: self.location.altitude,
+            elevation: launch_location.altitude,
             launch_directions,
             site_type: self.site_type.clone(),
             country: self.site_country.clone(),
@@ -92,11 +104,11 @@ impl DHVFlyingSite {
             characteristics: SiteCharacteristics {
                 height_difference_max: self.height_difference_max,
                 site_url: self.site_url.clone(),
-                access_by_car: self.location.access_by_car,
-                access_by_foot: self.location.access_by_foot,
-                access_by_public_transport: self.location.access_by_public_transport,
-                hanggliding: self.location.hanggliding,
-                paragliding: self.location.paragliding,
+                access_by_car: launch_location.access_by_car,
+                access_by_foot: launch_location.access_by_foot,
+                access_by_public_transport: launch_location.access_by_public_transport,
+                hanggliding: launch_location.hanggliding,
+                paragliding: launch_location.paragliding,
             },
         })
     }
