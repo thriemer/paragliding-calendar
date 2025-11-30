@@ -327,73 +327,8 @@ impl WeatherForecast {
     }
 }
 
-// Convert OpenWeatherMap API responses to internal models
-impl From<&openweather::CurrentWeatherResponse> for WeatherData {
-    fn from(response: &openweather::CurrentWeatherResponse) -> Self {
-        let weather = response.weather.first();
 
-        Self {
-            timestamp: DateTime::from_timestamp(response.dt, 0).unwrap_or_else(Utc::now),
-            temperature: WeatherData::kelvin_to_celsius(response.main.temp),
-            wind_speed: response.wind.as_ref().map(|w| w.speed).unwrap_or(0.0),
-            wind_direction: response.wind.as_ref().and_then(|w| w.deg).unwrap_or(0),
-            wind_gust: response.wind.as_ref().and_then(|w| w.gust),
-            precipitation: 0.0, // Current weather doesn't include precipitation amount
-            cloud_cover: response.clouds.as_ref().map(|c| c.all),
-            pressure: response.main.pressure,
-            visibility: response.visibility.map(|v| v as f32 / 1000.0), // Convert m to km
-            description: weather
-                .map(|w| w.description.clone())
-                .unwrap_or_else(|| "Unknown".to_string()),
-            icon: weather.map(|w| w.icon.clone()),
-        }
-    }
-}
 
-impl From<&openweather::ForecastItem> for WeatherData {
-    fn from(item: &openweather::ForecastItem) -> Self {
-        let weather = item.weather.first();
-
-        // Calculate precipitation from rain and snow
-        let precipitation = item
-            .rain
-            .as_ref()
-            .and_then(|r| r.three_hour.or(r.one_hour))
-            .unwrap_or(0.0)
-            + item
-                .snow
-                .as_ref()
-                .and_then(|s| s.three_hour.or(s.one_hour))
-                .unwrap_or(0.0);
-
-        Self {
-            timestamp: DateTime::from_timestamp(item.dt, 0).unwrap_or_else(Utc::now),
-            temperature: WeatherData::kelvin_to_celsius(item.main.temp),
-            wind_speed: item.wind.as_ref().map(|w| w.speed).unwrap_or(0.0),
-            wind_direction: item.wind.as_ref().and_then(|w| w.deg).unwrap_or(0),
-            wind_gust: item.wind.as_ref().and_then(|w| w.gust),
-            precipitation,
-            cloud_cover: item.clouds.as_ref().map(|c| c.all),
-            pressure: item.main.pressure,
-            visibility: item.visibility.map(|v| v as f32 / 1000.0), // Convert m to km
-            description: weather
-                .map(|w| w.description.clone())
-                .unwrap_or_else(|| "Unknown".to_string()),
-            icon: weather.map(|w| w.icon.clone()),
-        }
-    }
-}
-
-impl From<&openweather::CityInfo> for Location {
-    fn from(city: &openweather::CityInfo) -> Self {
-        Self::with_country(
-            city.coord.lat,
-            city.coord.lon,
-            city.name.clone(),
-            city.country.clone(),
-        )
-    }
-}
 
 // Convert OpenMeteo API responses to internal models
 impl WeatherForecast {

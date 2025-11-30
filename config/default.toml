@@ -7,15 +7,15 @@
 # TRAVELAI_ prefix. For example: TRAVELAI_WEATHER__API_KEY=your_key
 
 [weather]
-# OpenWeatherMap API key - REQUIRED
-# Get your free API key at: https://openweathermap.org/api
+# Weather API configuration - OpenMeteo integration (no API key required)
+# OpenMeteo provides free weather data without requiring registration
 # Environment variable: TRAVELAI_WEATHER__API_KEY
-api_key = "your_openweathermap_api_key_here"
+api_key = ""
 
-# Base URL for the OpenWeatherMap API
-# Default: "https://api.openweathermap.org/data/2.5"
+# Base URL for the weather API service - OpenMeteo API
+# Default: "https://api.open-meteo.com/v1"
 # Environment variable: TRAVELAI_WEATHER__BASE_URL
-base_url = "https://api.openweathermap.org/data/2.5"
+base_url = "https://api.open-meteo.com/v1"
 
 # Request timeout in seconds
 # Default: 30

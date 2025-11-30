@@ -68,9 +68,9 @@ TravelAI uses a configuration file for API keys and default settings. To set up 
    nano ~/.config/travelai/config.toml
    ```
 
-3. **Set your OpenWeatherMap API key:**
-   - Get a free API key at: https://openweathermap.org/api
-   - Replace `your_openweathermap_api_key_here` with your actual API key
+3. **Weather API Configuration:**
+   - No API key required! Weather data is provided by OpenMeteo API
+   - Optional: Configure custom weather service settings in config.toml
 
 #### Configuration Locations
 
@@ -96,7 +96,7 @@ export TRAVELAI_LOGGING__LEVEL=debug
 
 See `config/default.toml` for the complete configuration with detailed comments. Key sections:
 
-- `[weather]` - OpenWeatherMap API settings
+- `[weather]` - Weather API settings (OpenMeteo integration)
 - `[cache]` - Data caching configuration  
 - `[logging]` - Log level and format settings
 - `[defaults]` - Application default values

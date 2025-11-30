@@ -78,7 +78,7 @@ impl RateLimiter {
     }
 }
 
-/// Weather API client for OpenWeatherMap
+/// Weather API client for OpenMeteo
 pub struct WeatherApiClient {
     /// HTTP client
     client: Client,
@@ -99,7 +99,7 @@ impl WeatherApiClient {
             .build()
             .with_context(|| "Failed to create HTTP client")?;
 
-        // OpenWeatherMap free tier: 60 requests per minute
+        // OpenMeteo rate limit: 60 requests per minute
         let rate_limiter = RateLimiter::new(60);
 
         Ok(Self {
@@ -200,7 +200,7 @@ impl WeatherApiClient {
 
         // OpenMeteo API for hourly forecast data (7 days)
         let url = format!(
-            "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&hourly=temperature_2m,windspeed_10m,winddirection_10m,windgusts_10m,precipitation,cloudcover,surface_pressure,visibility,weathercode&timezone=auto&forecast_days=7",
+            "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&hourly=temperature_2m,windspeed_10m,winddirection_10m,windgusts_10m,precipitation,cloudcover,surface_pressure,visibility,weathercode&timezone=auto&forecast_days=7&wind_speed_unit=ms",
             lat, lon
         );
 
@@ -403,7 +403,7 @@ impl WeatherApiClient {
                     } else if status.as_u16() == 401 {
                         error!("API authentication failed (HTTP 401)");
                         return Err(TravelAiError::api_with_context(
-                            "Invalid API key. Please check your OpenWeatherMap API key.",
+                            "API authentication failed. Please check your weather API configuration.",
                             ErrorCode::ApiUnauthorized,
                             HashMap::new(),
                         )
@@ -522,7 +522,7 @@ impl WeatherApiClient {
     }
 }
 
-/// Geocoding result from OpenWeatherMap API
+/// Geocoding result from weather API
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct GeocodingResult {
     /// Location name
@@ -798,4 +798,3 @@ mod tests {
         assert_eq!(location.country, Some("CH".to_string()));
     }
 }
-
