@@ -27,7 +27,7 @@ pub struct TravelAiConfig {
 /// Weather API configuration settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeatherConfig {
-    /// Weather API key (optional for OpenMeteo)
+    /// Weather API key (optional for `OpenMeteo`)
     pub api_key: Option<String>,
     /// Base URL for weather API
     #[serde(default = "default_weather_base_url")]

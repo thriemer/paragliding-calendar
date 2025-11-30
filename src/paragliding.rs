@@ -85,7 +85,7 @@ fn parse_direction_text_to_degrees(text: &str) -> Vec<f64> {
         ("O", 90.0), // German "Ost" = East
     ]
     .iter()
-    .cloned()
+    .copied()
     .collect();
 
     // Split on common separators and parse each direction
@@ -108,6 +108,7 @@ pub struct GeographicSearch;
 
 impl GeographicSearch {
     /// Find sites within radius (km) of a location
+    #[must_use] 
     pub fn sites_within_radius<'a>(
         sites: &'a [ParaglidingSite],
         center: &Coordinates,
@@ -151,7 +152,9 @@ mod tests {
     #[test]
     fn test_coordinate_parsing() {
         let location = DHVLocation {
+            location_name: None,
             coordinates: "14.700136,50.998362".to_string(),
+            location_type: Some(1),
             altitude: Some(320.0),
             directions: None,
             directions_text: None,
@@ -163,8 +166,8 @@ mod tests {
         };
 
         let coords = location.parse_coordinates().unwrap();
-        assert_eq!(coords.longitude, 14.700136);
-        assert_eq!(coords.latitude, 50.998362);
+        assert_eq!(coords.longitude, 14.700_136);
+        assert_eq!(coords.latitude, 50.998_362);
     }
 
     #[test]

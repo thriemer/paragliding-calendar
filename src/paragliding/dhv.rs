@@ -2,24 +2,18 @@ use quick_xml::de::from_str;
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use super::ParaglidingSite;
 use super::{Result, TravelAIError};
 
-use crate::LocationInput;
-use crate::TravelAiError;
 use crate::paragliding::Coordinates;
 use crate::paragliding::DataSource;
 use crate::paragliding::LaunchDirection;
 use crate::paragliding::SiteCharacteristics;
-
-use crate::Cache;
-use crate::WeatherApiClient;
 use crate::paragliding::parse_direction_text_to_degrees;
 
 /// DHV XML parser and site loader
-
 pub struct DHVParser;
 /// DHV XML structure for deserialization
 #[derive(Debug, Deserialize)]
@@ -79,7 +73,7 @@ pub struct DHVLocation {
 }
 
 impl DHVFlyingSite {
-    /// Convert DHV site to unified ParaglidingSite
+    /// Convert DHV site to unified `ParaglidingSite`
     pub fn to_paragliding_site(&self) -> Result<ParaglidingSite> {
         // Find the launch location (LocationType = 1)
         let launch_location = self.locations.iter()
@@ -169,7 +163,7 @@ impl DHVParser {
         }
 
         let xml_content = fs::read_to_string(xml_path)
-            .map_err(|e| TravelAIError::IoError(format!("Failed to read DHV XML file: {}", e)))?;
+            .map_err(|e| TravelAIError::IoError(format!("Failed to read DHV XML file: {e}")))?;
 
         Self::parse_xml(&xml_content)
     }
@@ -179,7 +173,7 @@ impl DHVParser {
         info!("Parsing DHV XML content");
 
         let dhv_xml: DHVXml = from_str(xml_content)
-            .map_err(|e| TravelAIError::ParseError(format!("Failed to parse DHV XML: {}", e)))?;
+            .map_err(|e| TravelAIError::ParseError(format!("Failed to parse DHV XML: {e}")))?;
 
         let mut sites = Vec::new();
         let mut parse_errors = 0;
@@ -212,10 +206,10 @@ impl DHVParser {
     /// Get file modification time for cache validation
     pub fn get_file_mtime<P: AsRef<Path>>(xml_path: P) -> Result<std::time::SystemTime> {
         let metadata = fs::metadata(xml_path.as_ref())
-            .map_err(|e| TravelAIError::IoError(format!("Failed to get file metadata: {}", e)))?;
+            .map_err(|e| TravelAIError::IoError(format!("Failed to get file metadata: {e}")))?;
 
         metadata.modified().map_err(|e| {
-            TravelAIError::IoError(format!("Failed to get file modification time: {}", e))
+            TravelAIError::IoError(format!("Failed to get file modification time: {e}"))
         })
     }
 }
@@ -263,8 +257,8 @@ mod tests {
         let site = &sites[0];
         assert_eq!(site.id, "dhv_1");
         assert_eq!(site.name, "Test Site");
-        assert_eq!(site.coordinates.latitude, 50.998362);
-        assert_eq!(site.coordinates.longitude, 14.700136);
+        assert_eq!(site.coordinates.latitude, 50.998_362);
+        assert_eq!(site.coordinates.longitude, 14.700_136);
         assert_eq!(site.elevation, Some(320.0));
         assert_eq!(site.launch_directions.len(), 1);
         assert_eq!(site.launch_directions[0].direction_text, "O, W");

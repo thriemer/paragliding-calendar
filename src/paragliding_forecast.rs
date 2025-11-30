@@ -6,11 +6,10 @@
 use crate::models::{Location, WeatherData, WeatherForecast};
 use crate::paragliding::{Coordinates, GeographicSearch, ParaglidingSite};
 use crate::wind_analysis::{FlyabilityAnalysis, WindSpeedCategory};
-use crate::{Cache, LocationInput, LocationParser, WeatherApiClient};
+use crate::{Cache, LocationInput, WeatherApiClient};
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
 /// Daily flyability forecast for a specific location
@@ -157,7 +156,7 @@ impl ParaglidingForecastService {
         );
 
         // Generate daily forecasts
-        let daily_forecasts = Self::generate_daily_forecasts(&weather_forecast, &sites, days)?;
+        let daily_forecasts = Self::generate_daily_forecasts(&weather_forecast, &sites, days);
 
         Ok(ParaglidingForecast {
             location,
@@ -180,14 +179,14 @@ impl ParaglidingForecastService {
                     Ok(results) if !results.is_empty() => {
                         Ok(Location::from(results.into_iter().next().unwrap()))
                     }
-                    _ => Ok(Location::new(lat, lon, format!("{:.4}, {:.4}", lat, lon))),
+                    _ => Ok(Location::new(lat, lon, format!("{lat:.4}, {lon:.4}"))),
                 }
             }
             LocationInput::Name(name) => {
                 debug!("Geocoding location: {}", name);
                 let geocoding_results = api_client.geocode(&name)?;
                 if geocoding_results.is_empty() {
-                    return Err(anyhow::anyhow!("Location not found: {}", name));
+                    return Err(anyhow::anyhow!("Location not found: {name}"));
                 }
                 let geocoding = geocoding_results.into_iter().next().unwrap();
                 Ok(Location::from(geocoding))
@@ -196,7 +195,7 @@ impl ParaglidingForecastService {
                 debug!("Geocoding postal code: {}", postal);
                 let geocoding_results = api_client.geocode(&postal)?;
                 if geocoding_results.is_empty() {
-                    return Err(anyhow::anyhow!("Postal code not found: {}", postal));
+                    return Err(anyhow::anyhow!("Postal code not found: {postal}"));
                 }
                 let geocoding = geocoding_results.into_iter().next().unwrap();
                 Ok(Location::from(geocoding))
@@ -244,7 +243,7 @@ impl ParaglidingForecastService {
         weather_forecast: &WeatherForecast,
         sites: &[ParaglidingSite],
         days: usize,
-    ) -> Result<Vec<DailyFlyabilityForecast>> {
+    ) -> Vec<DailyFlyabilityForecast> {
         let mut daily_forecasts = Vec::new();
 
         for day in 0..days {
@@ -257,18 +256,18 @@ impl ParaglidingForecastService {
                 break;
             }
 
-            let date = if !weather_forecast.forecasts.is_empty() {
-                weather_forecast.forecasts[0].timestamp.date_naive()
-                    + chrono::Duration::days(day as i64)
+            let date = if weather_forecast.forecasts.is_empty() {
+                Utc::now().date_naive() + chrono::Duration::days(i64::try_from(day).unwrap_or(0))
             } else {
-                Utc::now().date_naive() + chrono::Duration::days(day as i64)
+                weather_forecast.forecasts[0].timestamp.date_naive()
+                    + chrono::Duration::days(i64::try_from(day).unwrap_or(0))
             };
 
-            let daily_forecast = Self::generate_daily_forecast(date, day, &day_weather, sites)?;
+            let daily_forecast = Self::generate_daily_forecast(date, day, &day_weather, sites);
             daily_forecasts.push(daily_forecast);
         }
 
-        Ok(daily_forecasts)
+        daily_forecasts
     }
 
     /// Generate forecast for a single day
@@ -277,7 +276,7 @@ impl ParaglidingForecastService {
         day_offset: usize,
         day_weather: &[&WeatherData],
         sites: &[ParaglidingSite],
-    ) -> Result<DailyFlyabilityForecast> {
+    ) -> DailyFlyabilityForecast {
         let day_name = Self::format_day_name(day_offset, date);
         let weather_summary = Self::create_weather_summary(day_weather);
 
@@ -286,7 +285,8 @@ impl ParaglidingForecastService {
         for site in sites {
             // Use midday weather for site analysis
             if let Some(midday_weather) = day_weather.get(day_weather.len() / 2) {
-                let hours_ahead = day_offset as f32 * 24.0 + 12.0; // Midday of the day
+                // Safe conversion: realistic day offsets will always be small
+                let hours_ahead = f32::try_from(day_offset * 24 + 12).unwrap_or(f32::INFINITY);
                 let analysis = FlyabilityAnalysis::analyze(midday_weather, site, hours_ahead);
 
                 // Only include sites with reasonable flyability scores
@@ -314,7 +314,7 @@ impl ParaglidingForecastService {
         let confidence = Self::calculate_confidence(day_offset);
         let explanation = Self::generate_day_explanation(&day_rating, &site_ratings);
 
-        Ok(DailyFlyabilityForecast {
+        DailyFlyabilityForecast {
             date,
             day_name,
             weather_summary,
@@ -322,7 +322,7 @@ impl ParaglidingForecastService {
             day_rating,
             confidence,
             explanation,
-        })
+        }
     }
 
     /// Format day name (Today, Tomorrow, day of week)
@@ -360,13 +360,13 @@ impl ParaglidingForecastService {
 
         let avg_cloud_cover = day_weather
             .iter()
-            .map(|w| w.cloud_cover as f32)
+            .map(|w| f32::from(w.cloud_cover))
             .sum::<f32>()
-            / day_weather.len() as f32;
+            / f32::try_from(day_weather.len()).unwrap_or(f32::INFINITY).max(1.0);
         let max_precip = day_weather
             .iter()
             .map(|w| w.precipitation)
-            .fold(0.0f32, |a, b| a.max(b));
+            .fold(0.0f32, f32::max);
 
         // Use midday weather for primary description and wind direction
         let midday = day_weather[day_weather.len() / 2];
@@ -389,11 +389,11 @@ impl ParaglidingForecastService {
                 direction_degrees: midday.wind_direction,
             },
             precipitation_probability: if max_precip > 0.0 {
-                ((max_precip * 10.0).min(100.0)) as u8
+                (max_precip * 10.0).clamp(0.0, 100.0).round() as u8
             } else {
                 0
             },
-            cloud_cover: avg_cloud_cover as u8,
+            cloud_cover: avg_cloud_cover.clamp(0.0, 100.0).round() as u8,
         }
     }
 
@@ -403,7 +403,7 @@ impl ParaglidingForecastService {
             return DayRating::NotFlyable;
         }
 
-        let best_score = site_ratings.first().map(|s| s.score).unwrap_or(0.0);
+        let best_score = site_ratings.first().map_or(0.0, |s| s.score);
         match best_score {
             s if s >= 8.0 => DayRating::Excellent,
             s if s >= 6.0 => DayRating::Good,
@@ -416,15 +416,15 @@ impl ParaglidingForecastService {
     /// Calculate forecast confidence based on time ahead
     fn calculate_confidence(day_offset: usize) -> f32 {
         // Confidence decreases over time
-        let base_confidence = match day_offset {
+        
+        match day_offset {
             0 => 0.95,     // Today - very high confidence
             1 => 0.90,     // Tomorrow - high confidence
             2 => 0.85,     // Day after - good confidence
             3..=4 => 0.75, // 3-4 days - moderate confidence
             5..=7 => 0.65, // 5-7 days - fair confidence
             _ => 0.50,     // Beyond week - low confidence
-        };
-        base_confidence
+        }
     }
 
     /// Generate explanation for the day
@@ -437,7 +437,7 @@ impl ParaglidingForecastService {
         }
 
         let site_count = site_ratings.len();
-        let best_score = site_ratings.first().map(|s| s.score).unwrap_or(0.0);
+        let best_score = site_ratings.first().map_or(0.0, |s| s.score);
 
         match day_rating {
             DayRating::Excellent => {
@@ -541,6 +541,7 @@ impl std::fmt::Display for DayRating {
 }
 
 impl DayRating {
+    #[must_use] 
     pub fn emoji(&self) -> &'static str {
         match self {
             DayRating::Excellent => "🟢",

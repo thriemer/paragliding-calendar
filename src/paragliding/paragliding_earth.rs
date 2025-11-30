@@ -1,7 +1,7 @@
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::time::Duration;
-use tracing::{info, warn, error};
+use tracing::info;
 
 use super::{Result, TravelAIError};
 use crate::config::TravelAiConfig;
@@ -38,6 +38,7 @@ pub struct SearchResponse {
 
 impl ParaglidingEarthClient {
     /// Create a new client
+    #[must_use] 
     pub fn new(config: &TravelAiConfig) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
@@ -71,13 +72,13 @@ impl ParaglidingEarthClient {
         let mut request = self.client.get(&url);
         
         if let Some(api_key) = &self.api_key {
-            request = request.header("Authorization", format!("Bearer {}", api_key));
+            request = request.header("Authorization", format!("Bearer {api_key}"));
         }
         
         let response = request
             .send()
             .await
-            .map_err(|e| TravelAIError::NetworkError(format!("API request failed: {}", e)))?;
+            .map_err(|e| TravelAIError::NetworkError(format!("API request failed: {e}")))?;
             
         if !response.status().is_success() {
             let status = response.status();
@@ -91,7 +92,7 @@ impl ParaglidingEarthClient {
                     "Paragliding Earth API rate limit exceeded".to_string()
                 )),
                 _ => Err(TravelAIError::ApiError(
-                    format!("Paragliding Earth API error {}: {}", status, error_text)
+                    format!("Paragliding Earth API error {status}: {error_text}")
                 )),
             };
         }
@@ -100,12 +101,12 @@ impl ParaglidingEarthClient {
             .json()
             .await
             .map_err(|e| TravelAIError::ParseError(
-                format!("Failed to parse Paragliding Earth response: {}", e)
+                format!("Failed to parse Paragliding Earth response: {e}")
             ))?;
             
         let sites: Vec<ParaglidingSite> = search_response.sites
             .into_iter()
-            .map(|site| site.to_paragliding_site())
+            .map(ParaglidingEarthSite::to_paragliding_site)
             .collect();
             
         info!("Found {} sites from Paragliding Earth API", sites.len());
@@ -121,7 +122,7 @@ impl ParaglidingEarthClient {
             .send()
             .await
             .map_err(|e| TravelAIError::NetworkError(
-                format!("Health check failed: {}", e)
+                format!("Health check failed: {e}")
             ))?;
             
         if response.status().is_success() {
@@ -136,7 +137,8 @@ impl ParaglidingEarthClient {
 }
 
 impl ParaglidingEarthSite {
-    /// Convert to unified ParaglidingSite
+    /// Convert to unified `ParaglidingSite`
+    #[must_use] 
     pub fn to_paragliding_site(self) -> ParaglidingSite {
         let coordinates = Coordinates {
             latitude: self.latitude,
@@ -202,11 +204,10 @@ fn parse_paragliding_earth_directions(directions: &str) -> Vec<f64> {
         }
         
         // Try to parse as numeric degrees
-        if let Ok(deg) = part.parse::<f64>() {
-            if (0.0..=360.0).contains(&deg) {
+        if let Ok(deg) = part.parse::<f64>()
+            && (0.0..=360.0).contains(&deg) {
                 degrees.push(deg);
             }
-        }
     }
     
     degrees

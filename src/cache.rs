@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sled::Db;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -38,7 +38,7 @@ impl<T> CacheEntry<T> {
     /// Check if this cache entry is still valid
     fn is_valid(&self) -> bool {
         let age = Utc::now() - self.stored_at;
-        age.num_hours() < self.ttl_hours as i64
+        age.num_hours() < i64::from(self.ttl_hours)
     }
 
     /// Get the data if the entry is still valid
@@ -66,7 +66,7 @@ pub struct Cache {
 impl Cache {
     /// Create a new cache instance
     #[instrument(fields(cache_dir = %cache_dir.display(), default_ttl_hours))]
-    pub fn new(cache_dir: PathBuf, default_ttl_hours: u32) -> Result<Self> {
+    pub fn new(cache_dir: &Path, default_ttl_hours: u32) -> Result<Self> {
         info!(
             "Initializing cache at {} with {}h TTL",
             cache_dir.display(),
@@ -75,16 +75,14 @@ impl Cache {
         let start_time = Instant::now();
 
         // Ensure cache directory exists
-        if let Some(parent) = cache_dir.parent() {
-            debug!("Ensuring cache directory exists: {}", parent.display());
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create cache directory: {}", parent.display())
-            })?;
-        }
+        debug!("Ensuring cache directory exists: {}", cache_dir.display());
+        std::fs::create_dir_all(cache_dir).with_context(|| {
+            format!("Failed to create cache directory: {}", cache_dir.display())
+        })?;
 
         // Open Sled database
         debug!("Opening Sled database at: {}", cache_dir.display());
-        let db = sled::open(&cache_dir)
+        let db = sled::open(cache_dir)
             .with_context(|| format!("Failed to open cache database at: {}", cache_dir.display()))
             .map_err(|e| {
                 error!("Cache database initialization failed: {}", e);
@@ -108,9 +106,9 @@ impl Cache {
     }
 
     /// Create cache with default location and TTL
-    pub fn default() -> Result<Self> {
+    pub fn with_defaults() -> Result<Self> {
         let cache_dir = Self::default_cache_dir()?;
-        Self::new(cache_dir, 6) // Default 6-hour TTL
+        Self::new(&cache_dir, 6) // Default 6-hour TTL
     }
 
     /// Get the default cache directory
@@ -128,10 +126,10 @@ impl Cache {
         if let Some(data) = self
             .db
             .get(key)
-            .with_context(|| format!("Failed to read from cache key: {}", key))?
+            .with_context(|| format!("Failed to read from cache key: {key}"))?
         {
             let entry: CacheEntry<T> = serde_json::from_slice(&data)
-                .with_context(|| format!("Failed to deserialize cache entry for key: {}", key))?;
+                .with_context(|| format!("Failed to deserialize cache entry for key: {key}"))?;
 
             entry.get_if_valid()
         } else {
@@ -158,11 +156,11 @@ impl Cache {
     {
         let entry = CacheEntry::new(value, ttl_hours);
         let serialized = serde_json::to_vec(&entry)
-            .with_context(|| format!("Failed to serialize cache entry for key: {}", key))?;
+            .with_context(|| format!("Failed to serialize cache entry for key: {key}"))?;
 
         self.db
             .insert(key, serialized)
-            .with_context(|| format!("Failed to write to cache key: {}", key))?;
+            .with_context(|| format!("Failed to write to cache key: {key}"))?;
 
         self.db
             .flush()
@@ -176,7 +174,7 @@ impl Cache {
         let removed = self
             .db
             .remove(key)
-            .with_context(|| format!("Failed to remove cache key: {}", key))?
+            .with_context(|| format!("Failed to remove cache key: {key}"))?
             .is_some();
 
         if removed {
@@ -189,6 +187,7 @@ impl Cache {
     }
 
     /// Check if a key exists in the cache and is valid
+    #[must_use] 
     pub fn contains(&self, key: &str) -> bool {
         self.get::<serde_json::Value>(key).is_ok()
     }
@@ -327,25 +326,31 @@ pub struct CacheStats {
 
 impl CacheStats {
     /// Format size in human-readable format
+    #[must_use] 
     pub fn format_size(&self) -> String {
-        let size = self.size_bytes as f64;
-        if size < 1024.0 {
-            format!("{} B", size)
-        } else if size < 1024.0 * 1024.0 {
-            format!("{:.1} KB", size / 1024.0)
-        } else if size < 1024.0 * 1024.0 * 1024.0 {
-            format!("{:.1} MB", size / (1024.0 * 1024.0))
+        // Use integer arithmetic to avoid precision loss until final formatting
+        const KB: u64 = 1024;
+        const MB: u64 = KB * 1024;
+        const GB: u64 = MB * 1024;
+        
+        if self.size_bytes < KB {
+            format!("{} B", self.size_bytes)
+        } else if self.size_bytes < MB {
+            format!("{:.1} KB", self.size_bytes as f64 / KB as f64)
+        } else if self.size_bytes < GB {
+            format!("{:.1} MB", self.size_bytes as f64 / MB as f64)
         } else {
-            format!("{:.1} GB", size / (1024.0 * 1024.0 * 1024.0))
+            format!("{:.1} GB", self.size_bytes as f64 / GB as f64)
         }
     }
 
     /// Calculate hit rate percentage
+    #[must_use] 
     pub fn hit_rate(&self) -> f64 {
         if self.total_entries == 0 {
             0.0
         } else {
-            (self.valid_entries as f64 / self.total_entries as f64) * 100.0
+            (100.0 * self.valid_entries as f64) / self.total_entries as f64
         }
     }
 }
@@ -353,16 +358,19 @@ impl CacheStats {
 // Helper function for generating cache keys
 impl Cache {
     /// Generate a standardized cache key for weather data
+    #[must_use] 
     pub fn weather_cache_key(lat: f64, lon: f64, date: &str) -> String {
-        format!("weather:{:.2}:{:.2}:{}", lat, lon, date)
+        format!("weather:{lat:.2}:{lon:.2}:{date}")
     }
 
     /// Generate a daily cache key for weather data (rounded to day)
+    #[must_use] 
     pub fn daily_weather_key(lat: f64, lon: f64, date: &chrono::NaiveDate) -> String {
         Self::weather_cache_key(lat, lon, &date.format("%Y-%m-%d").to_string())
     }
 
     /// Generate a current weather cache key
+    #[must_use] 
     pub fn current_weather_key(lat: f64, lon: f64) -> String {
         let today = Utc::now().date_naive();
         Self::daily_weather_key(lat, lon, &today)
@@ -378,7 +386,7 @@ mod tests {
     fn create_test_cache() -> (Cache, TempDir) {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let cache_path = temp_dir.path().join("test_cache");
-        let cache = Cache::new(cache_path, 1).expect("Failed to create test cache");
+        let cache = Cache::new(&cache_path, 1).expect("Failed to create test cache");
         (cache, temp_dir)
     }
 

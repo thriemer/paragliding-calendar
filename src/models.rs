@@ -57,11 +57,11 @@ pub struct WeatherForecast {
     pub retrieved_at: DateTime<Utc>,
 }
 
-/// OpenMeteo API response structures
+/// `OpenMeteo` API response structures
 pub mod openmeteo {
-    use super::*;
+    use super::Deserialize;
 
-    /// Current weather and forecast response from OpenMeteo API
+    /// Current weather and forecast response from `OpenMeteo` API
     #[derive(Debug, Deserialize)]
     pub struct ForecastResponse {
         pub latitude: f64,
@@ -73,7 +73,7 @@ pub mod openmeteo {
         pub current: Option<CurrentData>,
     }
 
-    /// Hourly weather data from OpenMeteo
+    /// Hourly weather data from `OpenMeteo`
     #[derive(Debug, Deserialize)]
     pub struct HourlyData {
         pub time: Vec<String>,
@@ -95,7 +95,7 @@ pub mod openmeteo {
         pub weather_code: Option<Vec<u8>>,
     }
 
-    /// Daily weather data from OpenMeteo
+    /// Daily weather data from `OpenMeteo`
     #[derive(Debug, Deserialize)]
     pub struct DailyData {
         pub time: Vec<String>,
@@ -113,7 +113,7 @@ pub mod openmeteo {
         pub weather_code: Option<Vec<Option<u8>>>,
     }
 
-    /// Current weather data from OpenMeteo (when available)
+    /// Current weather data from `OpenMeteo` (when available)
     #[derive(Debug, Deserialize)]
     pub struct CurrentData {
         #[serde(rename = "temperature_2m")]
@@ -134,7 +134,7 @@ pub mod openmeteo {
         pub weather_code: u8,
     }
 
-    /// Geocoding response from OpenMeteo
+    /// Geocoding response from `OpenMeteo`
     #[derive(Debug, Deserialize)]
     pub struct GeocodingResponse {
         pub results: Option<Vec<GeocodingResult>>,
@@ -151,7 +151,8 @@ pub mod openmeteo {
         pub timezone: Option<String>,
     }
 
-    /// Convert OpenMeteo weather code to human-readable description
+    /// Convert `OpenMeteo` weather code to human-readable description
+    #[must_use] 
     pub fn weather_code_to_description(code: u8) -> &'static str {
         match code {
             0 => "Clear sky",
@@ -189,11 +190,13 @@ pub mod openmeteo {
 
 impl WeatherData {
     /// Convert temperature from Kelvin to Celsius
+    #[must_use] 
     pub fn kelvin_to_celsius(kelvin: f32) -> f32 {
         kelvin - 273.15
     }
 
     /// Convert wind direction from degrees to cardinal direction
+    #[must_use] 
     pub fn wind_direction_to_cardinal(degrees: u16) -> &'static str {
         match degrees {
             0..=11 | 349..=360 => "N",
@@ -217,11 +220,13 @@ impl WeatherData {
     }
 
     /// Format temperature with unit
+    #[must_use] 
     pub fn format_temperature(&self) -> String {
         format!("{:.1}°C", self.temperature)
     }
 
     /// Format wind information
+    #[must_use] 
     pub fn format_wind(&self) -> String {
         let direction = Self::wind_direction_to_cardinal(self.wind_direction);
         format!(
@@ -231,6 +236,7 @@ impl WeatherData {
     }
 
     /// Check if conditions are suitable for paragliding (basic heuristic)
+    #[must_use] 
     pub fn is_suitable_for_paragliding(&self) -> bool {
         // Basic safety criteria for paragliding
         // - Wind speed between 2-15 m/s
@@ -247,6 +253,7 @@ impl WeatherData {
 
 impl Location {
     /// Create a new location
+    #[must_use] 
     pub fn new(latitude: f64, longitude: f64, name: String) -> Self {
         Self {
             latitude,
@@ -257,6 +264,7 @@ impl Location {
     }
 
     /// Create location with country
+    #[must_use] 
     pub fn with_country(latitude: f64, longitude: f64, name: String, country: String) -> Self {
         Self {
             latitude,
@@ -267,27 +275,31 @@ impl Location {
     }
 
     /// Format location as coordinates string
+    #[must_use] 
     pub fn format_coordinates(&self) -> String {
         format!("{:.4}, {:.4}", self.latitude, self.longitude)
     }
 
     /// Round coordinates for cache key generation
+    #[must_use] 
     pub fn rounded_coordinates(&self, precision: u32) -> (f64, f64) {
-        let multiplier = 10_f64.powi(precision as i32);
+        let multiplier = 10_f64.powi(i32::try_from(precision).unwrap_or(4));
         let lat = (self.latitude * multiplier).round() / multiplier;
         let lon = (self.longitude * multiplier).round() / multiplier;
         (lat, lon)
     }
 
     /// Generate cache key for this location
+    #[must_use] 
     pub fn cache_key(&self, date: &str) -> String {
         let (lat, lon) = self.rounded_coordinates(2); // Round to 2 decimal places
-        format!("weather:{:.2}:{:.2}:{}", lat, lon, date)
+        format!("weather:{lat:.2}:{lon:.2}:{date}")
     }
 }
 
 impl WeatherForecast {
     /// Create new forecast
+    #[must_use] 
     pub fn new(location: Location, forecasts: Vec<WeatherData>) -> Self {
         Self {
             location,
@@ -297,18 +309,20 @@ impl WeatherForecast {
     }
 
     /// Get current weather (first forecast item)
+    #[must_use] 
     pub fn current_weather(&self) -> Option<&WeatherData> {
         self.forecasts.first()
     }
 
     /// Get weather for a specific day (returns all forecasts for that day)
+    #[must_use] 
     pub fn daily_forecast(&self, day_offset: usize) -> Vec<&WeatherData> {
         if self.forecasts.is_empty() {
             return Vec::new();
         }
 
         let base_date = self.forecasts[0].timestamp.date_naive();
-        let target_date = base_date + chrono::Duration::days(day_offset as i64);
+        let target_date = base_date + chrono::Duration::days(i64::try_from(day_offset).unwrap_or(0));
 
         self.forecasts
             .iter()
@@ -317,15 +331,17 @@ impl WeatherForecast {
     }
 
     /// Check if forecast data is still fresh (not older than cache TTL)
+    #[must_use] 
     pub fn is_fresh(&self, ttl_hours: u32) -> bool {
         let age = Utc::now() - self.retrieved_at;
-        age.num_hours() < ttl_hours as i64
+        age.num_hours() < i64::from(ttl_hours)
     }
 }
 
 // Convert OpenMeteo API responses to internal models
 impl WeatherForecast {
-    /// Create forecast from OpenMeteo API response
+    /// Create forecast from `OpenMeteo` API response
+    #[must_use] 
     pub fn from_openmeteo(response: &openmeteo::ForecastResponse, location_name: String) -> Self {
         let location = Location::new(response.latitude, response.longitude, location_name);
 
@@ -338,22 +354,20 @@ impl WeatherForecast {
             for i in 0..len {
                 // Parse timestamp
                 let timestamp =
-                    chrono::NaiveDateTime::parse_from_str(&hourly.time[i], "%Y-%m-%dT%H:%M")
-                        .map(|dt| dt.and_utc())
-                        .unwrap_or_else(|_| Utc::now());
+                    chrono::NaiveDateTime::parse_from_str(&hourly.time[i], "%Y-%m-%dT%H:%M").map_or_else(|_| Utc::now(), |dt| dt.and_utc());
 
                 // Extract data with safe indexing and default values
                 let temperature = *hourly
                     .temperature
                     .as_ref()
                     .and_then(|temps| temps.get(i))
-                    .unwrap_or(&-3.14);
+                    .unwrap_or(&-999.0);
 
                 let wind_speed = *hourly
                     .wind_speed
                     .as_ref()
                     .and_then(|speeds| speeds.get(i))
-                    .unwrap_or(&-3.14);
+                    .unwrap_or(&-999.0);
 
                 let wind_direction = *hourly
                     .wind_direction
@@ -365,13 +379,13 @@ impl WeatherForecast {
                     .wind_gusts
                     .as_ref()
                     .and_then(|gusts| gusts.get(i))
-                    .unwrap_or(&-3.14);
+                    .unwrap_or(&-999.0);
 
                 let precipitation = *hourly
                     .precipitation
                     .as_ref()
                     .and_then(|precip| precip.get(i))
-                    .unwrap_or(&-3.14);
+                    .unwrap_or(&-999.0);
                 let cloud_cover = *hourly
                     .cloud_cover
                     .as_ref()
@@ -382,13 +396,13 @@ impl WeatherForecast {
                     .pressure
                     .as_ref()
                     .and_then(|press| press.get(i))
-                    .unwrap_or(&-3.14);
+                    .unwrap_or(&-999.0);
 
                 let visibility = *hourly
                     .visibility
                     .as_ref()
                     .and_then(|vis| vis.get(i))
-                    .unwrap_or(&3.14);
+                    .unwrap_or(&999.0);
 
                 let weather_code = *hourly
                     .weather_code
@@ -490,7 +504,7 @@ mod tests {
 
     #[test]
     fn test_location_rounded_coordinates() {
-        let location = Location::new(46.818234, 8.227456, "Test".to_string());
+        let location = Location::new(46.818_234, 8.227_456, "Test".to_string());
         let (lat, lon) = location.rounded_coordinates(2);
         assert_eq!(lat, 46.82);
         assert_eq!(lon, 8.23);

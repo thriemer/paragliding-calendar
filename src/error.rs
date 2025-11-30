@@ -44,6 +44,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// Get string representation of error code
+    #[must_use] 
     pub fn as_str(&self) -> &'static str {
         match self {
             ErrorCode::ConfigMissingApiKey => "CONFIG_MISSING_API_KEY",
@@ -234,12 +235,10 @@ impl TravelAiError {
     }
 
     /// Get the error code
+    #[must_use] 
     pub fn code(&self) -> &ErrorCode {
         match self {
-            TravelAiError::Config { code, .. } => code,
-            TravelAiError::Api { code, .. } => code,
-            TravelAiError::Validation { code, .. } => code,
-            TravelAiError::Cache { code, .. } => code,
+            TravelAiError::Config { code, .. } | TravelAiError::Api { code, .. } | TravelAiError::Validation { code, .. } | TravelAiError::Cache { code, .. } | TravelAiError::General { code, .. } => code,
             TravelAiError::Io { source } => {
                 match source.kind() {
                     std::io::ErrorKind::NotFound => &ErrorCode::IoFileNotFound,
@@ -247,42 +246,27 @@ impl TravelAiError {
                     _ => &ErrorCode::IoGeneral,
                 }
             }
-            TravelAiError::General { code, .. } => code,
         }
     }
 
     /// Get the error context
+    #[must_use] 
     pub fn context(&self) -> HashMap<String, String> {
         match self {
-            TravelAiError::Config { context, .. } => context.clone(),
-            TravelAiError::Api { context, .. } => context.clone(),
-            TravelAiError::Validation { context, .. } => context.clone(),
-            TravelAiError::Cache { context, .. } => context.clone(),
+            TravelAiError::Config { context, .. } | TravelAiError::Api { context, .. } | TravelAiError::Validation { context, .. } | TravelAiError::Cache { context, .. } | TravelAiError::General { context, .. } => context.clone(),
             TravelAiError::Io { source } => {
                 let mut ctx = HashMap::new();
                 ctx.insert("kind".to_string(), format!("{:?}", source.kind()));
                 ctx
             }
-            TravelAiError::General { context, .. } => context.clone(),
         }
     }
 
     /// Add context to the error
+    #[must_use]
     pub fn with_context<K: Into<String>, V: Into<String>>(mut self, key: K, value: V) -> Self {
         match &mut self {
-            TravelAiError::Config { context, .. } => {
-                context.insert(key.into(), value.into());
-            }
-            TravelAiError::Api { context, .. } => {
-                context.insert(key.into(), value.into());
-            }
-            TravelAiError::Validation { context, .. } => {
-                context.insert(key.into(), value.into());
-            }
-            TravelAiError::Cache { context, .. } => {
-                context.insert(key.into(), value.into());
-            }
-            TravelAiError::General { context, .. } => {
+            TravelAiError::Config { context, .. } | TravelAiError::Api { context, .. } | TravelAiError::Validation { context, .. } | TravelAiError::Cache { context, .. } | TravelAiError::General { context, .. } => {
                 context.insert(key.into(), value.into());
             }
             TravelAiError::Io { .. } => {
@@ -317,17 +301,19 @@ impl TravelAiError {
     }
     
     /// Get detailed error message with context (for debug/verbose mode)
+    #[must_use] 
     pub fn detailed_message(&self) -> String {
         let base_message = self.to_string();
         let code = self.code().as_str();
         let context = self.context();
         
-        let mut detailed = format!("{} [{}]", base_message, code);
+        let mut detailed = format!("{base_message} [{code}]");
         
         if !context.is_empty() {
             detailed.push_str("\nContext:");
             for (key, value) in context {
-                detailed.push_str(&format!("\n  {}: {}", key, value));
+                use std::fmt::Write;
+                let _ = write!(detailed, "\n  {key}: {value}");
             }
         }
         

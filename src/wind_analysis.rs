@@ -111,6 +111,7 @@ pub struct SafetyMargins {
 
 impl WindDirectionAnalysis {
     /// Analyze wind direction against site launch directions
+    #[must_use] 
     pub fn analyze(weather: &WeatherData, site: &ParaglidingSite) -> Self {
         let wind_direction_deg = weather.wind_direction;
         let wind_direction_cardinal = crate::models::WeatherData::wind_direction_to_cardinal(wind_direction_deg).to_string();
@@ -122,7 +123,7 @@ impl WindDirectionAnalysis {
         // Calculate angular differences for each launch direction
         for launch_dir in &site.launch_directions {
             for &launch_deg in &launch_dir.direction_degrees {
-                let diff = calculate_angular_difference(wind_direction_deg as f64, launch_deg);
+                let diff = calculate_angular_difference(f64::from(wind_direction_deg), launch_deg);
                 angular_differences.push(diff);
                 
                 if diff < min_difference {
@@ -146,6 +147,7 @@ impl WindDirectionAnalysis {
 
 impl WindSpeedAnalysis {
     /// Analyze wind speed for paragliding suitability
+    #[must_use] 
     pub fn analyze(weather: &WeatherData) -> Self {
         let wind_speed_ms = weather.wind_speed;
         let wind_speed_kmh = wind_speed_ms * 3.6; // Convert m/s to km/h
@@ -171,9 +173,10 @@ impl WindSpeedAnalysis {
 
 impl SafetyMargins {
     /// Calculate safety margins based on forecast and conditions
+    #[must_use] 
     pub fn calculate(hours_ahead: f32) -> Self {
         // Uncertainty increases over time
-        let direction_uncertainty = (hours_ahead as f64 * 2.0).min(15.0); // Max 15° uncertainty
+        let direction_uncertainty = (f64::from(hours_ahead) * 2.0).min(15.0); // Max 15° uncertainty
         let speed_safety_factor = 0.8; // 20% safety margin on wind speed
         let forecast_confidence = 1.0 - (hours_ahead / 72.0).min(0.3); // Confidence decreases over 72h
         let time_degradation = 1.0 - (hours_ahead / 168.0).min(0.2); // Degrades over week
@@ -189,6 +192,7 @@ impl SafetyMargins {
 
 impl FlyabilityAnalysis {
     /// Perform complete flyability analysis
+    #[must_use] 
     pub fn analyze(weather: &WeatherData, site: &ParaglidingSite, hours_ahead: f32) -> Self {
         let wind_direction = WindDirectionAnalysis::analyze(weather, site);
         let wind_speed = WindSpeedAnalysis::analyze(weather);
@@ -209,13 +213,15 @@ impl FlyabilityAnalysis {
     }
 
     /// Check if conditions are flyable (score >= 5.0)
+    #[must_use] 
     pub fn is_flyable(&self) -> bool {
         self.flyability_score >= 5.0
     }
 
     /// Get color-coded score representation
+    #[must_use] 
     pub fn score_color(&self) -> &'static str {
-        match self.flyability_score as u8 {
+        match self.flyability_score.clamp(0.0, 10.0).round() as u8 {
             9..=10 => "🟢", // Green - Excellent
             7..=8 => "🟡",  // Yellow - Good  
             5..=6 => "🟠",  // Orange - Marginal
@@ -271,7 +277,6 @@ fn calculate_flyability_score(
     speed: &WindSpeedAnalysis,
     safety: &SafetyMargins,
 ) -> (f32, String, Vec<String>) {
-    let mut score = 10.0;
     let mut reasoning = Vec::new();
 
     // Direction scoring
@@ -325,14 +330,14 @@ fn calculate_flyability_score(
     }
 
     // Combine scores (weighted average) - but if either direction or speed is dangerous, cap the score
-    if matches!(direction.direction_compatibility, WindDirectionCompatibility::Dangerous) ||
+    let score = if matches!(direction.direction_compatibility, WindDirectionCompatibility::Dangerous) ||
        matches!(speed.speed_category, WindSpeedCategory::Dangerous) {
-        score = 0.0;
+        0.0
     } else {
-        score = (direction_score * 0.6 + speed_score * 0.4) * safety_factor;
-    }
+        (direction_score * 0.6 + speed_score * 0.4) * safety_factor
+    };
 
-    let explanation = match score as u8 {
+    let explanation = match score.clamp(0.0, 10.0).round() as u8 {
         9..=10 => "Excellent flying conditions".to_string(),
         7..=8 => "Good flying conditions".to_string(),
         5..=6 => "Marginal conditions - proceed with caution".to_string(),

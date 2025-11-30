@@ -5,7 +5,7 @@ use tracing::{debug, error, info};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, FmtSubscriber, fmt::format::FmtSpan};
 use travelai::{
-    Cache, LocationInput, LocationParser, ParaglidingForecastService, TravelAiConfig, TravelAiError, WeatherApiClient, weather,
+    Cache, LocationParser, ParaglidingForecastService, TravelAiConfig, TravelAiError, WeatherApiClient, weather,
 };
 
 /// Load configuration from environment variables only
@@ -253,8 +253,9 @@ fn run_cli(cli: &Cli) -> Result<()> {
             let weather_config = config.clone();
 
             // Initialize cache
+            let cache_path = std::path::PathBuf::from(&config.cache.location);
             let cache = Cache::new(
-                std::path::PathBuf::from(&config.cache.location),
+                &cache_path,
                 config.cache.ttl_hours,
             )?;
 
@@ -321,8 +322,9 @@ fn handle_paragliding_command(
     }
 
     // Initialize cache
+    let cache_path = std::path::PathBuf::from(&config.cache.location);
     let cache = Cache::new(
-        std::path::PathBuf::from(&config.cache.location),
+        &cache_path,
         config.cache.ttl_hours,
     )?;
 

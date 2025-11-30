@@ -1,8 +1,8 @@
-//! Weather API client for OpenMeteo integration  
+//! Weather API client for `OpenMeteo` integration  
 //!
 //! This module provides HTTP client functionality for retrieving weather data
-//! from the OpenMeteo API with rate limiting, retry logic, and error handling.
-//! Previously integrated with OpenWeatherMap, now uses OpenMeteo for API-key-free access.
+//! from the `OpenMeteo` API with rate limiting, retry logic, and error handling.
+//! Previously integrated with `OpenWeatherMap`, now uses `OpenMeteo` for API-key-free access.
 
 use crate::config::TravelAiConfig;
 use crate::models::{Location, WeatherData, WeatherForecast, openmeteo};
@@ -29,6 +29,7 @@ pub struct RateLimiter {
 
 impl RateLimiter {
     /// Create a new rate limiter
+    #[must_use] 
     pub fn new(max_requests_per_minute: u32) -> Self {
         Self {
             max_requests_per_minute,
@@ -71,14 +72,14 @@ impl RateLimiter {
     fn cleanup_old_requests(&mut self) {
         let now = Instant::now();
         if now.duration_since(self.last_cleanup) >= Duration::from_secs(10) {
-            let cutoff = now - Duration::from_secs(60);
+            let cutoff = now.checked_sub(Duration::from_secs(60)).unwrap();
             self.request_times.retain(|&time| time > cutoff);
             self.last_cleanup = now;
         }
     }
 }
 
-/// Weather API client for OpenMeteo
+/// Weather API client for `OpenMeteo`
 pub struct WeatherApiClient {
     /// HTTP client
     client: Client,
@@ -109,7 +110,7 @@ impl WeatherApiClient {
         })
     }
 
-    /// Get current weather for a location using OpenMeteo API
+    /// Get current weather for a location using `OpenMeteo` API
     #[instrument(skip(self), fields(lat, lon))]
     pub fn get_current_weather(&mut self, lat: f64, lon: f64) -> Result<WeatherData> {
         let span = span!(Level::INFO, "get_current_weather", lat, lon);
@@ -123,8 +124,7 @@ impl WeatherApiClient {
 
         // OpenMeteo API doesn't require API key, use forecast endpoint with current=true
         let url = format!(
-            "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&current=temperature_2m,windspeed_10m,winddirection_10m,windgusts_10m,precipitation,cloudcover,surface_pressure,visibility,weathercode&wind_speed_unit=ms",
-            lat, lon
+            "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,windspeed_10m,winddirection_10m,windgusts_10m,precipitation,cloudcover,surface_pressure,visibility,weathercode&wind_speed_unit=ms"
         );
 
         debug!("OpenMeteo API request URL: {}", url);
@@ -140,7 +140,7 @@ impl WeatherApiClient {
                 TravelAiError::api_with_context(
                     "Invalid weather data received from OpenMeteo API",
                     ErrorCode::ApiInvalidResponse,
-                    HashMap::from([("coordinates".to_string(), format!("{:.4},{:.4}", lat, lon))]),
+                    HashMap::from([("coordinates".to_string(), format!("{lat:.4},{lon:.4}"))]),
                 )
             })?;
 
@@ -180,13 +180,13 @@ impl WeatherApiClient {
             Err(TravelAiError::api_with_context(
                 "No current weather data available from OpenMeteo",
                 ErrorCode::ApiInvalidResponse,
-                HashMap::from([("coordinates".to_string(), format!("{:.4},{:.4}", lat, lon))]),
+                HashMap::from([("coordinates".to_string(), format!("{lat:.4},{lon:.4}"))]),
             )
             .into())
         }
     }
 
-    /// Get 7-day weather forecast for a location using OpenMeteo API
+    /// Get 7-day weather forecast for a location using `OpenMeteo` API
     #[instrument(skip(self), fields(lat, lon))]
     pub fn get_forecast(&mut self, lat: f64, lon: f64) -> Result<WeatherForecast> {
         let span = span!(Level::INFO, "get_forecast", lat, lon);
@@ -200,8 +200,7 @@ impl WeatherApiClient {
 
         // OpenMeteo API for hourly forecast data (7 days)
         let url = format!(
-            "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&hourly=temperature_2m,windspeed_10m,winddirection_10m,windgusts_10m,precipitation,cloudcover,surface_pressure,visibility,weathercode&timezone=auto&forecast_days=7&wind_speed_unit=ms",
-            lat, lon
+            "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,windspeed_10m,winddirection_10m,windgusts_10m,precipitation,cloudcover,surface_pressure,visibility,weathercode&timezone=auto&forecast_days=7&wind_speed_unit=ms"
         );
 
         let response = self.make_request(&url)?;
@@ -216,7 +215,7 @@ impl WeatherApiClient {
                 TravelAiError::api_with_context(
                     "Invalid forecast data received from OpenMeteo API",
                     ErrorCode::ApiInvalidResponse,
-                    HashMap::from([("coordinates".to_string(), format!("{:.4},{:.4}", lat, lon))]),
+                    HashMap::from([("coordinates".to_string(), format!("{lat:.4},{lon:.4}"))]),
                 )
             })?;
 
@@ -495,18 +494,17 @@ impl WeatherApiClient {
                         thread::sleep(backoff);
                         attempt += 1;
                         continue;
-                    } else {
-                        error!("Network error after {max_attempts} attempts: {e}");
-                        return Err(TravelAiError::api_with_context(
-                            format!("Network error after {max_attempts} attempts: {e}"),
-                            ErrorCode::ApiNetworkError,
-                            HashMap::from([
-                                ("attempts".to_string(), max_attempts.to_string()),
-                                ("error".to_string(), e.to_string()),
-                            ]),
-                        )
-                        .into());
                     }
+                    error!("Network error after {max_attempts} attempts: {e}");
+                    return Err(TravelAiError::api_with_context(
+                        format!("Network error after {max_attempts} attempts: {e}"),
+                        ErrorCode::ApiNetworkError,
+                        HashMap::from([
+                            ("attempts".to_string(), max_attempts.to_string()),
+                            ("error".to_string(), e.to_string()),
+                        ]),
+                    )
+                    .into());
                 }
             }
         }
@@ -651,7 +649,6 @@ pub enum LocationInput {
 
 /// Add urlencoding dependency to Cargo.toml (needed for geocoding)
 // Note: We'll need to add `urlencoding = "2.1"` to dependencies
-
 #[cfg(test)]
 mod tests {
     use super::*;

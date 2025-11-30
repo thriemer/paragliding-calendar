@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
@@ -27,11 +27,17 @@ pub struct SearchCacheKey {
 }
 
 impl SearchCacheKey {
+    #[must_use] 
     pub fn new(center: &Coordinates, radius_km: f64, data_source: &str) -> Self {
+        // Safe conversions: coordinates have limited range, radius is clamped
+        let lat_micro = (center.latitude * 1_000_000.0).round();
+        let lng_micro = (center.longitude * 1_000_000.0).round();
+        let radius_clamped = radius_km.max(0.0).min(f64::from(u32::MAX));
+        
         Self {
-            center_lat: (center.latitude * 1_000_000.0) as i64,
-            center_lng: (center.longitude * 1_000_000.0) as i64,
-            radius_km: radius_km as u32,
+            center_lat: lat_micro as i64,
+            center_lng: lng_micro as i64,
+            radius_km: radius_clamped as u32,
             data_source: data_source.to_string(),
         }
     }
@@ -46,6 +52,7 @@ pub struct SiteCache {
 
 impl SiteCache {
     /// Create a new site cache
+    #[must_use] 
     pub fn new(cache_manager: CacheManager) -> Self {
         Self {
             cache: cache_manager,
@@ -101,17 +108,14 @@ impl SiteCache {
             
             // Check if source file has been modified
             if let Some(cached_mtime) = entry.source_file_mtime {
-                match super::dhv::DHVParser::get_file_mtime(xml_path) {
-                    Ok(current_mtime) => {
-                        if current_mtime > cached_mtime {
-                            debug!("DHV file modified, cache invalid for: {}", cache_key);
-                            return Ok(None);
-                        }
-                    }
-                    Err(_) => {
-                        warn!("Could not check DHV file mtime, assuming cache invalid");
+                if let Ok(current_mtime) = super::dhv::DHVParser::get_file_mtime(xml_path) {
+                    if current_mtime > cached_mtime {
+                        debug!("DHV file modified, cache invalid for: {}", cache_key);
                         return Ok(None);
                     }
+                } else {
+                    warn!("Could not check DHV file mtime, assuming cache invalid");
+                    return Ok(None);
                 }
             }
             
@@ -135,7 +139,7 @@ impl SiteCache {
             source_file_mtime: None,
         };
         
-        let cache_key = format!("api_search_{:?}", search_key);
+        let cache_key = format!("api_search_{search_key:?}");
         self.cache.set(&cache_key, &cache_entry)?;
         
         info!("Cached {} API sites for search: {:?}", sites.len(), search_key);
@@ -147,7 +151,7 @@ impl SiteCache {
         &self,
         search_key: &SearchCacheKey,
     ) -> Result<Option<Vec<ParaglidingSite>>> {
-        let cache_key = format!("api_search_{:?}", search_key);
+        let cache_key = format!("api_search_{search_key:?}");
         let entry: Option<SiteCacheEntry> = self.cache.get(&cache_key)?;
         
         if let Some(entry) = entry {
@@ -174,6 +178,7 @@ impl SiteCache {
     }
     
     /// Get cache statistics
+    #[must_use] 
     pub fn get_stats(&self) -> HashMap<String, usize> {
         // This would require extending CacheManager to provide statistics
         // For now, return empty stats
@@ -212,7 +217,7 @@ mod tests {
     
     #[test]
     fn test_search_cache_key() {
-        let center = Coordinates { latitude: 45.123456, longitude: 6.789123 };
+        let center = Coordinates { latitude: 45.123_456, longitude: 6.789_123 };
         let key = SearchCacheKey::new(&center, 50.0, "test_source");
         
         assert_eq!(key.center_lat, 45_123_456);
@@ -224,7 +229,7 @@ mod tests {
     #[test]
     fn test_site_cache() {
         let temp_dir = TempDir::new().unwrap();
-        let cache_manager = Cache::new(temp_dir.path().to_path_buf(), 24).unwrap();
+        let cache_manager = Cache::new(temp_dir.path(), 24).unwrap();
         let site_cache = SiteCache::new(cache_manager);
         
         let sites = vec![create_test_site()];

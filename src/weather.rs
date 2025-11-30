@@ -8,7 +8,6 @@ use anyhow::Result;
 use tracing::debug;
 
 /// Get weather forecast for a location with caching
-
 pub fn get_weather_forecast(
     api_client: &mut WeatherApiClient,
     cache: &Cache,
@@ -22,7 +21,7 @@ pub fn get_weather_forecast(
                 Ok(results) if !results.is_empty() => {
                     Location::from(results.into_iter().next().unwrap())
                 }
-                _ => Location::new(lat, lon, format!("{:.4}, {:.4}", lat, lon)),
+                _ => Location::new(lat, lon, format!("{lat:.4}, {lon:.4}")),
             }
         }
         LocationInput::Name(name) => {
@@ -30,7 +29,7 @@ pub fn get_weather_forecast(
             let geocoding_results = api_client.geocode(&name)?;
             if geocoding_results.is_empty() {
                 return Err(
-                    TravelAiError::validation(format!("Location not found: {}", name)).into(),
+                    TravelAiError::validation(format!("Location not found: {name}")).into(),
                 );
             }
 
@@ -47,8 +46,7 @@ pub fn get_weather_forecast(
             let geocoding_results = api_client.geocode(&postal)?;
             if geocoding_results.is_empty() {
                 return Err(TravelAiError::validation(format!(
-                    "Postal code not found: {}",
-                    postal
+                    "Postal code not found: {postal}"
                 ))
                 .into());
             }
@@ -75,9 +73,8 @@ pub fn get_weather_forecast(
             // 6 hour TTL
             debug!("Using cached weather data");
             return Ok(cached_forecast);
-        } else {
-            debug!("Cached data is stale, fetching fresh data");
         }
+        debug!("Cached data is stale, fetching fresh data");
     } else {
         debug!("No cached data found, fetching from API");
     }
@@ -103,7 +100,7 @@ pub fn display_weather_forecast(forecast: &WeatherForecast) {
     println!("📍 Location: {}", forecast.location.format_coordinates());
 
     if let Some(country) = &forecast.location.country {
-        println!("🏳️  Country: {}", country);
+        println!("🏳️  Country: {country}");
     }
 
     println!(
@@ -145,7 +142,7 @@ pub fn display_weather_forecast(forecast: &WeatherForecast) {
         } else if day == 1 {
             "Tomorrow".to_string()
         } else {
-            let target_date = chrono::Utc::now().date_naive() + chrono::Duration::days(day as i64);
+            let target_date = chrono::Utc::now().date_naive() + chrono::Duration::days(i64::try_from(day).unwrap_or(0));
             target_date.format("%a, %b %d").to_string()
         };
 
