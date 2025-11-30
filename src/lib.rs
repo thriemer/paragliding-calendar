@@ -5,10 +5,16 @@
 
 pub mod error;
 pub mod config;
+pub mod models;
+pub mod cache;
+pub mod api;
 
 // Re-export core types for public API
-pub use error::TravelAiError;
+pub use error::{TravelAiError, ErrorCode};
 pub use config::TravelAiConfig;
+pub use models::{WeatherData, WeatherForecast, Location};
+pub use cache::Cache;
+pub use api::{WeatherApiClient, LocationInput, LocationParser, GeocodingResult};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

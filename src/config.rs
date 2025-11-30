@@ -25,8 +25,8 @@ pub struct TravelAiConfig {
 /// Weather API configuration settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeatherConfig {
-    /// `OpenWeatherMap` API key
-    pub api_key: String,
+    /// OpenMeteo/OpenWeatherMap API key (optional for OpenMeteo)
+    pub api_key: Option<String>,
     /// Base URL for weather API
     #[serde(default = "default_weather_base_url")]
     pub base_url: String,
@@ -61,6 +61,18 @@ pub struct LoggingConfig {
     /// Log format (pretty or json)
     #[serde(default = "default_log_format")]
     pub format: String,
+    /// Log output destination (console, file, both)
+    #[serde(default = "default_log_output")]
+    pub output: String,
+    /// Log file path
+    #[serde(default = "default_log_file_path")]
+    pub file_path: String,
+    /// Maximum log file size in MB
+    #[serde(default = "default_log_max_file_size")]
+    pub max_file_size_mb: u32,
+    /// Maximum number of log files to keep
+    #[serde(default = "default_log_max_files")]
+    pub max_files: u32,
 }
 
 /// Default application settings
@@ -76,7 +88,7 @@ pub struct DefaultsConfig {
 
 // Default value functions
 fn default_weather_base_url() -> String {
-    "https://api.openweathermap.org/data/2.5".to_string()
+    "https://api.open-meteo.com/v1".to_string()
 }
 
 fn default_weather_timeout() -> u32 {
@@ -107,6 +119,22 @@ fn default_log_format() -> String {
     "pretty".to_string()
 }
 
+fn default_log_output() -> String {
+    "console".to_string()
+}
+
+fn default_log_file_path() -> String {
+    "~/.cache/travelai/app.log".to_string()
+}
+
+fn default_log_max_file_size() -> u32 {
+    10
+}
+
+fn default_log_max_files() -> u32 {
+    5
+}
+
 fn default_search_radius() -> u32 {
     50
 }
@@ -119,7 +147,7 @@ impl Default for TravelAiConfig {
     fn default() -> Self {
         Self {
             weather: WeatherConfig {
-                api_key: String::new(),
+                api_key: None,
                 base_url: default_weather_base_url(),
                 timeout_seconds: default_weather_timeout(),
                 max_retries: default_weather_max_retries(),
@@ -132,6 +160,10 @@ impl Default for TravelAiConfig {
             logging: LoggingConfig {
                 level: default_log_level(),
                 format: default_log_format(),
+                output: default_log_output(),
+                file_path: default_log_file_path(),
+                max_file_size_mb: default_log_max_file_size(),
+                max_files: default_log_max_files(),
             },
             defaults: DefaultsConfig {
                 search_radius_km: default_search_radius(),
@@ -238,22 +270,25 @@ impl TravelAiConfig {
 
     /// Validate API keys and credentials
     pub fn validate_api_keys(&self) -> Result<()> {
-        if self.weather.api_key.is_empty() {
-            return Err(TravelAiError::config(
-                "Weather API key is required. Set TRAVELAI_WEATHER_API_KEY environment variable or add to config file."
-            ).into());
-        }
+        // API key is now optional for OpenMeteo integration
+        if let Some(api_key) = &self.weather.api_key {
+            if api_key.is_empty() {
+                return Err(TravelAiError::config(
+                    "Weather API key cannot be empty if provided. Either remove it or provide a valid key."
+                ).into());
+            }
 
-        if self.weather.api_key.len() < 8 {
-            return Err(TravelAiError::config(
-                "Weather API key appears to be invalid (too short). Please check your API key."
-            ).into());
-        }
+            if api_key.len() < 8 {
+                return Err(TravelAiError::config(
+                    "Weather API key appears to be invalid (too short). Please check your API key."
+                ).into());
+            }
 
-        if self.weather.api_key.len() > 100 {
-            return Err(TravelAiError::config(
-                "Weather API key appears to be invalid (too long). Please check your API key."
-            ).into());
+            if api_key.len() > 100 {
+                return Err(TravelAiError::config(
+                    "Weather API key appears to be invalid (too long). Please check your API key."
+                ).into());
+            }
         }
 
         Ok(())
@@ -352,25 +387,26 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = TravelAiConfig::default();
-        assert_eq!(config.weather.base_url, "https://api.openweathermap.org/data/2.5");
+        assert_eq!(config.weather.base_url, "https://api.open-meteo.com/v1");
         assert_eq!(config.weather.timeout_seconds, 30);
         assert_eq!(config.cache.ttl_hours, 6);
         assert_eq!(config.logging.level, "info");
         assert_eq!(config.defaults.search_radius_km, 50);
+        assert!(config.weather.api_key.is_none());
     }
 
     #[test]
     fn test_config_validation_missing_api_key() {
         let config = TravelAiConfig::default();
         let result = config.validate_api_keys();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("API key is required"));
+        // API key is now optional for OpenMeteo
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_config_validation_valid_api_key() {
         let mut config = TravelAiConfig::default();
-        config.weather.api_key = "valid_api_key_123".to_string();
+        config.weather.api_key = Some("valid_api_key_123".to_string());
         let result = config.validate_api_keys();
         assert!(result.is_ok());
     }
@@ -378,7 +414,7 @@ mod tests {
     #[test]
     fn test_config_validation_invalid_log_level() {
         let mut config = TravelAiConfig::default();
-        config.weather.api_key = "valid_api_key_123".to_string();
+        config.weather.api_key = Some("valid_api_key_123".to_string());
         config.logging.level = "invalid".to_string();
         let result = config.validate();
         assert!(result.is_err());
@@ -388,7 +424,7 @@ mod tests {
     #[test]
     fn test_config_validation_numeric_ranges() {
         let mut config = TravelAiConfig::default();
-        config.weather.api_key = "valid_api_key_123".to_string();
+        config.weather.api_key = Some("valid_api_key_123".to_string());
         config.weather.timeout_seconds = 500; // Invalid - too high
         let result = config.validate();
         assert!(result.is_err());
@@ -407,7 +443,7 @@ mod tests {
 
         // Test with basic config that should have defaults
         let mut config = TravelAiConfig::default();
-        config.weather.api_key = "test_key_from_env".to_string(); // Simulate env override
+        config.weather.api_key = Some("test_key_from_env".to_string()); // Simulate env override
         
         let result = config.validate();
         
@@ -417,7 +453,7 @@ mod tests {
         }
 
         assert!(result.is_ok());
-        assert_eq!(config.weather.api_key, "test_key_from_env");
+        assert_eq!(config.weather.api_key, Some("test_key_from_env".to_string()));
     }
 
     #[test]
