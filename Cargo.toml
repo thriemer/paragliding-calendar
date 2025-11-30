@@ -23,6 +23,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 shellexpand = "3.1"
+quick-xml = { version = "0.31", features = ["serialize"] }
+geo = "0.27"
+haversine = "0.2"
 
 [dev-dependencies]
 tempfile = "3.0"

@@ -33,6 +33,11 @@ pub enum ErrorCode {
     IoPermissionDenied,
     IoGeneral,
     
+    /// Paragliding-specific errors
+    ParaglidingParseError,
+    ParaglidingApiError,
+    ParaglidingFileError,
+    
     /// General errors
     Unknown,
 }
@@ -58,6 +63,9 @@ impl ErrorCode {
             ErrorCode::IoFileNotFound => "IO_FILE_NOT_FOUND",
             ErrorCode::IoPermissionDenied => "IO_PERMISSION_DENIED",
             ErrorCode::IoGeneral => "IO_GENERAL",
+            ErrorCode::ParaglidingParseError => "PARAGLIDING_PARSE_ERROR",
+            ErrorCode::ParaglidingApiError => "PARAGLIDING_API_ERROR",
+            ErrorCode::ParaglidingFileError => "PARAGLIDING_FILE_ERROR",
             ErrorCode::Unknown => "UNKNOWN",
         }
     }

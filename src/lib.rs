@@ -3,18 +3,21 @@
 //! This library provides the core functionality for weather analysis,
 //! paragliding site evaluation, and travel planning recommendations.
 
-pub mod error;
-pub mod config;
-pub mod models;
-pub mod cache;
 pub mod api;
+pub mod cache;
+pub mod config;
+pub mod error;
+pub mod models;
+pub mod paragliding;
+pub mod weather;
 
 // Re-export core types for public API
-pub use error::{TravelAiError, ErrorCode};
-pub use config::TravelAiConfig;
-pub use models::{WeatherData, WeatherForecast, Location};
+pub use api::{GeocodingResult, LocationInput, LocationParser, WeatherApiClient};
 pub use cache::Cache;
-pub use api::{WeatherApiClient, LocationInput, LocationParser, GeocodingResult};
+pub use config::TravelAiConfig;
+pub use error::{ErrorCode, TravelAiError};
+pub use models::{Location, WeatherData, WeatherForecast};
+pub use paragliding::{DHVParser, GeographicSearch, ParaglidingEarthClient, ParaglidingSite};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

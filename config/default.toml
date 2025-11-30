@@ -47,7 +47,7 @@ max_size_mb = 100
 # Use ~ for home directory expansion
 # Default: "~/.cache/travelai"
 # Environment variable: TRAVELAI_CACHE__LOCATION
-location = "~/.cache/travelai"
+location = ".cache/travelai"
 
 [logging]
 # Log level - controls verbosity of log output

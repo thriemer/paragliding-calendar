@@ -169,7 +169,7 @@ impl WeatherApiClient {
                 wind_direction: current.wind_direction,
                 wind_gust: current.wind_gusts,
                 precipitation: current.precipitation,
-                cloud_cover: Some(current.cloud_cover),
+                cloud_cover: current.cloud_cover,
                 pressure: current.pressure,
                 visibility: current.visibility,
                 description: openmeteo::weather_code_to_description(current.weather_code)
@@ -205,6 +205,7 @@ impl WeatherApiClient {
         );
 
         let response = self.make_request(&url)?;
+        debug!("API Response: {:?}", response);
 
         let parse_start = Instant::now();
         let forecast_response: openmeteo::ForecastResponse = response
@@ -232,6 +233,7 @@ impl WeatherApiClient {
             total_duration.as_secs_f64(),
             parse_duration.as_secs_f64()
         );
+        debug!("Weather Forecst {:?}", forecast);
 
         if total_duration.as_secs() > 5 {
             warn!(
@@ -334,7 +336,8 @@ impl WeatherApiClient {
 
     /// Make a request with rate limiting and retry logic
     #[instrument(skip(self, url), fields(url = %url.split("appid=").next().unwrap_or(url)))]
-    #[allow(clippy::too_many_lines)]\n    fn make_request(&mut self, url: &str) -> Result<Response> {
+    #[allow(clippy::too_many_lines)]
+    fn make_request(&mut self, url: &str) -> Result<Response> {
         let span = span!(Level::DEBUG, "make_request");
         let _enter = span.enter();
 

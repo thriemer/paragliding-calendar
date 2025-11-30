@@ -3,8 +3,8 @@
 //! This module provides a caching layer using Sled embedded database
 //! to store weather forecasts with TTL support.
 
-use crate::models::{WeatherForecast};
-use crate::{TravelAiError, ErrorCode};
+use crate::models::WeatherForecast;
+use crate::{ErrorCode, TravelAiError};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use sled::Db;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
-use tracing::{info, warn, error, debug, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 /// Cache metadata for stored entries
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,11 +42,15 @@ impl<T> CacheEntry<T> {
     }
 
     /// Get the data if the entry is still valid
-    fn get_if_valid(self) -> Option<T> {
+    fn get_if_valid(self) -> Result<T> {
         if self.is_valid() {
-            Some(self.data)
+            Ok(self.data)
         } else {
-            None
+            Err(TravelAiError::Cache {
+                message: "Entry reached TTL".into(),
+                code: ErrorCode::CacheReadFailed,
+                context: HashMap::default(),
+            })?
         }
     }
 }
@@ -63,14 +67,19 @@ impl Cache {
     /// Create a new cache instance
     #[instrument(fields(cache_dir = %cache_dir.display(), default_ttl_hours))]
     pub fn new(cache_dir: PathBuf, default_ttl_hours: u32) -> Result<Self> {
-        info!("Initializing cache at {} with {}h TTL", cache_dir.display(), default_ttl_hours);
+        info!(
+            "Initializing cache at {} with {}h TTL",
+            cache_dir.display(),
+            default_ttl_hours
+        );
         let start_time = Instant::now();
-        
+
         // Ensure cache directory exists
         if let Some(parent) = cache_dir.parent() {
             debug!("Ensuring cache directory exists: {}", parent.display());
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create cache directory: {}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create cache directory: {}", parent.display())
+            })?;
         }
 
         // Open Sled database
@@ -82,12 +91,15 @@ impl Cache {
                 TravelAiError::cache_with_context(
                     format!("Failed to open cache database at: {}", cache_dir.display()),
                     ErrorCode::CacheInitFailed,
-                    HashMap::from([("path".to_string(), cache_dir.display().to_string())])
+                    HashMap::from([("path".to_string(), cache_dir.display().to_string())]),
                 )
             })?;
 
         let duration = start_time.elapsed();
-        info!("Cache initialized successfully in {:.3}s", duration.as_secs_f64());
+        info!(
+            "Cache initialized successfully in {:.3}s",
+            duration.as_secs_f64()
+        );
 
         Ok(Self {
             db,
@@ -109,19 +121,25 @@ impl Cache {
     }
 
     /// Get a value from the cache
-    pub fn get<T>(&self, key: &str) -> Result<Option<T>>
+    pub fn get<T>(&self, key: &str) -> Result<T>
     where
         T: for<'de> Deserialize<'de>,
     {
-        if let Some(data) = self.db.get(key)
-            .with_context(|| format!("Failed to read from cache key: {}", key))? 
+        if let Some(data) = self
+            .db
+            .get(key)
+            .with_context(|| format!("Failed to read from cache key: {}", key))?
         {
             let entry: CacheEntry<T> = serde_json::from_slice(&data)
                 .with_context(|| format!("Failed to deserialize cache entry for key: {}", key))?;
-            
-            Ok(entry.get_if_valid())
+
+            entry.get_if_valid()
         } else {
-            Ok(None)
+            Err(TravelAiError::Cache {
+                message: "Cache Entry not found".into(),
+                code: ErrorCode::CacheReadFailed,
+                context: HashMap::default(),
+            })?
         }
     }
 
@@ -141,11 +159,13 @@ impl Cache {
         let entry = CacheEntry::new(value, ttl_hours);
         let serialized = serde_json::to_vec(&entry)
             .with_context(|| format!("Failed to serialize cache entry for key: {}", key))?;
-        
-        self.db.insert(key, serialized)
+
+        self.db
+            .insert(key, serialized)
             .with_context(|| format!("Failed to write to cache key: {}", key))?;
-        
-        self.db.flush()
+
+        self.db
+            .flush()
             .with_context(|| "Failed to flush cache to disk")?;
 
         Ok(())
@@ -153,12 +173,15 @@ impl Cache {
 
     /// Remove a value from the cache
     pub fn remove(&self, key: &str) -> Result<bool> {
-        let removed = self.db.remove(key)
+        let removed = self
+            .db
+            .remove(key)
             .with_context(|| format!("Failed to remove cache key: {}", key))?
             .is_some();
-        
+
         if removed {
-            self.db.flush()
+            self.db
+                .flush()
                 .with_context(|| "Failed to flush cache to disk")?;
         }
 
@@ -166,32 +189,34 @@ impl Cache {
     }
 
     /// Check if a key exists in the cache and is valid
-    pub fn contains(&self, key: &str) -> Result<bool> {
-        Ok(self.get::<serde_json::Value>(key)?.is_some())
+    pub fn contains(&self, key: &str) -> bool {
+        self.get::<serde_json::Value>(key).is_ok()
     }
 
     /// Get all keys in the cache
     pub fn keys(&self) -> Result<Vec<String>> {
-        let keys: Result<Vec<String>> = self.db.iter()
+        let keys: Result<Vec<String>> = self
+            .db
+            .iter()
             .map(|item| {
                 item.with_context(|| "Failed to iterate cache keys")
                     .map(|(key, _)| String::from_utf8_lossy(&key).into_owned())
             })
             .collect();
-        
+
         keys
     }
 
     /// Clear expired entries from the cache
     pub fn cleanup_expired(&self) -> Result<usize> {
         let mut removed_count = 0;
-        
+
         // Collect keys to remove (can't modify while iterating)
         let mut keys_to_remove = Vec::new();
-        
+
         for item in self.db.iter() {
             let (key, value) = item.with_context(|| "Failed to iterate cache during cleanup")?;
-            
+
             // Try to deserialize as cache entry to check TTL
             if let Ok(entry) = serde_json::from_slice::<CacheEntry<serde_json::Value>>(&value) {
                 if !entry.is_valid() {
@@ -202,16 +227,21 @@ impl Cache {
                 keys_to_remove.push(key.to_vec());
             }
         }
-        
+
         // Remove expired entries
         for key in keys_to_remove {
-            self.db.remove(&key)
-                .with_context(|| format!("Failed to remove expired key: {}", String::from_utf8_lossy(&key)))?;
+            self.db.remove(&key).with_context(|| {
+                format!(
+                    "Failed to remove expired key: {}",
+                    String::from_utf8_lossy(&key)
+                )
+            })?;
             removed_count += 1;
         }
-        
+
         if removed_count > 0 {
-            self.db.flush()
+            self.db
+                .flush()
                 .with_context(|| "Failed to flush cache after cleanup")?;
         }
 
@@ -221,16 +251,18 @@ impl Cache {
     /// Get cache statistics
     pub fn stats(&self) -> Result<CacheStats> {
         let total_entries = self.db.len();
-        let size_on_disk = self.db.size_on_disk()
+        let size_on_disk = self
+            .db
+            .size_on_disk()
             .with_context(|| "Failed to get cache size")?;
-        
+
         // Count valid entries by iterating
         let mut valid_entries = 0;
         let mut expired_entries = 0;
-        
+
         for item in self.db.iter() {
             let (_, value) = item.with_context(|| "Failed to iterate cache for stats")?;
-            
+
             if let Ok(entry) = serde_json::from_slice::<CacheEntry<serde_json::Value>>(&value) {
                 if entry.is_valid() {
                     valid_entries += 1;
@@ -250,17 +282,17 @@ impl Cache {
 
     /// Clear all entries from the cache
     pub fn clear(&self) -> Result<()> {
-        self.db.clear()
-            .with_context(|| "Failed to clear cache")?;
-        
-        self.db.flush()
+        self.db.clear().with_context(|| "Failed to clear cache")?;
+
+        self.db
+            .flush()
             .with_context(|| "Failed to flush cache after clear")?;
 
         Ok(())
     }
 
     /// Get weather forecast from cache
-    pub fn get_weather_forecast(&self, key: &str) -> Result<Option<WeatherForecast>> {
+    pub fn get_weather_forecast(&self, key: &str) -> Result<WeatherForecast> {
         self.get(key)
     }
 
@@ -270,7 +302,12 @@ impl Cache {
     }
 
     /// Store weather forecast with custom TTL
-    pub fn set_weather_forecast_with_ttl(&self, key: &str, forecast: WeatherForecast, ttl_hours: u32) -> Result<()> {
+    pub fn set_weather_forecast_with_ttl(
+        &self,
+        key: &str,
+        forecast: WeatherForecast,
+        ttl_hours: u32,
+    ) -> Result<()> {
         self.set_with_ttl(key, forecast, ttl_hours)
     }
 }
@@ -352,26 +389,26 @@ mod tests {
             temperature: 15.0,
             wind_speed: 5.0,
             wind_direction: 180,
-            wind_gust: None,
+            wind_gust: 14.4,
             precipitation: 0.0,
-            cloud_cover: Some(20),
+            cloud_cover: 20,
             pressure: 1013.0,
-            visibility: Some(10.0),
+            visibility: 10.0,
             description: "Clear sky".to_string(),
             icon: Some("01d".to_string()),
         };
-        
+
         WeatherForecast::new(location, vec![weather])
     }
 
     #[test]
     fn test_cache_basic_operations() {
         let (cache, _temp) = create_test_cache();
-        
+
         // Test setting and getting a string value
         let key = "test_key";
         let value = "test_value".to_string();
-        
+
         cache.set(key, &value).expect("Failed to set value");
         let retrieved: Option<String> = cache.get(key).expect("Failed to get value");
         assert_eq!(retrieved, Some(value));
@@ -382,12 +419,15 @@ mod tests {
         let (cache, _temp) = create_test_cache();
         let forecast = create_test_forecast();
         let key = "weather_test";
-        
-        cache.set_weather_forecast(key, forecast.clone()).expect("Failed to set forecast");
-        let retrieved = cache.get_weather_forecast(key).expect("Failed to get forecast");
-        
-        assert!(retrieved.is_some());
-        let retrieved_forecast = retrieved.unwrap();
+
+        cache
+            .set_weather_forecast(key, forecast.clone())
+            .expect("Failed to set forecast");
+        let retrieved = cache
+            .get_weather_forecast(key)
+            .expect("Failed to get forecast");
+
+        let retrieved_forecast = retrieved;
         assert_eq!(retrieved_forecast.location.name, forecast.location.name);
         assert_eq!(retrieved_forecast.forecasts.len(), forecast.forecasts.len());
     }
@@ -395,27 +435,31 @@ mod tests {
     #[test]
     fn test_cache_ttl_expiry() {
         let (cache, _temp) = create_test_cache();
-        
+
         // Set a value with 0 TTL (should expire immediately)
         let key = "expire_test";
         let value = "test_value".to_string();
-        
-        cache.set_with_ttl(key, &value, 0).expect("Failed to set value");
-        
+
+        cache
+            .set_with_ttl(key, &value, 0)
+            .expect("Failed to set value");
+
         // Should be None because TTL is 0
-        let retrieved: Option<String> = cache.get(key).expect("Failed to get value");
-        assert_eq!(retrieved, None);
+        let retrieved: Result<String> = cache.get(key);
+        assert!(retrieved.is_err());
     }
 
     #[test]
     fn test_cache_contains() {
         let (cache, _temp) = create_test_cache();
         let key = "contains_test";
-        
-        assert!(!cache.contains(key).expect("Failed to check contains"));
-        
-        cache.set(key, &"value".to_string()).expect("Failed to set value");
-        assert!(cache.contains(key).expect("Failed to check contains"));
+
+        assert!(!cache.contains(key));
+
+        cache
+            .set(key, &"value".to_string())
+            .expect("Failed to set value");
+        assert!(cache.contains(key));
     }
 
     #[test]
@@ -423,23 +467,27 @@ mod tests {
         let (cache, _temp) = create_test_cache();
         let key = "remove_test";
         let value = "test_value".to_string();
-        
+
         cache.set(key, &value).expect("Failed to set value");
-        assert!(cache.contains(key).expect("Failed to check contains"));
-        
+        assert!(cache.contains(key));
+
         let removed = cache.remove(key).expect("Failed to remove key");
         assert!(removed);
-        assert!(!cache.contains(key).expect("Failed to check contains after removal"));
+        assert!(!cache.contains(key));
     }
 
     #[test]
     fn test_cache_keys() {
         let (cache, _temp) = create_test_cache();
-        
+
         // Add some test data
-        cache.set("key1", &"value1".to_string()).expect("Failed to set key1");
-        cache.set("key2", &"value2".to_string()).expect("Failed to set key2");
-        
+        cache
+            .set("key1", &"value1".to_string())
+            .expect("Failed to set key1");
+        cache
+            .set("key2", &"value2".to_string())
+            .expect("Failed to set key2");
+
         let keys = cache.keys().expect("Failed to get keys");
         assert_eq!(keys.len(), 2);
         assert!(keys.contains(&"key1".to_string()));
@@ -449,16 +497,20 @@ mod tests {
     #[test]
     fn test_cache_clear() {
         let (cache, _temp) = create_test_cache();
-        
+
         // Add some test data
-        cache.set("key1", &"value1".to_string()).expect("Failed to set key1");
-        cache.set("key2", &"value2".to_string()).expect("Failed to set key2");
-        
+        cache
+            .set("key1", &"value1".to_string())
+            .expect("Failed to set key1");
+        cache
+            .set("key2", &"value2".to_string())
+            .expect("Failed to set key2");
+
         let stats_before = cache.stats().expect("Failed to get stats");
         assert_eq!(stats_before.total_entries, 2);
-        
+
         cache.clear().expect("Failed to clear cache");
-        
+
         let stats_after = cache.stats().expect("Failed to get stats");
         assert_eq!(stats_after.total_entries, 0);
     }
@@ -466,15 +518,19 @@ mod tests {
     #[test]
     fn test_cache_stats() {
         let (cache, _temp) = create_test_cache();
-        
+
         let stats_empty = cache.stats().expect("Failed to get stats");
         assert_eq!(stats_empty.total_entries, 0);
         assert_eq!(stats_empty.valid_entries, 0);
-        
+
         // Add some valid entries
-        cache.set_with_ttl("key1", &"value1".to_string(), 10).expect("Failed to set key1");
-        cache.set_with_ttl("key2", &"value2".to_string(), 10).expect("Failed to set key2");
-        
+        cache
+            .set_with_ttl("key1", &"value1".to_string(), 10)
+            .expect("Failed to set key1");
+        cache
+            .set_with_ttl("key2", &"value2".to_string(), 10)
+            .expect("Failed to set key2");
+
         let stats_with_data = cache.stats().expect("Failed to get stats");
         assert_eq!(stats_with_data.total_entries, 2);
         assert_eq!(stats_with_data.valid_entries, 2);
@@ -484,8 +540,12 @@ mod tests {
     #[test]
     fn test_cache_key_generation() {
         let key1 = Cache::weather_cache_key(46.8182, 8.2275, "2023-12-01");
-        let key2 = Cache::daily_weather_key(46.8182, 8.2275, &chrono::NaiveDate::from_ymd_opt(2023, 12, 1).unwrap());
-        
+        let key2 = Cache::daily_weather_key(
+            46.8182,
+            8.2275,
+            &chrono::NaiveDate::from_ymd_opt(2023, 12, 1).unwrap(),
+        );
+
         assert_eq!(key1, "weather:46.82:8.23:2023-12-01");
         assert_eq!(key2, "weather:46.82:8.23:2023-12-01");
     }
@@ -493,17 +553,21 @@ mod tests {
     #[test]
     fn test_cache_cleanup_expired() {
         let (cache, _temp) = create_test_cache();
-        
+
         // Add some entries with different TTLs
-        cache.set_with_ttl("valid", &"value".to_string(), 10).expect("Failed to set valid");
-        cache.set_with_ttl("expired", &"value".to_string(), 0).expect("Failed to set expired");
-        
+        cache
+            .set_with_ttl("valid", &"value".to_string(), 10)
+            .expect("Failed to set valid");
+        cache
+            .set_with_ttl("expired", &"value".to_string(), 0)
+            .expect("Failed to set expired");
+
         let stats_before = cache.stats().expect("Failed to get stats before cleanup");
         assert_eq!(stats_before.total_entries, 2);
-        
+
         let removed = cache.cleanup_expired().expect("Failed to cleanup");
         assert_eq!(removed, 1); // Should remove the expired entry
-        
+
         let stats_after = cache.stats().expect("Failed to get stats after cleanup");
         assert_eq!(stats_after.total_entries, 1);
         assert_eq!(stats_after.valid_entries, 1);

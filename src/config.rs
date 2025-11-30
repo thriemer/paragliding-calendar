@@ -14,6 +14,8 @@ use std::path::PathBuf;
 pub struct TravelAiConfig {
     /// Weather API configuration
     pub weather: WeatherConfig,
+    /// Paragliding site API configuration
+    pub paragliding: ParaglidingConfig,
     /// Cache configuration
     pub cache: CacheConfig,
     /// Logging configuration
@@ -36,6 +38,20 @@ pub struct WeatherConfig {
     /// Maximum number of retries for failed requests
     #[serde(default = "default_weather_max_retries")]
     pub max_retries: u32,
+}
+
+/// Paragliding API configuration settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParaglidingConfig {
+    /// Paragliding Earth API key (optional)
+    pub paragliding_earth_api_key: Option<String>,
+    /// DHV XML file path
+    #[serde(default = "default_dhv_xml_path")]
+    pub dhv_xml_path: String,
+}
+
+fn default_dhv_xml_path() -> String {
+    "dhvgelaende_dhvxml_mt.xml".to_string()
 }
 
 /// Cache configuration settings
@@ -151,6 +167,10 @@ impl Default for TravelAiConfig {
                 base_url: default_weather_base_url(),
                 timeout_seconds: default_weather_timeout(),
                 max_retries: default_weather_max_retries(),
+            },
+            paragliding: ParaglidingConfig {
+                paragliding_earth_api_key: None,
+                dhv_xml_path: default_dhv_xml_path(),
             },
             cache: CacheConfig {
                 ttl_hours: default_cache_ttl(),

@@ -18,15 +18,15 @@ pub struct WeatherData {
     /// Wind direction in degrees (0-360, where 0/360 is North)
     pub wind_direction: u16,
     /// Wind gust speed in m/s (optional)
-    pub wind_gust: Option<f32>,
+    pub wind_gust: f32,
     /// Precipitation amount in mm
     pub precipitation: f32,
     /// Cloud cover percentage (0-100, optional)
-    pub cloud_cover: Option<u8>,
+    pub cloud_cover: u8,
     /// Atmospheric pressure in hPa
     pub pressure: f32,
     /// Visibility in kilometers (optional)
-    pub visibility: Option<f32>,
+    pub visibility: f32,
     /// Human-readable description of weather conditions
     pub description: String,
     /// Weather condition icon ID from API
@@ -78,21 +78,21 @@ pub mod openmeteo {
     pub struct HourlyData {
         pub time: Vec<String>,
         #[serde(rename = "temperature_2m")]
-        pub temperature: Option<Vec<Option<f32>>>,
+        pub temperature: Option<Vec<f32>>,
         #[serde(rename = "windspeed_10m")]
-        pub wind_speed: Option<Vec<Option<f32>>>,
+        pub wind_speed: Option<Vec<f32>>,
         #[serde(rename = "winddirection_10m")]
-        pub wind_direction: Option<Vec<Option<u16>>>,
+        pub wind_direction: Option<Vec<u16>>,
         #[serde(rename = "windgusts_10m")]
-        pub wind_gusts: Option<Vec<Option<f32>>>,
-        pub precipitation: Option<Vec<Option<f32>>>,
+        pub wind_gusts: Option<Vec<f32>>,
+        pub precipitation: Option<Vec<f32>>,
         #[serde(rename = "cloudcover")]
-        pub cloud_cover: Option<Vec<Option<u8>>>,
+        pub cloud_cover: Option<Vec<u8>>,
         #[serde(rename = "surface_pressure")]
-        pub pressure: Option<Vec<Option<f32>>>,
-        pub visibility: Option<Vec<Option<f32>>>,
+        pub pressure: Option<Vec<f32>>,
+        pub visibility: Option<Vec<f32>>,
         #[serde(rename = "weathercode")]
-        pub weather_code: Option<Vec<Option<u8>>>,
+        pub weather_code: Option<Vec<u8>>,
     }
 
     /// Daily weather data from OpenMeteo
@@ -123,13 +123,13 @@ pub mod openmeteo {
         #[serde(rename = "winddirection_10m")]
         pub wind_direction: u16,
         #[serde(rename = "windgusts_10m")]
-        pub wind_gusts: Option<f32>,
+        pub wind_gusts: f32,
         pub precipitation: f32,
         #[serde(rename = "cloudcover")]
         pub cloud_cover: u8,
         #[serde(rename = "surface_pressure")]
         pub pressure: f32,
-        pub visibility: Option<f32>,
+        pub visibility: f32,
         #[serde(rename = "weathercode")]
         pub weather_code: u8,
     }
@@ -224,14 +224,10 @@ impl WeatherData {
     /// Format wind information
     pub fn format_wind(&self) -> String {
         let direction = Self::wind_direction_to_cardinal(self.wind_direction);
-        if let Some(gust) = self.wind_gust {
-            format!(
-                "{:.1} m/s {} (gusts {:.1} m/s)",
-                self.wind_speed, direction, gust
-            )
-        } else {
-            format!("{:.1} m/s {}", self.wind_speed, direction)
-        }
+        format!(
+            "{:.1} m/s {} (gusts {:.1} m/s)",
+            self.wind_speed, direction, self.wind_gust
+        )
     }
 
     /// Check if conditions are suitable for paragliding (basic heuristic)
@@ -243,7 +239,7 @@ impl WeatherData {
 
         let wind_ok = self.wind_speed >= 2.0 && self.wind_speed <= 15.0;
         let precipitation_ok = self.precipitation < 1.0; // Less than 1mm
-        let visibility_ok = self.visibility.unwrap_or(10.0) >= 5.0; // At least 5km
+        let visibility_ok = self.visibility >= 5.0; // At least 5km
 
         wind_ok && precipitation_ok && visibility_ok
     }
@@ -327,9 +323,6 @@ impl WeatherForecast {
     }
 }
 
-
-
-
 // Convert OpenMeteo API responses to internal models
 impl WeatherForecast {
     /// Create forecast from OpenMeteo API response
@@ -344,70 +337,64 @@ impl WeatherForecast {
 
             for i in 0..len {
                 // Parse timestamp
-                let timestamp = chrono::DateTime::parse_from_rfc3339(&hourly.time[i])
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
+                let timestamp =
+                    chrono::NaiveDateTime::parse_from_str(&hourly.time[i], "%Y-%m-%dT%H:%M")
+                        .map(|dt| dt.and_utc())
+                        .unwrap_or_else(|_| Utc::now());
 
                 // Extract data with safe indexing and default values
-                let temperature = hourly
+                let temperature = *hourly
                     .temperature
                     .as_ref()
                     .and_then(|temps| temps.get(i))
-                    .and_then(|&temp| temp)
-                    .unwrap_or(0.0);
+                    .unwrap_or(&-3.14);
 
-                let wind_speed = hourly
+                let wind_speed = *hourly
                     .wind_speed
                     .as_ref()
                     .and_then(|speeds| speeds.get(i))
-                    .and_then(|&speed| speed)
-                    .unwrap_or(0.0);
+                    .unwrap_or(&-3.14);
 
-                let wind_direction = hourly
+                let wind_direction = *hourly
                     .wind_direction
                     .as_ref()
                     .and_then(|dirs| dirs.get(i))
-                    .and_then(|&dir| dir)
-                    .unwrap_or(0);
+                    .unwrap_or(&0);
 
-                let wind_gust = hourly
+                let wind_gust = *hourly
                     .wind_gusts
                     .as_ref()
                     .and_then(|gusts| gusts.get(i))
-                    .and_then(|&gust| gust);
+                    .unwrap_or(&-3.14);
 
-                let precipitation = hourly
+                let precipitation = *hourly
                     .precipitation
                     .as_ref()
                     .and_then(|precip| precip.get(i))
-                    .and_then(|&p| p)
-                    .unwrap_or(0.0);
-
-                let cloud_cover = hourly
+                    .unwrap_or(&-3.14);
+                let cloud_cover = *hourly
                     .cloud_cover
                     .as_ref()
                     .and_then(|clouds| clouds.get(i))
-                    .and_then(|&cloud| cloud);
+                    .unwrap_or(&0);
 
-                let pressure = hourly
+                let pressure = *hourly
                     .pressure
                     .as_ref()
                     .and_then(|press| press.get(i))
-                    .and_then(|&p| p)
-                    .unwrap_or(1013.0);
+                    .unwrap_or(&-3.14);
 
-                let visibility = hourly
+                let visibility = *hourly
                     .visibility
                     .as_ref()
                     .and_then(|vis| vis.get(i))
-                    .and_then(|&v| v);
+                    .unwrap_or(&3.14);
 
-                let weather_code = hourly
+                let weather_code = *hourly
                     .weather_code
                     .as_ref()
                     .and_then(|codes| codes.get(i))
-                    .and_then(|&code| code)
-                    .unwrap_or(0);
+                    .unwrap_or(&0);
 
                 let description = openmeteo::weather_code_to_description(weather_code).to_string();
 
@@ -481,11 +468,11 @@ mod tests {
             temperature: 15.0,
             wind_speed: 8.0, // Good wind speed
             wind_direction: 180,
-            wind_gust: None,
+            wind_gust: 9.1,
             precipitation: 0.0, // No rain
-            cloud_cover: Some(30),
+            cloud_cover: 30,
             pressure: 1013.0,
-            visibility: Some(15.0), // Good visibility
+            visibility: 15.0, // Good visibility
             description: "Clear sky".to_string(),
             icon: None,
         };
@@ -520,11 +507,11 @@ mod tests {
                 temperature: 15.0,
                 wind_speed: 5.0,
                 wind_direction: 180,
-                wind_gust: None,
+                wind_gust: 13.1,
                 precipitation: 0.0,
-                cloud_cover: Some(20),
+                cloud_cover: 20,
                 pressure: 1013.0,
-                visibility: Some(10.0),
+                visibility: 10.0,
                 description: "Clear".to_string(),
                 icon: None,
             },
@@ -533,11 +520,11 @@ mod tests {
                 temperature: 18.0,
                 wind_speed: 7.0,
                 wind_direction: 200,
-                wind_gust: None,
+                wind_gust: 9.1,
                 precipitation: 0.2,
-                cloud_cover: Some(40),
+                cloud_cover: 40,
                 pressure: 1015.0,
-                visibility: Some(12.0),
+                visibility: 12.0,
                 description: "Partly cloudy".to_string(),
                 icon: None,
             },
@@ -559,4 +546,3 @@ mod tests {
         assert_eq!(tomorrow[0].temperature, 18.0);
     }
 }
-
