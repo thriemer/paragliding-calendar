@@ -9,7 +9,9 @@ pub mod config;
 pub mod error;
 pub mod models;
 pub mod paragliding;
+pub mod paragliding_forecast;
 pub mod weather;
+pub mod wind_analysis;
 
 // Re-export core types for public API
 pub use api::{GeocodingResult, LocationInput, LocationParser, WeatherApiClient};
@@ -18,6 +20,8 @@ pub use config::TravelAiConfig;
 pub use error::{ErrorCode, TravelAiError};
 pub use models::{Location, WeatherData, WeatherForecast};
 pub use paragliding::{DHVParser, GeographicSearch, ParaglidingEarthClient, ParaglidingSite};
+pub use paragliding_forecast::{ParaglidingForecast, ParaglidingForecastService};
+pub use wind_analysis::{FlyabilityAnalysis, WindDirectionAnalysis, WindSpeedAnalysis};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

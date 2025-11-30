@@ -5,7 +5,7 @@ use tracing::{debug, error, info};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, FmtSubscriber, fmt::format::FmtSpan};
 use travelai::{
-    Cache, LocationInput, LocationParser, TravelAiConfig, TravelAiError, WeatherApiClient, weather,
+    Cache, LocationInput, LocationParser, ParaglidingForecastService, TravelAiConfig, TravelAiError, WeatherApiClient, weather,
 };
 
 /// Load configuration from environment variables only
@@ -133,11 +133,25 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Weather forecast for a location (placeholder for future implementation)
+    /// Weather forecast for a location
     Weather {
         /// Location (coordinates, city name, or postal code)
         #[arg(short, long)]
         location: String,
+    },
+    /// Paragliding flyability forecast and recommendations
+    Paragliding {
+        /// Location (coordinates, city name, or postal code)
+        location: String,
+        /// Search radius in kilometers (default: 50km)
+        #[arg(short, long, default_value = "50")]
+        radius: f64,
+        /// Number of forecast days (default: 7, max: 14)
+        #[arg(short, long, default_value = "7")]
+        days: usize,
+        /// Output format: text or json
+        #[arg(short, long, default_value = "text")]
+        format: String,
     },
 }
 
@@ -198,7 +212,7 @@ fn run_cli(cli: &Cli) -> Result<()> {
             } else {
                 if cli.verbose || cli.debug {
                     eprintln!(
-                        "Using default configuration (API key required for weather commands)"
+                        "Using default configuration (no API key required for OpenMeteo)"
                     );
                 }
                 TravelAiConfig::default()
@@ -228,22 +242,14 @@ fn run_cli(cli: &Cli) -> Result<()> {
                 return Err(TravelAiError::validation("Location cannot be empty").into());
             }
 
-            // API key is now optional for OpenMeteo integration
-            // Only validate if provided
-            if let Some(api_key) = &config.weather.api_key {
-                if api_key.len() < 8 {
-                    return Err(TravelAiError::config(
-                        "Weather API key appears to be invalid (too short). Please check your API key."
-                    ).into());
-                }
-            }
+            // No API key required for OpenMeteo
 
             if cli.verbose {
                 println!("Fetching weather for: {location}");
                 println!("Using API endpoint: {}", config.weather.base_url);
             }
 
-            // Use configuration as-is (API key is optional for OpenMeteo)
+            // Use configuration as-is (no API key required for OpenMeteo)
             let weather_config = config.clone();
 
             // Initialize cache
@@ -271,10 +277,206 @@ fn run_cli(cli: &Cli) -> Result<()> {
             }
             Ok(())
         }
+        Some(Commands::Paragliding { location, radius, days, format }) => {
+            handle_paragliding_command(location, *radius, *days, format, &config, cli)
+        }
         None => {
             println!("TravelAI - Intelligent paragliding and outdoor adventure travel planning");
             println!("Use --help for available commands");
             Ok(())
         }
     }
+}
+
+/// Handle paragliding forecast command
+fn handle_paragliding_command(
+    location: &str,
+    radius: f64,
+    days: usize,
+    format: &str,
+    config: &TravelAiConfig,
+    cli: &Cli,
+) -> Result<()> {
+    if location.is_empty() {
+        return Err(TravelAiError::validation("Location cannot be empty").into());
+    }
+
+    // Validate parameters
+    if radius <= 0.0 || radius > 500.0 {
+        return Err(TravelAiError::validation("Radius must be between 0 and 500 km").into());
+    }
+
+    if days == 0 || days > 14 {
+        return Err(TravelAiError::validation("Days must be between 1 and 14").into());
+    }
+
+    if format != "text" && format != "json" {
+        return Err(TravelAiError::validation("Format must be 'text' or 'json'").into());
+    }
+
+    if cli.verbose {
+        println!("Generating paragliding forecast for: {location}");
+        println!("Search radius: {radius}km, Days: {days}");
+        println!("Output format: {format}");
+    }
+
+    // Initialize cache
+    let cache = Cache::new(
+        std::path::PathBuf::from(&config.cache.location),
+        config.cache.ttl_hours,
+    )?;
+
+    // Initialize API client
+    let mut api_client = WeatherApiClient::new(config.clone())?;
+
+    // Parse location input
+    let location_input = LocationParser::parse(location)?;
+
+    match ParaglidingForecastService::generate_forecast(
+        &mut api_client,
+        &cache,
+        location_input,
+        radius,
+        days,
+    ) {
+        Ok(forecast) => {
+            match format {
+                "json" => {
+                    let json = serde_json::to_string_pretty(&forecast)?;
+                    println!("{}", json);
+                }
+                _ => {
+                    display_paragliding_forecast(&forecast);
+                }
+            }
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!("Failed to generate paragliding forecast: {}", e));
+        }
+    }
+
+    Ok(())
+}
+
+/// Display paragliding forecast in human-readable format
+fn display_paragliding_forecast(forecast: &travelai::paragliding_forecast::ParaglidingForecast) {
+    println!("\n🪂 TravelAI Paragliding Forecast - {} ({}km radius)", 
+             forecast.location.name, forecast.radius_km);
+    println!("📍 Location: {}", forecast.location.format_coordinates());
+    
+    if let Some(country) = &forecast.location.country {
+        println!("🏳️  Country: {}", country);
+    }
+    
+    println!("🕒 Generated: {}", 
+             forecast.generated_at.format("%Y-%m-%d %H:%M UTC"));
+    println!("🎯 Sites in area: {}", forecast.sites_in_area.len());
+    println!();
+
+    if forecast.sites_in_area.is_empty() {
+        println!("⚠️  No paragliding sites found in the search area.");
+        println!("   Try increasing the search radius or choosing a different location.");
+        return;
+    }
+
+    for daily_forecast in &forecast.daily_forecasts {
+        println!("═══════════════════════════════════════════════════════════");
+        
+        // Day header
+        println!("📅 {} - {}", 
+                daily_forecast.day_name, 
+                daily_forecast.date.format("%B %d"));
+        
+        // Weather summary
+        let weather = &daily_forecast.weather_summary;
+        println!("🌤️  Weather: {}, {:.0}-{:.0}°C, Wind {} {:.0}-{:.0} km/h, {}% clouds",
+                weather.description,
+                weather.temperature_range.min,
+                weather.temperature_range.max,
+                weather.wind_summary.direction,
+                weather.wind_summary.speed_range.min,
+                weather.wind_summary.speed_range.max,
+                weather.cloud_cover);
+        
+        if weather.precipitation_probability > 10 {
+            println!("🌧️  Precipitation: {}% probability", weather.precipitation_probability);
+        }
+        
+        // Forecast confidence
+        if daily_forecast.confidence < 0.8 {
+            println!("⚠️  Forecast confidence: {:.0}%", daily_forecast.confidence * 100.0);
+        }
+        
+        println!();
+        
+        // Day rating and sites
+        println!("{} {} ({})", 
+                daily_forecast.day_rating.emoji(), 
+                daily_forecast.day_rating,
+                daily_forecast.explanation);
+        
+        if daily_forecast.flyable_sites.is_empty() {
+            match daily_forecast.day_rating {
+                travelai::paragliding_forecast::DayRating::NotFlyable => {
+                    println!("   Reason: {}", daily_forecast.explanation);
+                    if weather.wind_summary.speed_range.max > 30.0 {
+                        println!("   Alternative: Ground school, equipment maintenance");
+                    } else if weather.precipitation_probability > 50 {
+                        println!("   Alternative: Indoor planning, route research");
+                    } else {
+                        println!("   Alternative: Check other nearby areas");
+                    }
+                }
+                _ => {
+                    println!("   No sites meet minimum flyability criteria");
+                }
+            }
+        } else {
+            // Show top flyable sites (limit to 5)
+            let sites_to_show = daily_forecast.flyable_sites.iter().take(5);
+            for (index, site_rating) in sites_to_show.enumerate() {
+                let score_color = site_rating.wind_analysis.score_color();
+                println!("   {}. {} {} ({:.1}/10) - {}km",
+                        index + 1,
+                        score_color,
+                        site_rating.site.name,
+                        site_rating.score,
+                        site_rating.distance_km);
+                
+                println!("      Wind: {} {:.0} km/h (gusts {:.0}), {}",
+                        daily_forecast.weather_summary.wind_summary.direction,
+                        site_rating.wind_analysis.wind_speed.wind_speed_kmh,
+                        site_rating.wind_analysis.wind_speed.wind_gust_kmh,
+                        site_rating.wind_analysis.wind_direction.direction_compatibility);
+                
+                println!("      Reason: {}", site_rating.reasoning);
+                
+                // Pilot suitability
+                let suitability = &site_rating.wind_analysis.wind_speed.pilot_suitability;
+                let mut suitable_for = Vec::new();
+                if suitability.beginner { suitable_for.push("beginners"); }
+                if suitability.intermediate { suitable_for.push("intermediate"); }
+                if suitability.advanced { suitable_for.push("advanced"); }
+                
+                if !suitable_for.is_empty() {
+                    println!("      Suitable for: {}", suitable_for.join(", "));
+                } else {
+                    println!("      ⚠️  Not suitable for any skill level");
+                }
+                
+                println!();
+            }
+            
+            if daily_forecast.flyable_sites.len() > 5 {
+                println!("   ... and {} more site{}", 
+                        daily_forecast.flyable_sites.len() - 5,
+                        if daily_forecast.flyable_sites.len() - 5 == 1 { "" } else { "s" });
+                println!();
+            }
+        }
+    }
+    
+    println!("═══════════════════════════════════════════════════════════");
+    println!("🛡️  Safety Note: Always check local conditions and weather updates before flying.");
+    println!("📊 Scoring: 9-10=Excellent, 7-8=Good, 5-6=Marginal, 3-4=Poor, 0-2=Dangerous");
 }
