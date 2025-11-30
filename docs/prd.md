@@ -3,6 +3,7 @@
 ## Goals and Background Context
 
 ### Goals
+
 • Reduce comprehensive travel planning time for outdoor adventure enthusiasts
 • Minimize unnecessary driving time by intelligently routing between activities based on conditions
 • Provide weather-adaptive activity recommendations for both good and bad weather days
@@ -18,9 +19,9 @@ The TravelAI assistant addresses this planning complexity by integrating activit
 
 ### Change Log
 
-| Date | Version | Description | Author |
-|------|---------|-------------|---------|
-| 2025-11-29 | v1.0 | Initial PRD creation for TravelAI comprehensive outdoor adventure planner | John (PM) |
+| Date       | Version | Description                                                               | Author    |
+| ---------- | ------- | ------------------------------------------------------------------------- | --------- |
+| 2025-11-29 | v1.0    | Initial PRD creation for TravelAI comprehensive outdoor adventure planner | John (PM) |
 
 ## Requirements
 
@@ -65,12 +66,15 @@ The TravelAI assistant addresses this planning complexity by integrating activit
 ## Technical Assumptions
 
 ### Repository Structure: Monorepo
+
 Single repository containing the CLI application and all related components, allowing for unified development and testing.
 
 ### Service Architecture
+
 **Monolith CLI Application** - A single Rust binary that orchestrates API calls and provides command-line interface. This approach fits the MVP scope and CLI-first requirement while allowing for future modularization.
 
 ### Testing Requirements
+
 **Unit + Integration Testing** - Unit tests for core logic (weather analysis, flyability calculations) and integration tests for API interactions with mocking capabilities for reliable CI/CD.
 
 ### Additional Technical Assumptions and Requests
@@ -107,6 +111,7 @@ I want a properly initialized Rust project with CLI argument parsing,
 so that I can build upon a solid foundation with professional tooling and structure.
 
 #### Acceptance Criteria
+
 1: Cargo project initialized with appropriate metadata and dependencies (clap, tokio, serde, reqwest)
 2: CLI accepts basic commands and arguments with help text
 3: Project includes .gitignore, README.md, and basic documentation
@@ -120,6 +125,7 @@ I want to configure API keys and default settings through a config file,
 so that I don't have to enter credentials repeatedly and can customize behavior.
 
 #### Acceptance Criteria
+
 1: Configuration file format (TOML/YAML) defined and documented
 2: CLI reads configuration from standard locations (~/.config/travelai/ or similar)
 3: Environment variable override support for CI/CD and testing
@@ -133,6 +139,7 @@ I want to query weather forecasts for any location,
 so that I can retrieve basic weather data that will later inform activity recommendations.
 
 #### Acceptance Criteria
+
 1: Integration with weather API (OpenWeatherMap or similar) implemented
 2: CLI accepts location input (coordinates, city names, postal codes)
 3: Weather data retrieved and parsed for 7-day forecasts
@@ -147,6 +154,7 @@ I want comprehensive logging and clear error messages,
 so that I can troubleshoot issues and understand application behavior.
 
 #### Acceptance Criteria
+
 1: Structured logging implemented with configurable verbosity levels
 2: User-friendly error messages for common failure scenarios
 3: Debug logging for API calls, responses, and internal operations
@@ -164,7 +172,8 @@ I want the system to access paragliding site information including launch direct
 so that I can get comprehensive site data for flyability analysis.
 
 #### Acceptance Criteria
-1: Integration with paragliding site APIs or data sources (Paragliding Earth, XCGuide, or local databases)
+
+1: Integration with paragliding site APIs or data sources (Paragliding Earth, XCGuide, or local databases) (use the paragliding earth API: https://paraglidingearth.com/api/)
 2: Site data includes name, coordinates, launch directions, elevation, and site characteristics
 3: Geographic search capability to find sites within specified radius of a location
 4: Site information cached appropriately to minimize API calls
@@ -177,6 +186,7 @@ I want the system to analyze wind conditions against site launch orientations,
 so that I can understand which sites are flyable on specific days.
 
 #### Acceptance Criteria
+
 1: Wind direction and speed analysis implemented for each site
 2: Launch direction compatibility logic (favorable, marginal, unfavorable wind angles)
 3: Wind strength assessment relative to site requirements and pilot skill levels
@@ -190,24 +200,12 @@ I want daily flyability assessments for the next 7 days,
 so that I can plan my paragliding activities and travel accordingly.
 
 #### Acceptance Criteria
+
 1: CLI command accepts location and returns 7-day flyability forecast
 2: Results show recommended sites ranked by flyability score for each day
 3: Output includes weather summary, wind analysis, and site-specific reasoning
 4: Multiple sites presented per day when conditions allow
 5: Clear indicators when no sites are flyable due to weather conditions
-
-### Story 2.4: Geographic Route Planning
-
-As a paragliding pilot,
-I want to see travel distances and times between flyable sites,
-so that I can optimize my travel routes and minimize driving time.
-
-#### Acceptance Criteria
-1: Integration with mapping APIs for distance and travel time calculations
-2: Route optimization suggests efficient sequences of sites across multiple days
-3: Travel time estimates account for road conditions and realistic driving speeds
-4: CLI output includes travel logistics alongside flyability recommendations
-5: Option to specify maximum acceptable travel distance between sites
 
 ## Epic 3: Comprehensive Activity Planning
 
@@ -220,6 +218,7 @@ I want to find suitable camping and accommodation options along my travel route,
 so that I can plan overnight stays that support my activity schedule.
 
 #### Acceptance Criteria
+
 1: Integration with Park4Night API to retrieve camping and parking spot data
 2: Search functionality for sleeping spots within specified distance of activity locations
 3: Spot information includes amenities, restrictions, user ratings, and accessibility
@@ -233,6 +232,7 @@ I want to discover weather-appropriate activities and sightseeing opportunities,
 so that I can fill my itinerary with engaging activities regardless of weather conditions.
 
 #### Acceptance Criteria
+
 1: OpenStreetMap integration to identify hiking trails, viewpoints, museums, and indoor activities
 2: Activity categorization by weather dependency (outdoor-only, weather-independent, bad-weather alternatives)
 3: Geographic search within travel radius of planned routes
@@ -246,6 +246,7 @@ I want daily activity suggestions that adapt to weather forecasts,
 so that I can maximize my enjoyment regardless of conditions.
 
 #### Acceptance Criteria
+
 1: Daily activity recommendations based on weather forecasts and conditions
 2: Good weather prioritizes outdoor activities (hiking, sightseeing, paragliding)
 3: Poor weather suggests indoor alternatives (museums, covered attractions, planning time)
@@ -259,8 +260,10 @@ I want a comprehensive multi-day itinerary combining activities, accommodations,
 so that I have a complete plan optimizing my time and minimizing unnecessary travel.
 
 #### Acceptance Criteria
+
 1: Multi-day itinerary generation combining all activity types and accommodations
 2: Day-by-day schedule with morning/afternoon/evening activity suggestions
 3: Route optimization to minimize total travel time and distance
 4: Itinerary export options (text, JSON, or structured CLI output)
 5: Flexibility indicators showing alternative options when weather changes
+

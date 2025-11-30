@@ -223,7 +223,7 @@ impl WeatherApiClient {
         let total_duration = start_time.elapsed();
 
         // Create forecast using our OpenMeteo conversion method
-        let location_name = format!("{:.4}, {:.4}", lat, lon); // Default name, will be updated by geocoding
+        let location_name = format!("{lat:.4}, {lon:.4}"); // Default name, will be updated by geocoding
         let forecast = WeatherForecast::from_openmeteo(&forecast_response, location_name);
 
         info!(
@@ -243,7 +243,7 @@ impl WeatherApiClient {
         Ok(forecast)
     }
 
-    /// Get geocoding information for a location name using OpenMeteo API
+    /// Get geocoding information for a location name using `OpenMeteo` API
     #[instrument(skip(self), fields(location = location_name))]
     pub fn geocode(&mut self, location_name: &str) -> Result<Vec<GeocodingResult>> {
         let span = span!(Level::INFO, "geocode", location = location_name);
@@ -317,11 +317,11 @@ impl WeatherApiClient {
         Ok(geocoding_results)
     }
 
-    /// Get reverse geocoding information for coordinates using OpenMeteo API
+    /// Get reverse geocoding information for coordinates using `OpenMeteo` API
     pub fn reverse_geocode(&mut self, lat: f64, lon: f64) -> Result<Vec<GeocodingResult>> {
         // OpenMeteo doesn't have a reverse geocoding API, so we return a basic result
         let geocoding_result = GeocodingResult {
-            name: format!("{:.4}, {:.4}", lat, lon),
+            name: format!("{lat:.4}, {lon:.4}"),
             local_names: None,
             lat,
             lon,
@@ -334,7 +334,7 @@ impl WeatherApiClient {
 
     /// Make a request with rate limiting and retry logic
     #[instrument(skip(self, url), fields(url = %url.split("appid=").next().unwrap_or(url)))]
-    fn make_request(&mut self, url: &str) -> Result<Response> {
+    #[allow(clippy::too_many_lines)]\n    fn make_request(&mut self, url: &str) -> Result<Response> {
         let span = span!(Level::DEBUG, "make_request");
         let _enter = span.enter();
 
@@ -434,7 +434,6 @@ impl WeatherApiClient {
                             debug!("Sleeping {}s before retry", retry_after);
                             thread::sleep(Duration::from_secs(retry_after));
                             attempt += 1;
-                            continue;
                         } else {
                             error!("Rate limit exceeded and retry attempts exhausted");
                             return Err(TravelAiError::api_with_context(
@@ -447,34 +446,31 @@ impl WeatherApiClient {
                             )
                             .into());
                         }
+                    }
+                    let error_msg = format!(
+                        "API request failed with status: {status} - {}",
+                        status.canonical_reason().unwrap_or("Unknown error")
+                    );
+
+                    warn!("HTTP error on attempt {}: {error_msg}", attempt + 1);
+
+                    if attempt < max_attempts - 1 {
+                        // Exponential backoff for server errors
+                        let backoff = Duration::from_millis(1000 * (2_u64.pow(attempt)));
+                        debug!("Exponential backoff: waiting {:.1}s", backoff.as_secs_f64());
+                        thread::sleep(backoff);
+                        attempt += 1;
                     } else {
-                        let error_msg = format!(
-                            "API request failed with status: {} - {}",
-                            status,
-                            status.canonical_reason().unwrap_or("Unknown error")
-                        );
-
-                        warn!("HTTP error on attempt {}: {}", attempt + 1, error_msg);
-
-                        if attempt < max_attempts - 1 {
-                            // Exponential backoff for server errors
-                            let backoff = Duration::from_millis(1000 * (2_u64.pow(attempt)));
-                            debug!("Exponential backoff: waiting {:.1}s", backoff.as_secs_f64());
-                            thread::sleep(backoff);
-                            attempt += 1;
-                            continue;
-                        } else {
-                            error!("API request failed after all attempts: {}", error_msg);
-                            return Err(TravelAiError::api_with_context(
-                                error_msg,
-                                ErrorCode::ApiNetworkError,
-                                HashMap::from([
-                                    ("status_code".to_string(), status.as_u16().to_string()),
-                                    ("attempts".to_string(), max_attempts.to_string()),
-                                ]),
-                            )
-                            .into());
-                        }
+                        error!("API request failed after all attempts: {error_msg}");
+                        return Err(TravelAiError::api_with_context(
+                            error_msg,
+                            ErrorCode::ApiNetworkError,
+                            HashMap::from([
+                                ("status_code".to_string(), status.as_u16().to_string()),
+                                ("attempts".to_string(), max_attempts.to_string()),
+                            ]),
+                        )
+                        .into());
                     }
                 }
                 Err(e) => {
@@ -497,9 +493,9 @@ impl WeatherApiClient {
                         attempt += 1;
                         continue;
                     } else {
-                        error!("Network error after {} attempts: {}", max_attempts, e);
+                        error!("Network error after {max_attempts} attempts: {e}");
                         return Err(TravelAiError::api_with_context(
-                            format!("Network error after {} attempts: {}", max_attempts, e),
+                            format!("Network error after {max_attempts} attempts: {e}"),
                             ErrorCode::ApiNetworkError,
                             HashMap::from([
                                 ("attempts".to_string(), max_attempts.to_string()),
@@ -596,16 +592,14 @@ impl LocationParser {
         // Validate coordinate ranges
         if !(-90.0..=90.0).contains(&lat) {
             return Err(TravelAiError::validation(format!(
-                "Latitude must be between -90 and 90, got: {}",
-                lat
+                "Latitude must be between -90 and 90, got: {lat}"
             ))
             .into());
         }
 
         if !(-180.0..=180.0).contains(&lon) {
             return Err(TravelAiError::validation(format!(
-                "Longitude must be between -180 and 180, got: {}",
-                lon
+                "Longitude must be between -180 and 180, got: {lon}"
             ))
             .into());
         }
@@ -616,7 +610,7 @@ impl LocationParser {
     /// Check if input looks like a postal code
     fn is_postal_code(input: &str) -> bool {
         // Simple heuristic: contains mostly digits, optionally with country prefix
-        let normalized = input.replace(' ', "").replace('-', "");
+        let normalized = input.replace([' ', '-'], "");
 
         // US ZIP codes: 5 or 9 digits
         if normalized.len() == 5 || normalized.len() == 9 {
