@@ -4,7 +4,7 @@
 //! evaluating wind conditions against launch orientations to determine flyability.
 
 use crate::models::WeatherData;
-use crate::paragliding::{LaunchDirection, ParaglidingSite};
+use crate::paragliding::sites::{LaunchDirection, ParaglidingSite};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -376,7 +376,7 @@ impl fmt::Display for WindSpeedCategory {
 mod tests {
     use super::*;
     use crate::models::WeatherData;
-    use crate::paragliding::{Coordinates, DataSource, LaunchDirection, ParaglidingSite, SiteCharacteristics};
+    use crate::paragliding::sites::{Coordinates, DataSource, LaunchDirection, ParaglidingSite, SiteCharacteristics};
     use chrono::Utc;
 
     fn create_test_weather(wind_direction: u16, wind_speed: f32) -> WeatherData {

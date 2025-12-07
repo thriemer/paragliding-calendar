@@ -5,7 +5,7 @@ use tracing::info;
 
 use super::{Result, TravelAIError};
 use crate::config::TravelAiConfig;
-use super::{ParaglidingSite, Coordinates, LaunchDirection, DataSource, SiteCharacteristics};
+use crate::paragliding::sites::{ParaglidingSite, Coordinates, LaunchDirection, DataSource, SiteCharacteristics};
 
 /// Paragliding Earth API client
 pub struct ParaglidingEarthClient {

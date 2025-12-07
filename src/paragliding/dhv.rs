@@ -7,11 +7,8 @@ use tracing::{info, warn};
 use super::ParaglidingSite;
 use super::{Result, TravelAIError};
 
-use crate::paragliding::Coordinates;
-use crate::paragliding::DataSource;
-use crate::paragliding::LaunchDirection;
-use crate::paragliding::SiteCharacteristics;
-use crate::paragliding::parse_direction_text_to_degrees;
+use crate::paragliding::sites::{Coordinates, DataSource, LaunchDirection, SiteCharacteristics};
+use crate::paragliding::sites::parse_direction_text_to_degrees;
 
 /// DHV XML parser and site loader
 pub struct DHVParser;

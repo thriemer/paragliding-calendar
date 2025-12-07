@@ -4,8 +4,8 @@
 //! weather forecasts, and wind analysis to generate comprehensive paragliding forecasts.
 
 use crate::models::{Location, WeatherData, WeatherForecast};
-use crate::paragliding::{Coordinates, GeographicSearch, ParaglidingSite};
-use crate::wind_analysis::{FlyabilityAnalysis, WindSpeedCategory};
+use crate::paragliding::sites::{Coordinates, GeographicSearch, ParaglidingSite};
+use crate::paragliding::wind_analysis::{FlyabilityAnalysis, WindDirectionCompatibility, WindSpeedCategory};
 use crate::{Cache, LocationInput, WeatherApiClient};
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -209,7 +209,7 @@ impl ParaglidingForecastService {
         let dhv_file_path = "dhvgelaende_dhvxml_de.xml";
 
         let sites = if std::path::Path::new(dhv_file_path).exists() {
-            crate::paragliding::DHVParser::load_sites(dhv_file_path)?
+            crate::paragliding::dhv::DHVParser::load_sites(dhv_file_path)?
         } else {
             warn!(
                 "DHV XML file not found at {}, using empty site list",
@@ -286,7 +286,7 @@ impl ParaglidingForecastService {
             // Use midday weather for site analysis
             if let Some(midday_weather) = day_weather.get(day_weather.len() / 2) {
                 // Safe conversion: realistic day offsets will always be small
-                let hours_ahead = f32::try_from(day_offset * 24 + 12).unwrap_or(f32::INFINITY);
+                let hours_ahead = (day_offset * 24 + 12) as f32;
                 let analysis = FlyabilityAnalysis::analyze(midday_weather, site, hours_ahead);
 
                 // Only include sites with reasonable flyability scores
@@ -362,7 +362,7 @@ impl ParaglidingForecastService {
             .iter()
             .map(|w| f32::from(w.cloud_cover))
             .sum::<f32>()
-            / f32::try_from(day_weather.len()).unwrap_or(f32::INFINITY).max(1.0);
+            / day_weather.len().max(1) as f32;
         let max_precip = day_weather
             .iter()
             .map(|w| w.precipitation)
@@ -482,19 +482,19 @@ impl ParaglidingForecastService {
 
         // Wind direction reasoning
         match analysis.wind_direction.direction_compatibility {
-            crate::wind_analysis::WindDirectionCompatibility::Perfect => {
+            WindDirectionCompatibility::Perfect => {
                 reasons.push("perfect wind direction".to_string());
             }
-            crate::wind_analysis::WindDirectionCompatibility::Favorable => {
+            WindDirectionCompatibility::Favorable => {
                 reasons.push("favorable wind direction".to_string());
             }
-            crate::wind_analysis::WindDirectionCompatibility::Marginal => {
+            WindDirectionCompatibility::Marginal => {
                 reasons.push("marginal wind direction".to_string());
             }
-            crate::wind_analysis::WindDirectionCompatibility::Unfavorable => {
+            WindDirectionCompatibility::Unfavorable => {
                 reasons.push("unfavorable wind direction".to_string());
             }
-            crate::wind_analysis::WindDirectionCompatibility::Dangerous => {
+            WindDirectionCompatibility::Dangerous => {
                 reasons.push("dangerous wind direction".to_string());
             }
         }

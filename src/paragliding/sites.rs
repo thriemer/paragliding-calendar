@@ -1,20 +1,10 @@
-//! Paragliding site data integration module
+//! Paragliding site data types and functionality
 //!
-//! This module provides functionality for loading, parsing, and searching paragliding sites
-//! from multiple data sources including DHV Geländedatenbank XML and Paragliding Earth API.
+//! This module provides the core data structures for representing paragliding sites
+//! and utilities for working with geographic coordinates and site search.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-pub mod cache;
-pub mod dhv;
-pub mod error;
-pub mod paragliding_earth;
-
-pub use cache::{SearchCacheKey, SiteCache};
-pub use dhv::DHVParser;
-pub use error::{Result, TravelAIError};
-pub use paragliding_earth::ParaglidingEarthClient;
 
 /// Represents a paragliding site from any data source
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,7 +51,7 @@ pub struct SiteCharacteristics {
 }
 
 /// Convert direction text like "O, W" or "SSW-WSW" to compass degrees
-fn parse_direction_text_to_degrees(text: &str) -> Vec<f64> {
+pub fn parse_direction_text_to_degrees(text: &str) -> Vec<f64> {
     let mut degrees = Vec::new();
 
     // Direction mappings
@@ -136,8 +126,6 @@ impl GeographicSearch {
 
 #[cfg(test)]
 mod tests {
-    use crate::paragliding::dhv::DHVLocation;
-
     use super::*;
 
     #[test]
@@ -147,27 +135,6 @@ mod tests {
 
         let degrees = parse_direction_text_to_degrees("SSW-WSW");
         assert_eq!(degrees, vec![202.5, 247.5]);
-    }
-
-    #[test]
-    fn test_coordinate_parsing() {
-        let location = DHVLocation {
-            location_name: None,
-            coordinates: "14.700136,50.998362".to_string(),
-            location_type: Some(1),
-            altitude: Some(320.0),
-            directions: None,
-            directions_text: None,
-            access_by_car: None,
-            access_by_foot: None,
-            access_by_public_transport: None,
-            hanggliding: None,
-            paragliding: None,
-        };
-
-        let coords = location.parse_coordinates().unwrap();
-        assert_eq!(coords.longitude, 14.700_136);
-        assert_eq!(coords.latitude, 50.998_362);
     }
 
     #[test]

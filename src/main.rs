@@ -361,7 +361,7 @@ fn handle_paragliding_command(
 }
 
 /// Display paragliding forecast in human-readable format
-fn display_paragliding_forecast(forecast: &travelai::paragliding_forecast::ParaglidingForecast) {
+fn display_paragliding_forecast(forecast: &travelai::ParaglidingForecast) {
     println!("\n🪂 TravelAI Paragliding Forecast - {} ({}km radius)", 
              forecast.location.name, forecast.radius_km);
     println!("📍 Location: {}", forecast.location.format_coordinates());
@@ -419,7 +419,7 @@ fn display_paragliding_forecast(forecast: &travelai::paragliding_forecast::Parag
         
         if daily_forecast.flyable_sites.is_empty() {
             match daily_forecast.day_rating {
-                travelai::paragliding_forecast::DayRating::NotFlyable => {
+                travelai::paragliding::forecast::DayRating::NotFlyable => {
                     println!("   Reason: {}", daily_forecast.explanation);
                     if weather.wind_summary.speed_range.max > 30.0 {
                         println!("   Alternative: Ground school, equipment maintenance");
