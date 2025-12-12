@@ -9,10 +9,9 @@ use crate::models::{Location, WeatherData, WeatherForecast, openmeteo};
 use crate::{ErrorCode, TravelAiError};
 use anyhow::{Context, Result};
 use chrono::Utc;
-use reqwest::blocking::{Client, Response};
+use reqwest::{Client, Response};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{Level, debug, error, info, instrument, span, warn};
 
@@ -112,7 +111,7 @@ impl WeatherApiClient {
 
     /// Get current weather for a location using `OpenMeteo` API
     #[instrument(skip(self), fields(lat, lon))]
-    pub fn get_current_weather(&mut self, lat: f64, lon: f64) -> Result<WeatherData> {
+    pub async fn get_current_weather(&mut self, lat: f64, lon: f64) -> Result<WeatherData> {
         let span = span!(Level::INFO, "get_current_weather", lat, lon);
         let _enter = span.enter();
 
@@ -129,11 +128,11 @@ impl WeatherApiClient {
 
         debug!("OpenMeteo API request URL: {}", url);
 
-        let response = self.make_request(&url)?;
+        let response = self.make_request(&url).await?;
 
         let parse_start = Instant::now();
         let forecast_response: openmeteo::ForecastResponse = response
-            .json()
+            .json().await
             .with_context(|| "Failed to parse OpenMeteo weather response")
             .map_err(|e| {
                 error!("Failed to parse weather response: {}", e);
@@ -188,7 +187,7 @@ impl WeatherApiClient {
 
     /// Get 7-day weather forecast for a location using `OpenMeteo` API
     #[instrument(skip(self), fields(lat, lon))]
-    pub fn get_forecast(&mut self, lat: f64, lon: f64) -> Result<WeatherForecast> {
+    pub async fn get_forecast(&mut self, lat: f64, lon: f64) -> Result<WeatherForecast> {
         let span = span!(Level::INFO, "get_forecast", lat, lon);
         let _enter = span.enter();
 
@@ -203,12 +202,12 @@ impl WeatherApiClient {
             "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,windspeed_10m,winddirection_10m,windgusts_10m,precipitation,cloudcover,surface_pressure,visibility,weathercode&timezone=auto&forecast_days=7&wind_speed_unit=ms"
         );
 
-        let response = self.make_request(&url)?;
+        let response = self.make_request(&url).await?;
         debug!("API Response: {:?}", response);
 
         let parse_start = Instant::now();
         let forecast_response: openmeteo::ForecastResponse = response
-            .json()
+            .json().await
             .with_context(|| "Failed to parse OpenMeteo forecast response")
             .map_err(|e| {
                 error!("Failed to parse forecast response: {}", e);
@@ -246,7 +245,7 @@ impl WeatherApiClient {
 
     /// Get geocoding information for a location name using `OpenMeteo` API
     #[instrument(skip(self), fields(location = location_name))]
-    pub fn geocode(&mut self, location_name: &str) -> Result<Vec<GeocodingResult>> {
+    pub async fn geocode(&mut self, location_name: &str) -> Result<Vec<GeocodingResult>> {
         let span = span!(Level::INFO, "geocode", location = location_name);
         let _enter = span.enter();
 
@@ -259,11 +258,11 @@ impl WeatherApiClient {
             urlencoding::encode(location_name)
         );
 
-        let response = self.make_request(&url)?;
+        let response = self.make_request(&url).await?;
 
         let parse_start = Instant::now();
         let openmeteo_response: openmeteo::GeocodingResponse = response
-            .json()
+            .json().await
             .with_context(|| "Failed to parse OpenMeteo geocoding response")
             .map_err(|e| {
                 error!(
@@ -336,7 +335,7 @@ impl WeatherApiClient {
     /// Make a request with rate limiting and retry logic
     #[instrument(skip(self, url), fields(url = %url.split("appid=").next().unwrap_or(url)))]
     #[allow(clippy::too_many_lines)]
-    fn make_request(&mut self, url: &str) -> Result<Response> {
+    async fn make_request(&mut self, url: &str) -> Result<Response> {
         let span = span!(Level::DEBUG, "make_request");
         let _enter = span.enter();
 
@@ -371,7 +370,7 @@ impl WeatherApiClient {
                         )
                         .into());
                     }
-                    thread::sleep(wait_time);
+                    tokio::time::sleep(wait_time).await;
                 }
                 continue;
             }
@@ -383,7 +382,7 @@ impl WeatherApiClient {
             );
 
             // Make the request
-            match self.client.get(url).send() {
+            match self.client.get(url).send().await {
                 Ok(response) => {
                     let attempt_duration = attempt_start.elapsed();
                     let status = response.status();
@@ -434,7 +433,7 @@ impl WeatherApiClient {
 
                         if attempt < max_attempts - 1 {
                             debug!("Sleeping {}s before retry", retry_after);
-                            thread::sleep(Duration::from_secs(retry_after));
+                            tokio::time::sleep(Duration::from_secs(retry_after)).await;
                             attempt += 1;
                         } else {
                             error!("Rate limit exceeded and retry attempts exhausted");
@@ -460,7 +459,7 @@ impl WeatherApiClient {
                         // Exponential backoff for server errors
                         let backoff = Duration::from_millis(1000 * (2_u64.pow(attempt)));
                         debug!("Exponential backoff: waiting {:.1}s", backoff.as_secs_f64());
-                        thread::sleep(backoff);
+                        tokio::time::sleep(backoff).await;
                         attempt += 1;
                     } else {
                         error!("API request failed after all attempts: {error_msg}");
@@ -491,7 +490,7 @@ impl WeatherApiClient {
                             "Network error backoff: waiting {:.1}s",
                             backoff.as_secs_f64()
                         );
-                        thread::sleep(backoff);
+                        tokio::time::sleep(backoff).await;
                         attempt += 1;
                         continue;
                     }

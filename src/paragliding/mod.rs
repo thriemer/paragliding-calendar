@@ -7,23 +7,23 @@
 //! - Flyability forecasting and recommendations
 //! - Geographic search and distance calculations
 
-pub mod cache;
 pub mod dhv;
 pub mod error;
 pub mod forecast;
 pub mod paragliding_earth;
+pub mod site_loader;
 pub mod sites;
 pub mod wind_analysis;
 
 // Re-export commonly used types from submodules
-pub use cache::{SearchCacheKey, SiteCache};
 pub use dhv::DHVParser;
 pub use error::{Result, TravelAIError};
 pub use forecast::{DailyFlyabilityForecast, ParaglidingForecast, ParaglidingForecastService};
 pub use paragliding_earth::ParaglidingEarthClient;
+pub use site_loader::SiteLoader;
 pub use sites::{
-    Coordinates, DataSource, GeographicSearch, LaunchDirection, ParaglidingSite,
-    SiteCharacteristics,
+    Coordinates, DataSource, GeographicSearch, LaunchDirectionRange, ParaglidingSite,
+    SiteCharacteristics, SiteType,
 };
 pub use wind_analysis::{
     FlyabilityAnalysis, WindDirectionAnalysis, WindDirectionCompatibility, WindSpeedAnalysis,

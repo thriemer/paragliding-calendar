@@ -13,8 +13,8 @@ pub struct ParaglidingSite {
     pub name: String,
     pub coordinates: Coordinates,
     pub elevation: Option<f64>,
-    pub launch_directions: Vec<LaunchDirection>,
-    pub site_type: Option<String>,
+    pub launch_directions: Vec<LaunchDirectionRange>,
+    pub site_type: SiteType,
     pub country: Option<String>,
     pub data_source: DataSource,
     pub characteristics: SiteCharacteristics,
@@ -27,10 +27,15 @@ pub struct Coordinates {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LaunchDirection {
-    pub direction_code: Option<String>, // DHV specific codes like "3B", "89A"
-    pub direction_text: String,         // Human readable like "O, W" or "SSW-WSW"
-    pub direction_degrees: Vec<f64>,    // Converted to compass degrees
+pub enum SiteType {
+    Hang,
+    Winch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LaunchDirectionRange {
+    pub direction_degrees_start: f64,
+    pub direction_degrees_stop: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,7 +103,7 @@ pub struct GeographicSearch;
 
 impl GeographicSearch {
     /// Find sites within radius (km) of a location
-    #[must_use] 
+    #[must_use]
     pub fn sites_within_radius<'a>(
         sites: &'a [ParaglidingSite],
         center: &Coordinates,

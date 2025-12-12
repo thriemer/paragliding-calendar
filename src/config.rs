@@ -40,12 +40,11 @@ pub struct WeatherConfig {
     pub max_retries: u32,
 }
 
-/// Paragliding API configuration settings
+/// Paragliding configuration settings  
+/// Note: Paragliding Earth API requires no authentication - sites are loaded automatically
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParaglidingConfig {
-    /// Paragliding Earth API key (optional)
-    pub paragliding_earth_api_key: Option<String>,
-    /// DHV XML file path
+    /// DHV XML file path for local site data
     #[serde(default = "default_dhv_xml_path")]
     pub dhv_xml_path: String,
 }
@@ -124,7 +123,7 @@ fn default_cache_max_size() -> u32 {
 }
 
 fn default_cache_location() -> String {
-    "~/.cache/travelai".to_string()
+    ".cache/travelai".to_string()
 }
 
 fn default_log_level() -> String {
@@ -140,7 +139,7 @@ fn default_log_output() -> String {
 }
 
 fn default_log_file_path() -> String {
-    "~/.cache/travelai/app.log".to_string()
+    ".cache/travelai/app.log".to_string()
 }
 
 fn default_log_max_file_size() -> u32 {
@@ -169,7 +168,6 @@ impl Default for TravelAiConfig {
                 max_retries: default_weather_max_retries(),
             },
             paragliding: ParaglidingConfig {
-                paragliding_earth_api_key: None,
                 dhv_xml_path: default_dhv_xml_path(),
             },
             cache: CacheConfig {
@@ -300,14 +298,16 @@ impl TravelAiConfig {
 
             if api_key.len() < 8 {
                 return Err(TravelAiError::config(
-                    "Weather API key appears to be invalid (too short). Please check your API key."
-                ).into());
+                    "Weather API key appears to be invalid (too short). Please check your API key.",
+                )
+                .into());
             }
 
             if api_key.len() > 100 {
                 return Err(TravelAiError::config(
-                    "Weather API key appears to be invalid (too long). Please check your API key."
-                ).into());
+                    "Weather API key appears to be invalid (too long). Please check your API key.",
+                )
+                .into());
             }
         }
 
@@ -317,39 +317,31 @@ impl TravelAiConfig {
     /// Validate numeric configuration ranges
     fn validate_numeric_ranges(&self) -> Result<()> {
         if self.weather.timeout_seconds > 300 {
-            return Err(TravelAiError::config(
-                "Weather API timeout cannot exceed 300 seconds"
-            ).into());
+            return Err(
+                TravelAiError::config("Weather API timeout cannot exceed 300 seconds").into(),
+            );
         }
 
         if self.weather.max_retries > 10 {
-            return Err(TravelAiError::config(
-                "Weather API max retries cannot exceed 10"
-            ).into());
+            return Err(TravelAiError::config("Weather API max retries cannot exceed 10").into());
         }
 
         if self.cache.ttl_hours > 168 {
-            return Err(TravelAiError::config(
-                "Cache TTL cannot exceed 168 hours (1 week)"
-            ).into());
+            return Err(TravelAiError::config("Cache TTL cannot exceed 168 hours (1 week)").into());
         }
 
         if self.cache.max_size_mb > 10000 {
-            return Err(TravelAiError::config(
-                "Cache max size cannot exceed 10000 MB (10 GB)"
-            ).into());
+            return Err(
+                TravelAiError::config("Cache max size cannot exceed 10000 MB (10 GB)").into(),
+            );
         }
 
         if self.defaults.search_radius_km > 500 {
-            return Err(TravelAiError::config(
-                "Search radius cannot exceed 500 km"
-            ).into());
+            return Err(TravelAiError::config("Search radius cannot exceed 500 km").into());
         }
 
         if self.defaults.max_sites > 100 {
-            return Err(TravelAiError::config(
-                "Maximum sites cannot exceed 100"
-            ).into());
+            return Err(TravelAiError::config("Maximum sites cannot exceed 100").into());
         }
 
         Ok(())
@@ -359,28 +351,31 @@ impl TravelAiConfig {
     fn validate_string_values(&self) -> Result<()> {
         let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
         if !valid_log_levels.contains(&self.logging.level.as_str()) {
-            return Err(TravelAiError::config(
-                format!("Invalid log level '{}'. Must be one of: {}", 
-                    self.logging.level, 
-                    valid_log_levels.join(", ")
-                )
-            ).into());
+            return Err(TravelAiError::config(format!(
+                "Invalid log level '{}'. Must be one of: {}",
+                self.logging.level,
+                valid_log_levels.join(", ")
+            ))
+            .into());
         }
 
         let valid_log_formats = ["pretty", "json"];
         if !valid_log_formats.contains(&self.logging.format.as_str()) {
-            return Err(TravelAiError::config(
-                format!("Invalid log format '{}'. Must be one of: {}", 
-                    self.logging.format, 
-                    valid_log_formats.join(", ")
-                )
-            ).into());
+            return Err(TravelAiError::config(format!(
+                "Invalid log format '{}'. Must be one of: {}",
+                self.logging.format,
+                valid_log_formats.join(", ")
+            ))
+            .into());
         }
 
-        if !self.weather.base_url.starts_with("http://") && !self.weather.base_url.starts_with("https://") {
+        if !self.weather.base_url.starts_with("http://")
+            && !self.weather.base_url.starts_with("https://")
+        {
             return Err(TravelAiError::config(
-                "Weather API base URL must be a valid HTTP or HTTPS URL"
-            ).into());
+                "Weather API base URL must be a valid HTTP or HTTPS URL",
+            )
+            .into());
         }
 
         Ok(())
@@ -390,8 +385,12 @@ impl TravelAiConfig {
     pub fn ensure_config_dir() -> Result<PathBuf> {
         if let Some(config_dir) = dirs::config_dir() {
             let travelai_config_dir = config_dir.join("travelai");
-            std::fs::create_dir_all(&travelai_config_dir)
-                .with_context(|| format!("Failed to create config directory: {}", travelai_config_dir.display()))?;
+            std::fs::create_dir_all(&travelai_config_dir).with_context(|| {
+                format!(
+                    "Failed to create config directory: {}",
+                    travelai_config_dir.display()
+                )
+            })?;
             Ok(travelai_config_dir)
         } else {
             Err(TravelAiError::config("Unable to determine config directory").into())
@@ -438,7 +437,12 @@ mod tests {
         config.logging.level = "invalid".to_string();
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid log level"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid log level")
+        );
     }
 
     #[test]
@@ -448,15 +452,20 @@ mod tests {
         config.weather.timeout_seconds = 500; // Invalid - too high
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("timeout cannot exceed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("timeout cannot exceed")
+        );
     }
 
     #[test]
     fn test_environment_variable_override() {
         // This test verifies that environment variables are handled correctly
         // Set minimal environment to test basic functionality
-        
-        // SAFETY: Test environment, setting test values only  
+
+        // SAFETY: Test environment, setting test values only
         unsafe {
             env::set_var("TRAVELAI_WEATHER__API_KEY", "test_key_from_env");
         }
@@ -464,16 +473,19 @@ mod tests {
         // Test with basic config that should have defaults
         let mut config = TravelAiConfig::default();
         config.weather.api_key = Some("test_key_from_env".to_string()); // Simulate env override
-        
+
         let result = config.validate();
-        
+
         // SAFETY: Test cleanup
         unsafe {
             env::remove_var("TRAVELAI_WEATHER__API_KEY");
         }
 
         assert!(result.is_ok());
-        assert_eq!(config.weather.api_key, Some("test_key_from_env".to_string()));
+        assert_eq!(
+            config.weather.api_key,
+            Some("test_key_from_env".to_string())
+        );
     }
 
     #[test]
@@ -485,3 +497,4 @@ mod tests {
         assert!(path.to_string_lossy().contains("config.toml"));
     }
 }
+

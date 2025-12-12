@@ -155,11 +155,11 @@ pub enum Commands {
     },
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    if let Err(e) = run_cli(&cli) {
+    if let Err(e) = run_cli(&cli).await {
         // Display error message based on verbosity level
         if let Some(travel_err) = e.downcast_ref::<TravelAiError>() {
             if cli.debug {
@@ -197,7 +197,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_cli(cli: &Cli) -> Result<()> {
+async fn run_cli(cli: &Cli) -> Result<()> {
     // Load configuration with environment variable support
     let config = match TravelAiConfig::load_from_path(cli.config.clone()) {
         Ok(config) => config,
@@ -265,7 +265,7 @@ fn run_cli(cli: &Cli) -> Result<()> {
             // Parse location input
             let location_input = LocationParser::parse(location)?;
 
-            match weather::get_weather_forecast(&mut api_client, &cache, location_input) {
+            match weather::get_weather_forecast(&mut api_client, &cache, location_input).await {
                 Ok(forecast) => {
                     weather::display_weather_forecast(&forecast);
                 }
@@ -279,7 +279,7 @@ fn run_cli(cli: &Cli) -> Result<()> {
             Ok(())
         }
         Some(Commands::Paragliding { location, radius, days, format }) => {
-            handle_paragliding_command(location, *radius, *days, format, &config, cli)
+            handle_paragliding_command(location, *radius, *days, format, &config, cli).await
         }
         None => {
             println!("TravelAI - Intelligent paragliding and outdoor adventure travel planning");
@@ -290,7 +290,7 @@ fn run_cli(cli: &Cli) -> Result<()> {
 }
 
 /// Handle paragliding forecast command
-fn handle_paragliding_command(
+async fn handle_paragliding_command(
     location: &str,
     radius: f64,
     days: usize,
@@ -340,7 +340,8 @@ fn handle_paragliding_command(
         location_input,
         radius,
         days,
-    ) {
+        Some(config),
+    ).await {
         Ok(forecast) => {
             match format {
                 "json" => {

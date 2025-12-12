@@ -7,6 +7,7 @@ pub mod api;
 pub mod cache;
 pub mod config;
 pub mod error;
+pub mod location_resolver;
 pub mod models;
 pub mod paragliding;
 pub mod weather;
@@ -16,10 +17,12 @@ pub use api::{GeocodingResult, LocationInput, LocationParser, WeatherApiClient};
 pub use cache::Cache;
 pub use config::TravelAiConfig;
 pub use error::{ErrorCode, TravelAiError};
+pub use location_resolver::LocationResolver;
 pub use models::{Location, WeatherData, WeatherForecast};
 pub use paragliding::{
-    DHVParser, FlyabilityAnalysis, GeographicSearch, ParaglidingEarthClient, ParaglidingForecast,
-    ParaglidingForecastService, ParaglidingSite, WindDirectionAnalysis, WindSpeedAnalysis,
+    DHVParser, FlyabilityAnalysis, GeographicSearch, ParaglidingEarthClient, 
+    ParaglidingForecast, ParaglidingForecastService, ParaglidingSite, SiteLoader, 
+    WindDirectionAnalysis, WindSpeedAnalysis,
 };
 
 /// Library version

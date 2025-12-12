@@ -14,7 +14,7 @@ config = "0.13"
 toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 dirs = "5.0"
-reqwest = { version = "0.11", features = ["json", "blocking"] }
+reqwest = { version = "0.11", features = ["json"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 sled = "0.34"
@@ -26,6 +26,7 @@ shellexpand = "3.1"
 quick-xml = { version = "0.31", features = ["serialize"] }
 geo = "0.27"
 haversine = "0.2"
+tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros", "time"] }
 
 [dev-dependencies]
 tempfile = "3.0"

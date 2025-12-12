@@ -4,9 +4,12 @@
 //! weather forecasts, and wind analysis to generate comprehensive paragliding forecasts.
 
 use crate::models::{Location, WeatherData, WeatherForecast};
-use crate::paragliding::sites::{Coordinates, GeographicSearch, ParaglidingSite};
+use crate::location_resolver::LocationResolver;
+use crate::paragliding::site_loader::SiteLoader;
+use crate::paragliding::sites::ParaglidingSite;
 use crate::paragliding::wind_analysis::{FlyabilityAnalysis, WindDirectionCompatibility, WindSpeedCategory};
 use crate::{Cache, LocationInput, WeatherApiClient};
+use crate::config::TravelAiConfig;
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -121,12 +124,13 @@ pub struct ParaglidingForecastService;
 
 impl ParaglidingForecastService {
     /// Generate multi-day paragliding forecast
-    pub fn generate_forecast(
+    pub async fn generate_forecast(
         api_client: &mut WeatherApiClient,
         cache: &Cache,
         location_input: LocationInput,
         radius_km: f64,
         days: usize,
+        config: Option<&TravelAiConfig>,
     ) -> Result<ParaglidingForecast> {
         info!(
             "Generating {}-day paragliding forecast for radius {}km",
@@ -134,14 +138,14 @@ impl ParaglidingForecastService {
         );
 
         // Resolve location
-        let location = Self::resolve_location(api_client, location_input)?;
+        let location = LocationResolver::resolve_location(api_client, location_input).await?;
         debug!(
             "Resolved location: {} at ({}, {})",
             location.name, location.latitude, location.longitude
         );
 
         // Load sites in area
-        let sites = Self::load_sites_in_area(&location, radius_km)?;
+        let sites = SiteLoader::load_sites_in_area(&location, radius_km, config).await?;
         info!("Found {} sites within {}km radius", sites.len(), radius_km);
 
         if sites.is_empty() {
@@ -149,14 +153,14 @@ impl ParaglidingForecastService {
         }
 
         // Get weather forecast
-        let weather_forecast = Self::get_weather_forecast(api_client, cache, &location)?;
+        let weather_forecast = Self::get_weather_forecast(api_client, cache, &location).await?;
         debug!(
             "Retrieved weather forecast with {} data points",
             weather_forecast.forecasts.len()
         );
 
         // Generate daily forecasts
-        let daily_forecasts = Self::generate_daily_forecasts(&weather_forecast, &sites, days);
+        let daily_forecasts = Self::generate_daily_forecasts(&weather_forecast, &sites, &location, days);
 
         Ok(ParaglidingForecast {
             location,
@@ -167,81 +171,12 @@ impl ParaglidingForecastService {
         })
     }
 
-    /// Resolve location from input
-    fn resolve_location(
-        api_client: &mut WeatherApiClient,
-        location_input: LocationInput,
-    ) -> Result<Location> {
-        match location_input {
-            LocationInput::Coordinates(lat, lon) => {
-                // Try reverse geocoding to get a proper name
-                match api_client.reverse_geocode(lat, lon) {
-                    Ok(results) if !results.is_empty() => {
-                        Ok(Location::from(results.into_iter().next().unwrap()))
-                    }
-                    _ => Ok(Location::new(lat, lon, format!("{lat:.4}, {lon:.4}"))),
-                }
-            }
-            LocationInput::Name(name) => {
-                debug!("Geocoding location: {}", name);
-                let geocoding_results = api_client.geocode(&name)?;
-                if geocoding_results.is_empty() {
-                    return Err(anyhow::anyhow!("Location not found: {name}"));
-                }
-                let geocoding = geocoding_results.into_iter().next().unwrap();
-                Ok(Location::from(geocoding))
-            }
-            LocationInput::PostalCode(postal) => {
-                debug!("Geocoding postal code: {}", postal);
-                let geocoding_results = api_client.geocode(&postal)?;
-                if geocoding_results.is_empty() {
-                    return Err(anyhow::anyhow!("Postal code not found: {postal}"));
-                }
-                let geocoding = geocoding_results.into_iter().next().unwrap();
-                Ok(Location::from(geocoding))
-            }
-        }
-    }
-
-    /// Load paragliding sites within radius of location
-    fn load_sites_in_area(location: &Location, radius_km: f64) -> Result<Vec<ParaglidingSite>> {
-        // For now, use the DHV XML file that should be present
-        let dhv_file_path = "dhvgelaende_dhvxml_de.xml";
-
-        let sites = if std::path::Path::new(dhv_file_path).exists() {
-            crate::paragliding::dhv::DHVParser::load_sites(dhv_file_path)?
-        } else {
-            warn!(
-                "DHV XML file not found at {}, using empty site list",
-                dhv_file_path
-            );
-            Vec::new()
-        };
-
-        let search_center = Coordinates {
-            latitude: location.latitude,
-            longitude: location.longitude,
-        };
-
-        let nearby_sites = GeographicSearch::sites_within_radius(&sites, &search_center, radius_km);
-        Ok(nearby_sites.into_iter().cloned().collect())
-    }
-
-    /// Get weather forecast for location
-    fn get_weather_forecast(
-        api_client: &mut WeatherApiClient,
-        cache: &Cache,
-        location: &Location,
-    ) -> Result<WeatherForecast> {
-        let location_input = LocationInput::Coordinates(location.latitude, location.longitude);
-        let forecast = crate::weather::get_weather_forecast(api_client, cache, location_input)?;
-        Ok(forecast)
-    }
 
     /// Generate daily forecasts from weather data and sites
     fn generate_daily_forecasts(
         weather_forecast: &WeatherForecast,
         sites: &[ParaglidingSite],
+        center_location: &Location,
         days: usize,
     ) -> Vec<DailyFlyabilityForecast> {
         let mut daily_forecasts = Vec::new();
@@ -263,11 +198,22 @@ impl ParaglidingForecastService {
                     + chrono::Duration::days(i64::try_from(day).unwrap_or(0))
             };
 
-            let daily_forecast = Self::generate_daily_forecast(date, day, &day_weather, sites);
+            let daily_forecast = Self::generate_daily_forecast(date, day, &day_weather, sites, center_location);
             daily_forecasts.push(daily_forecast);
         }
 
         daily_forecasts
+    }
+
+    /// Get weather forecast for location using the main weather service
+    async fn get_weather_forecast(
+        api_client: &mut WeatherApiClient,
+        cache: &Cache,
+        location: &Location,
+    ) -> Result<WeatherForecast> {
+        let location_input = LocationInput::Coordinates(location.latitude, location.longitude);
+        let forecast = crate::weather::get_weather_forecast(api_client, cache, location_input).await?;
+        Ok(forecast)
     }
 
     /// Generate forecast for a single day
@@ -276,6 +222,7 @@ impl ParaglidingForecastService {
         day_offset: usize,
         day_weather: &[&WeatherData],
         sites: &[ParaglidingSite],
+        center_location: &Location,
     ) -> DailyFlyabilityForecast {
         let day_name = Self::format_day_name(day_offset, date);
         let weather_summary = Self::create_weather_summary(day_weather);
@@ -294,7 +241,7 @@ impl ParaglidingForecastService {
                     let rating = SiteFlyabilityRating {
                         site: site.clone(),
                         score: analysis.flyability_score,
-                        distance_km: 0.0, // TODO: Calculate actual distance
+                        distance_km: SiteLoader::distance_to_site(center_location, site),
                         reasoning: Self::generate_site_reasoning(&analysis),
                         wind_analysis: analysis,
                     };

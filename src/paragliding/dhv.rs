@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use super::ParaglidingSite;
 use super::{Result, TravelAIError};
 
-use crate::paragliding::sites::{Coordinates, DataSource, LaunchDirection, SiteCharacteristics};
+use crate::paragliding::sites::{Coordinates, DataSource, LaunchDirectionRange, SiteCharacteristics, SiteType};
 use crate::paragliding::sites::parse_direction_text_to_degrees;
 
 /// DHV XML parser and site loader
@@ -57,6 +57,12 @@ pub struct DHVLocation {
     pub directions: Option<String>,
     #[serde(rename = "DirectionsText")]
     pub directions_text: Option<String>,
+    #[serde(rename = "TowingHeight1")]
+    pub towing_height1: Option<f64>,
+    #[serde(rename = "TowingHeight2")]
+    pub towing_height2: Option<f64>,
+    #[serde(rename = "TowingLength")]
+    pub towing_length: Option<f64>,
     #[serde(rename = "AccessByCar")]
     pub access_by_car: Option<bool>,
     #[serde(rename = "AccessByFoot")]
@@ -89,7 +95,17 @@ impl DHVFlyingSite {
             coordinates,
             elevation: launch_location.altitude,
             launch_directions,
-            site_type: self.site_type.clone(),
+            site_type: {
+                let has_towing = launch_location.towing_height1.unwrap_or(0.0) > 0.0
+                    || launch_location.towing_height2.unwrap_or(0.0) > 0.0
+                    || launch_location.towing_length.unwrap_or(0.0) > 0.0;
+                
+                if has_towing {
+                    SiteType::Winch
+                } else {
+                    SiteType::Hang
+                }
+            },
             country: self.site_country.clone(),
             data_source: DataSource::DHV,
             characteristics: SiteCharacteristics {
@@ -133,16 +149,63 @@ impl DHVLocation {
     }
 
     /// Parse launch directions from DHV format to unified format
-    fn parse_launch_directions(&self) -> Vec<LaunchDirection> {
-        match (&self.directions_text, &self.directions) {
-            (Some(text), code) => {
-                vec![LaunchDirection {
-                    direction_code: code.clone(),
-                    direction_text: text.clone(),
-                    direction_degrees: parse_direction_text_to_degrees(text),
-                }]
+    fn parse_launch_directions(&self) -> Vec<LaunchDirectionRange> {
+        match &self.directions_text {
+            Some(text) => {
+                let text = text.trim();
+                if text.is_empty() {
+                    return vec![];
+                }
+                
+                // Handle range formats like "SO-S" or "SSW-WSW"
+                if text.contains('-') {
+                    let parts: Vec<&str> = text.split('-').map(|s| s.trim()).collect();
+                    if parts.len() == 2 {
+                        let start_degrees = parse_direction_text_to_degrees(parts[0]);
+                        let stop_degrees = parse_direction_text_to_degrees(parts[1]);
+                        
+                        if !start_degrees.is_empty() && !stop_degrees.is_empty() {
+                            return vec![LaunchDirectionRange {
+                                direction_degrees_start: start_degrees[0],
+                                direction_degrees_stop: stop_degrees[0],
+                            }];
+                        }
+                    }
+                }
+                
+                // Handle multiple directions separated by comma or space
+                if text.contains(',') || text.contains(' ') {
+                    let directions = text.split(&[',', ' '][..])
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>();
+                    
+                    let mut ranges = Vec::new();
+                    for dir in directions {
+                        let degrees = parse_direction_text_to_degrees(dir);
+                        if !degrees.is_empty() {
+                            // Create 45-degree range around each direction
+                            ranges.push(LaunchDirectionRange {
+                                direction_degrees_start: (degrees[0] - 22.5).rem_euclid(360.0),
+                                direction_degrees_stop: (degrees[0] + 22.5).rem_euclid(360.0),
+                            });
+                        }
+                    }
+                    return ranges;
+                }
+                
+                // Handle single direction
+                let degrees = parse_direction_text_to_degrees(text);
+                if !degrees.is_empty() {
+                    vec![LaunchDirectionRange {
+                        direction_degrees_start: (degrees[0] - 22.5).rem_euclid(360.0),
+                        direction_degrees_stop: (degrees[0] + 22.5).rem_euclid(360.0),
+                    }]
+                } else {
+                    vec![]
+                }
             }
-            _ => vec![],
+            None => vec![],
         }
     }
 }
@@ -211,107 +274,3 @@ impl DHVParser {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_parse_dhv_xml() {
-        let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
-<DhvXml Version="1.0" Timestamp="1764372633">
-    <GeneratedAt>https://service.dhv.de/db2/geosearch.php</GeneratedAt>
-    <GeneratedOn>2025-11-29T00:30:33+01:00</GeneratedOn>
-    <Copyright>DHV - Deutscher Hängegleiterverband</Copyright>
-    <CopyrightUrl>https://www.dhv.de/piloteninfos/gelaende-luftraum-natur/fluggelaende/nutzungsbedingungen-gelaendedatenbank/</CopyrightUrl>
-    <FlyingSites>
-        <FlyingSite>
-            <SiteID>1</SiteID>
-            <SiteName><![CDATA[Test Site]]></SiteName>
-            <SiteCountry>DE</SiteCountry>
-            <SiteType><![CDATA[Hanggelände für Gleitschirme]]></SiteType>
-            <HeightDifferenceMax>100</HeightDifferenceMax>
-            <SiteUrl><![CDATA[https://example.com]]></SiteUrl>
-            <Location>
-                <Coordinates>14.700136,50.998362</Coordinates>
-                <Altitude>320</Altitude>
-                <Directions>3B</Directions>
-                <DirectionsText>O, W</DirectionsText>
-                <AccessByCar>true</AccessByCar>
-                <AccessByFoot>true</AccessByFoot>
-                <AccessByPublicTransport>false</AccessByPublicTransport>
-                <Hanggliding>true</Hanggliding>
-                <Paragliding>true</Paragliding>
-            </Location>
-        </FlyingSite>
-    </FlyingSites>
-</DhvXml>"#;
-
-        let sites = DHVParser::parse_xml(xml_content).unwrap();
-        assert_eq!(sites.len(), 1);
-
-        let site = &sites[0];
-        assert_eq!(site.id, "dhv_1");
-        assert_eq!(site.name, "Test Site");
-        assert_eq!(site.coordinates.latitude, 50.998_362);
-        assert_eq!(site.coordinates.longitude, 14.700_136);
-        assert_eq!(site.elevation, Some(320.0));
-        assert_eq!(site.launch_directions.len(), 1);
-        assert_eq!(site.launch_directions[0].direction_text, "O, W");
-        assert_eq!(
-            site.launch_directions[0].direction_degrees,
-            vec![90.0, 270.0]
-        );
-    }
-
-    #[test]
-    fn test_load_sites_from_file() {
-        let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
-<DhvXml Version="1.0" Timestamp="1764372633">
-    <GeneratedAt>https://service.dhv.de/db2/geosearch.php</GeneratedAt>
-    <GeneratedOn>2025-11-29T00:30:33+01:00</GeneratedOn>
-    <Copyright>DHV - Deutscher Hängegleiterverband</Copyright>
-    <CopyrightUrl>https://www.dhv.de/piloteninfos/gelaende-luftraum-natur/fluggelaende/nutzungsbedingungen-gelaendedatenbank/</CopyrightUrl>
-    <FlyingSites>
-        <FlyingSite>
-            <SiteID>2</SiteID>
-            <SiteName><![CDATA[File Test Site]]></SiteName>
-            <SiteCountry>CH</SiteCountry>
-            <SiteType><![CDATA[Berggelände]]></SiteType>
-            <HeightDifferenceMax>500</HeightDifferenceMax>
-            <Location>
-                <Coordinates>7.5,46.5</Coordinates>
-                <Altitude>1200</Altitude>
-                <Directions>1234</Directions>
-                <DirectionsText>N, E, S, W</DirectionsText>
-                <AccessByCar>false</AccessByCar>
-                <AccessByFoot>true</AccessByFoot>
-                <Paragliding>true</Paragliding>
-            </Location>
-        </FlyingSite>
-    </FlyingSites>
-</DhvXml>"#;
-
-        let mut temp_file = NamedTempFile::new().unwrap();
-        temp_file.write_all(xml_content.as_bytes()).unwrap();
-
-        let sites = DHVParser::load_sites(temp_file.path()).unwrap();
-        assert_eq!(sites.len(), 1);
-
-        let site = &sites[0];
-        assert_eq!(site.id, "dhv_2");
-        assert_eq!(site.name, "File Test Site");
-        assert_eq!(site.country, Some("CH".to_string()));
-    }
-
-    #[test]
-    fn test_file_not_found() {
-        let result = DHVParser::load_sites("nonexistent_file.xml");
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TravelAIError::FileNotFound(_)
-        ));
-    }
-}

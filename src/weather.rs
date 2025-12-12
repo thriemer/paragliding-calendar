@@ -8,7 +8,7 @@ use anyhow::Result;
 use tracing::debug;
 
 /// Get weather forecast for a location with caching
-pub fn get_weather_forecast(
+pub async fn get_weather_forecast(
     api_client: &mut WeatherApiClient,
     cache: &Cache,
     location_input: LocationInput,
@@ -26,7 +26,7 @@ pub fn get_weather_forecast(
         }
         LocationInput::Name(name) => {
             debug!("Geocoding location: {}", name);
-            let geocoding_results = api_client.geocode(&name)?;
+            let geocoding_results = api_client.geocode(&name).await?;
             if geocoding_results.is_empty() {
                 return Err(
                     TravelAiError::validation(format!("Location not found: {name}")).into(),
@@ -43,7 +43,7 @@ pub fn get_weather_forecast(
         }
         LocationInput::PostalCode(postal) => {
             debug!("Geocoding postal code: {}", postal);
-            let geocoding_results = api_client.geocode(&postal)?;
+            let geocoding_results = api_client.geocode(&postal).await?;
             if geocoding_results.is_empty() {
                 return Err(TravelAiError::validation(format!(
                     "Postal code not found: {postal}"
@@ -82,7 +82,7 @@ pub fn get_weather_forecast(
     // Fetch from API
     debug!("Fetching weather forecast from API...");
 
-    let forecast = api_client.get_forecast(location.latitude, location.longitude)?;
+    let forecast = api_client.get_forecast(location.latitude, location.longitude).await?;
 
     // Cache the result
     if let Err(e) = cache.set_weather_forecast(&cache_key, forecast.clone()) {

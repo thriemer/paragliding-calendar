@@ -4,7 +4,7 @@
 //! evaluating wind conditions against launch orientations to determine flyability.
 
 use crate::models::WeatherData;
-use crate::paragliding::sites::{LaunchDirection, ParaglidingSite};
+use crate::paragliding::sites::{LaunchDirectionRange, ParaglidingSite};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -18,7 +18,7 @@ pub struct WindDirectionAnalysis {
     /// Angular difference from optimal launch direction(s)
     pub angular_differences: Vec<f64>,
     /// Best matching launch direction
-    pub best_launch_direction: Option<LaunchDirection>,
+    pub best_launch_direction: Option<LaunchDirectionRange>,
     /// Wind direction compatibility rating
     pub direction_compatibility: WindDirectionCompatibility,
 }
@@ -122,7 +122,10 @@ impl WindDirectionAnalysis {
 
         // Calculate angular differences for each launch direction
         for launch_dir in &site.launch_directions {
-            for &launch_deg in &launch_dir.direction_degrees {
+            // Check both start and stop angles of the range
+            let launch_degrees = [launch_dir.direction_degrees_start, launch_dir.direction_degrees_stop];
+            
+            for &launch_deg in &launch_degrees {
                 let diff = calculate_angular_difference(f64::from(wind_direction_deg), launch_deg);
                 angular_differences.push(diff);
                 
@@ -130,6 +133,14 @@ impl WindDirectionAnalysis {
                     min_difference = diff;
                     best_launch_direction = Some(launch_dir.clone());
                 }
+            }
+            
+            // Also check if wind direction is within the range
+            let wind_deg = f64::from(wind_direction_deg);
+            if is_angle_in_range(wind_deg, launch_dir.direction_degrees_start, launch_dir.direction_degrees_stop) {
+                angular_differences.push(0.0); // Perfect match - within range
+                min_difference = 0.0;
+                best_launch_direction = Some(launch_dir.clone());
             }
         }
 
@@ -235,6 +246,21 @@ impl FlyabilityAnalysis {
 fn calculate_angular_difference(wind_deg: f64, launch_deg: f64) -> f64 {
     let diff = (wind_deg - launch_deg).abs();
     diff.min(360.0 - diff)
+}
+
+/// Check if an angle is within a directional range, handling 360-degree wraparound
+fn is_angle_in_range(angle: f64, start: f64, stop: f64) -> bool {
+    let normalize = |a: f64| a.rem_euclid(360.0);
+    let angle = normalize(angle);
+    let start = normalize(start);
+    let stop = normalize(stop);
+    
+    if start <= stop {
+        angle >= start && angle <= stop
+    } else {
+        // Range wraps around 360/0 degrees
+        angle >= start || angle <= stop
+    }
 }
 
 /// Determine wind direction compatibility based on angular difference
@@ -376,7 +402,7 @@ impl fmt::Display for WindSpeedCategory {
 mod tests {
     use super::*;
     use crate::models::WeatherData;
-    use crate::paragliding::sites::{Coordinates, DataSource, LaunchDirection, ParaglidingSite, SiteCharacteristics};
+    use crate::paragliding::sites::{Coordinates, DataSource, LaunchDirectionRange, ParaglidingSite, SiteCharacteristics, SiteType};
     use chrono::Utc;
 
     fn create_test_weather(wind_direction: u16, wind_speed: f32) -> WeatherData {
@@ -405,18 +431,16 @@ mod tests {
             },
             elevation: Some(1500.0),
             launch_directions: vec![
-                LaunchDirection {
-                    direction_code: Some("N".to_string()),
-                    direction_text: "N".to_string(),
-                    direction_degrees: vec![0.0], // North launch
+                LaunchDirectionRange {
+                    direction_degrees_start: 337.5, // North range (337.5-22.5)
+                    direction_degrees_stop: 22.5,
                 },
-                LaunchDirection {
-                    direction_code: Some("S".to_string()),
-                    direction_text: "S".to_string(),
-                    direction_degrees: vec![180.0], // South launch
+                LaunchDirectionRange {
+                    direction_degrees_start: 157.5, // South range (157.5-202.5)
+                    direction_degrees_stop: 202.5,
                 },
             ],
-            site_type: Some("Mountain".to_string()),
+            site_type: SiteType::Hang,
             country: Some("CH".to_string()),
             data_source: DataSource::DHV,
             characteristics: SiteCharacteristics {
