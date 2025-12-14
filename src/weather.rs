@@ -1,5 +1,7 @@
 use crate::models::{weather::WeatherForecast, Location, WeatherData};
 use anyhow::{Context, Result};
+use chrono::{DateTime, NaiveDate, Utc};
+use sunrise::{Coordinates, SolarDay, SolarEvent};
 
 pub fn get_forecast(location: Location) -> Result<WeatherForecast> {
     let url = format!(
@@ -37,6 +39,19 @@ pub fn geocode(location_name: &str) -> Result<Vec<Location>> {
         .map(|geocoding_result| geocoding_result.into())
         .collect();
     Ok(geocoding_results)
+}
+
+pub fn get_sunrise_sunset(location: &Location, date: NaiveDate) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
+    let coordinates = Coordinates::new(location.latitude, location.longitude)
+        .with_context(|| format!("Invalid coordinates: lat={}, lng={}", location.latitude, location.longitude))?;
+    
+    let solar_day = SolarDay::new(coordinates, date);
+    
+    let sunrise = solar_day.event_time(SolarEvent::Sunrise);
+    
+    let sunset = solar_day.event_time(SolarEvent::Sunset);
+    
+    Ok((sunrise, sunset))
 }
 
 /// `OpenMeteo` API response structures and conversion utilities
