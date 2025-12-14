@@ -1,7 +1,8 @@
-use chrono::{DateTime, Utc, Timelike};
-use crate::models::{ParaglidingSite, WeatherData, ParaglidingLaunch};
+use chrono::{DateTime, Utc, Timelike, NaiveDate};
+use crate::models::{Location, ParaglidingSite, WeatherData, ParaglidingLaunch};
 use crate::models::weather::WeatherForecast;
 use crate::weather::get_sunrise_sunset;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct HourlyScore {
@@ -14,6 +15,8 @@ pub struct HourlyScore {
 
 #[derive(Debug, Clone)]
 pub struct DailySummary {
+    pub date: NaiveDate,
+    pub hourly_scores: Vec<HourlyScore>,
     pub overall_score: u8,
     pub best_hours: Vec<DateTime<Utc>>,
     pub total_flyable_hours: usize,
@@ -21,8 +24,7 @@ pub struct DailySummary {
 
 #[derive(Debug, Clone)]
 pub struct SiteEvaluationResult {
-    pub hourly_scores: Vec<HourlyScore>,
-    pub daily_summary: DailySummary,
+    pub daily_summaries: Vec<DailySummary>,
 }
 
 fn wind_in_launch_range(wind_direction: u16, launch: &ParaglidingLaunch) -> (bool, u8, String) {
@@ -88,83 +90,106 @@ fn is_safe_to_fly(weather: &WeatherData) -> (bool, u8, String) {
 }
 
 pub fn evaluate_site(site: &ParaglidingSite, forecast: &WeatherForecast) -> SiteEvaluationResult {
-    let mut hourly_scores = Vec::new();
+    let daily_forecasts = split_forecast_by_days(forecast.clone());
+    let mut daily_summaries = Vec::new();
     
-    // Get sunrise/sunset for the first day of forecast
-    let (daylight_start_hour, daylight_end_hour) = if let Some(first_weather) = forecast.forecast.first() {
-        let date = first_weather.timestamp.date_naive();
-        if let Ok((sunrise, sunset)) = get_sunrise_sunset(&forecast.location, date) {
-            (sunrise.hour(), sunset.hour())
-        } else {
-            // Fallback: assume 6 AM to 8 PM if calculation fails
-            (6, 20)
-        }
-    } else {
-        return SiteEvaluationResult {
-            hourly_scores: Vec::new(),
-            daily_summary: DailySummary {
-                overall_score: 0,
-                best_hours: Vec::new(),
-                total_flyable_hours: 0,
-            },
-        };
-    };
-    
-    for weather_data in &forecast.forecast {
-        // Skip nighttime hours
-        let hour = weather_data.timestamp.hour();
-        if hour < daylight_start_hour || hour > daylight_end_hour {
+    for daily_forecast in daily_forecasts {
+        if daily_forecast.forecast.is_empty() {
             continue;
         }
-        let (is_safe, wind_speed_score, safety_reason) = is_safe_to_fly(weather_data);
         
-        let (score, best_launch_index, reasoning) = if !is_safe {
-            (0, None, safety_reason)
-        } else {
-            let mut best_direction_score = 0;
-            let mut best_index = None;
-            let mut best_reasoning = String::new();
+        let date = daily_forecast.forecast[0].timestamp.date_naive();
+        let mut hourly_scores = Vec::new();
+        
+        for weather_data in &daily_forecast.forecast {
+            let (is_safe, wind_speed_score, safety_reason) = is_safe_to_fly(weather_data);
             
-            for (i, launch) in site.launches.iter().enumerate() {
-                let (in_range, direction_score, launch_reason) = wind_in_launch_range(weather_data.wind_direction, launch);
-                if in_range && direction_score > best_direction_score {
-                    best_direction_score = direction_score;
-                    best_index = Some(i);
-                    best_reasoning = launch_reason;
-                }
-            }
-            
-            if best_direction_score == 0 {
-                (0, None, format!("{}. No suitable launch for wind direction {}°", safety_reason, weather_data.wind_direction))
+            let (score, best_launch_index, reasoning) = if !is_safe {
+                (0, None, safety_reason)
             } else {
-                let final_score = (best_direction_score as u32 + wind_speed_score as u32) / 2;
-                let combined_reasoning = format!("{}. {}. Final score: {} (avg of direction: {}, speed: {})", 
-                                               safety_reason, best_reasoning, final_score, best_direction_score, wind_speed_score);
-                (final_score as u8, best_index, combined_reasoning)
-            }
-        };
+                let mut best_direction_score = 0;
+                let mut best_index = None;
+                let mut best_reasoning = String::new();
+                
+                for (i, launch) in site.launches.iter().enumerate() {
+                    let (in_range, direction_score, launch_reason) = wind_in_launch_range(weather_data.wind_direction, launch);
+                    if in_range && direction_score > best_direction_score {
+                        best_direction_score = direction_score;
+                        best_index = Some(i);
+                        best_reasoning = launch_reason;
+                    }
+                }
+                
+                if best_direction_score == 0 {
+                    (0, None, format!("{}. No suitable launch for wind direction {}°", safety_reason, weather_data.wind_direction))
+                } else {
+                    let final_score = (best_direction_score as u32 + wind_speed_score as u32) / 2;
+                    let combined_reasoning = format!("{}. {}. Final score: {} (avg of direction: {}, speed: {})", 
+                                                   safety_reason, best_reasoning, final_score, best_direction_score, wind_speed_score);
+                    (final_score as u8, best_index, combined_reasoning)
+                }
+            };
+            
+            hourly_scores.push(HourlyScore {
+                timestamp: weather_data.timestamp,
+                score,
+                is_flyable: score > 0,
+                best_launch_index,
+                reasoning,
+            });
+        }
         
-        hourly_scores.push(HourlyScore {
-            timestamp: weather_data.timestamp,
-            score,
-            is_flyable: score > 0,
-            best_launch_index,
-            reasoning,
-        });
+        let daily_summary = calculate_daily_summary(date, hourly_scores);
+        daily_summaries.push(daily_summary);
     }
     
-    let daily_summary = calculate_daily_summary(&hourly_scores);
-    
     SiteEvaluationResult {
-        hourly_scores,
-        daily_summary,
+        daily_summaries,
     }
 }
 
-fn calculate_daily_summary(hourly_scores: &[HourlyScore]) -> DailySummary {
-    let flyable_hours: Vec<_> = hourly_scores.iter()
+fn split_forecast_by_days(forecast: WeatherForecast) -> Vec<WeatherForecast> {
+    let mut daily_forecasts: HashMap<NaiveDate, Vec<WeatherData>> = HashMap::new();
+    
+    // Group hourly data by date
+    for weather_data in forecast.forecast {
+        let date = weather_data.timestamp.date_naive();
+        daily_forecasts.entry(date).or_insert_with(Vec::new).push(weather_data);
+    }
+    
+    // Calculate daylight hours once per day and filter
+    daily_forecasts.into_iter()
+        .filter_map(|(date, daily_data)| {
+            let (daylight_start_hour, daylight_end_hour) = if let Ok((sunrise, sunset)) = get_sunrise_sunset(&forecast.location, date) {
+                (sunrise.hour(), sunset.hour())
+            } else {
+                // Fallback: assume 6 AM to 8 PM if calculation fails
+                (6, 20)
+            };
+            
+            let filtered_data: Vec<WeatherData> = daily_data.into_iter()
+                .filter(|data| {
+                    let hour = data.timestamp.hour();
+                    hour >= daylight_start_hour && hour <= daylight_end_hour
+                })
+                .collect();
+            
+            if filtered_data.is_empty() {
+                None
+            } else {
+                Some(WeatherForecast {
+                    location: forecast.location.clone(),
+                    forecast: filtered_data,
+                })
+            }
+        })
+        .collect()
+}
+
+fn calculate_daily_summary(date: NaiveDate, hourly_scores: Vec<HourlyScore>) -> DailySummary {
+    let total_flyable_hours = hourly_scores.iter()
         .filter(|h| h.is_flyable)
-        .collect();
+        .count();
     
     let overall_score = if hourly_scores.is_empty() {
         0
@@ -178,8 +203,10 @@ fn calculate_daily_summary(hourly_scores: &[HourlyScore]) -> DailySummary {
         .collect();
     
     DailySummary {
+        date,
+        hourly_scores,
         overall_score,
         best_hours,
-        total_flyable_hours: flyable_hours.len(),
+        total_flyable_hours,
     }
 }
