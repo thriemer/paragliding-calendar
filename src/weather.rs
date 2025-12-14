@@ -9,7 +9,7 @@ use tracing::debug;
 
 /// Get weather forecast for a location with caching
 pub async fn get_weather_forecast(
-    api_client: &mut WeatherApiClient,
+    api_client: &WeatherApiClient,
     cache: &Cache,
     location_input: LocationInput,
 ) -> Result<WeatherForecast> {

@@ -14,7 +14,7 @@ pub struct LocationResolver;
 impl LocationResolver {
     /// Resolve a location input into a structured Location
     pub async fn resolve_location(
-        api_client: &mut WeatherApiClient,
+        api_client: &WeatherApiClient,
         location_input: LocationInput,
     ) -> Result<Location> {
         debug!("Resolving location input: {:?}", location_input);
@@ -41,7 +41,7 @@ impl LocationResolver {
 
     /// Resolve coordinates to a location with proper name via reverse geocoding
     async fn resolve_coordinates(
-        api_client: &mut WeatherApiClient,
+        api_client: &WeatherApiClient,
         lat: f64,
         lon: f64,
     ) -> Result<Location> {
@@ -66,7 +66,7 @@ impl LocationResolver {
 
     /// Resolve a location name to coordinates via geocoding
     async fn resolve_name(
-        api_client: &mut WeatherApiClient,
+        api_client: &WeatherApiClient,
         name: String,
     ) -> Result<Location> {
         debug!("Geocoding location name: {}", name);
@@ -88,7 +88,7 @@ impl LocationResolver {
 
     /// Resolve a postal code to coordinates via geocoding
     async fn resolve_postal_code(
-        api_client: &mut WeatherApiClient,
+        api_client: &WeatherApiClient,
         postal: String,
     ) -> Result<Location> {
         debug!("Geocoding postal code: {}", postal);

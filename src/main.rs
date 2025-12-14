@@ -260,12 +260,12 @@ async fn run_cli(cli: &Cli) -> Result<()> {
             )?;
 
             // Initialize API client
-            let mut api_client = WeatherApiClient::new(weather_config)?;
+            let api_client = WeatherApiClient::new(weather_config)?;
 
             // Parse location input
             let location_input = LocationParser::parse(location)?;
 
-            match weather::get_weather_forecast(&mut api_client, &cache, location_input).await {
+            match weather::get_weather_forecast(&api_client, &cache, location_input).await {
                 Ok(forecast) => {
                     weather::display_weather_forecast(&forecast);
                 }
@@ -329,13 +329,13 @@ async fn handle_paragliding_command(
     )?;
 
     // Initialize API client
-    let mut api_client = WeatherApiClient::new(config.clone())?;
+    let api_client = WeatherApiClient::new(config.clone())?;
 
     // Parse location input
     let location_input = LocationParser::parse(location)?;
 
     match ParaglidingForecastService::generate_forecast(
-        &mut api_client,
+        &api_client,
         &cache,
         location_input,
         radius,

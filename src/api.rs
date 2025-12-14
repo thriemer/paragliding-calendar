@@ -5,7 +5,7 @@
 //! Previously integrated with `OpenWeatherMap`, now uses `OpenMeteo` for API-key-free access.
 
 use crate::config::TravelAiConfig;
-use crate::models::{Location, WeatherData, WeatherForecast, openmeteo};
+use crate::models::{Location, WeatherData, WeatherForecast};
 use crate::{ErrorCode, TravelAiError};
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -15,68 +15,6 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tracing::{Level, debug, error, info, instrument, span, warn};
 
-/// Rate limiter for API requests
-#[derive(Debug)]
-pub struct RateLimiter {
-    /// Maximum requests per minute
-    max_requests_per_minute: u32,
-    /// Request timestamps within the current minute
-    request_times: Vec<Instant>,
-    /// Last cleanup time
-    last_cleanup: Instant,
-}
-
-impl RateLimiter {
-    /// Create a new rate limiter
-    #[must_use] 
-    pub fn new(max_requests_per_minute: u32) -> Self {
-        Self {
-            max_requests_per_minute,
-            request_times: Vec::new(),
-            last_cleanup: Instant::now(),
-        }
-    }
-
-    /// Check if a request is allowed and record it
-    pub fn allow_request(&mut self) -> bool {
-        self.cleanup_old_requests();
-
-        if self.request_times.len() >= self.max_requests_per_minute as usize {
-            false
-        } else {
-            self.request_times.push(Instant::now());
-            true
-        }
-    }
-
-    /// Get time until next request is allowed
-    pub fn time_until_next_request(&mut self) -> Duration {
-        self.cleanup_old_requests();
-
-        if self.request_times.len() < self.max_requests_per_minute as usize {
-            Duration::from_secs(0)
-        } else if let Some(oldest) = self.request_times.first() {
-            let elapsed = oldest.elapsed();
-            if elapsed >= Duration::from_secs(60) {
-                Duration::from_secs(0)
-            } else {
-                Duration::from_secs(60) - elapsed
-            }
-        } else {
-            Duration::from_secs(0)
-        }
-    }
-
-    /// Remove requests older than 1 minute
-    fn cleanup_old_requests(&mut self) {
-        let now = Instant::now();
-        if now.duration_since(self.last_cleanup) >= Duration::from_secs(10) {
-            let cutoff = now.checked_sub(Duration::from_secs(60)).unwrap();
-            self.request_times.retain(|&time| time > cutoff);
-            self.last_cleanup = now;
-        }
-    }
-}
 
 /// Weather API client for `OpenMeteo`
 pub struct WeatherApiClient {
@@ -84,8 +22,6 @@ pub struct WeatherApiClient {
     client: Client,
     /// API configuration
     config: TravelAiConfig,
-    /// Rate limiter
-    rate_limiter: RateLimiter,
 }
 
 impl WeatherApiClient {
@@ -99,19 +35,15 @@ impl WeatherApiClient {
             .build()
             .with_context(|| "Failed to create HTTP client")?;
 
-        // OpenMeteo rate limit: 60 requests per minute
-        let rate_limiter = RateLimiter::new(60);
-
         Ok(Self {
             client,
             config,
-            rate_limiter,
         })
     }
 
     /// Get current weather for a location using `OpenMeteo` API
     #[instrument(skip(self), fields(lat, lon))]
-    pub async fn get_current_weather(&mut self, lat: f64, lon: f64) -> Result<WeatherData> {
+    pub async fn get_current_weather(&self, lat: f64, lon: f64) -> Result<WeatherData> {
         let span = span!(Level::INFO, "get_current_weather", lat, lon);
         let _enter = span.enter();
 
@@ -187,7 +119,7 @@ impl WeatherApiClient {
 
     /// Get 7-day weather forecast for a location using `OpenMeteo` API
     #[instrument(skip(self), fields(lat, lon))]
-    pub async fn get_forecast(&mut self, lat: f64, lon: f64) -> Result<WeatherForecast> {
+    pub async fn get_forecast(&self, lat: f64, lon: f64) -> Result<WeatherForecast> {
         let span = span!(Level::INFO, "get_forecast", lat, lon);
         let _enter = span.enter();
 
@@ -245,7 +177,7 @@ impl WeatherApiClient {
 
     /// Get geocoding information for a location name using `OpenMeteo` API
     #[instrument(skip(self), fields(location = location_name))]
-    pub async fn geocode(&mut self, location_name: &str) -> Result<Vec<GeocodingResult>> {
+    pub async fn geocode(&self, location_name: &str) -> Result<Vec<GeocodingResult>> {
         let span = span!(Level::INFO, "geocode", location = location_name);
         let _enter = span.enter();
 
@@ -318,7 +250,7 @@ impl WeatherApiClient {
     }
 
     /// Get reverse geocoding information for coordinates using `OpenMeteo` API
-    pub fn reverse_geocode(&mut self, lat: f64, lon: f64) -> Result<Vec<GeocodingResult>> {
+    pub fn reverse_geocode(&self, lat: f64, lon: f64) -> Result<Vec<GeocodingResult>> {
         // OpenMeteo doesn't have a reverse geocoding API, so we return a basic result
         let geocoding_result = GeocodingResult {
             name: format!("{lat:.4}, {lon:.4}"),
@@ -332,10 +264,10 @@ impl WeatherApiClient {
         Ok(vec![geocoding_result])
     }
 
-    /// Make a request with rate limiting and retry logic
+    /// Make a request with retry logic
     #[instrument(skip(self, url), fields(url = %url.split("appid=").next().unwrap_or(url)))]
     #[allow(clippy::too_many_lines)]
-    async fn make_request(&mut self, url: &str) -> Result<Response> {
+    async fn make_request(&self, url: &str) -> Result<Response> {
         let span = span!(Level::DEBUG, "make_request");
         let _enter = span.enter();
 
@@ -348,32 +280,6 @@ impl WeatherApiClient {
         while attempt < max_attempts {
             let attempt_start = Instant::now();
 
-            // Rate limiting
-            if !self.rate_limiter.allow_request() {
-                let wait_time = self.rate_limiter.time_until_next_request();
-                if wait_time > Duration::from_secs(0) {
-                    warn!(
-                        "Rate limit exceeded, waiting {:.1}s",
-                        wait_time.as_secs_f64()
-                    );
-                    if attempt == 0 {
-                        return Err(TravelAiError::api_with_context(
-                            format!(
-                                "Rate limit exceeded. Please wait {} seconds.",
-                                wait_time.as_secs()
-                            ),
-                            ErrorCode::ApiRateLimit,
-                            HashMap::from([(
-                                "wait_time".to_string(),
-                                wait_time.as_secs().to_string(),
-                            )]),
-                        )
-                        .into());
-                    }
-                    tokio::time::sleep(wait_time).await;
-                }
-                continue;
-            }
 
             debug!(
                 "Making HTTP request (attempt {}/{})",
@@ -646,27 +552,256 @@ pub enum LocationInput {
     PostalCode(String),
 }
 
+/// `OpenMeteo` API response structures and conversion utilities
+pub mod openmeteo {
+    use super::{Location, WeatherData, WeatherForecast};
+    use chrono::Utc;
+    use serde::Deserialize;
+
+    /// Current weather and forecast response from `OpenMeteo` API
+    #[derive(Debug, Deserialize)]
+    pub struct ForecastResponse {
+        pub latitude: f64,
+        pub longitude: f64,
+        pub timezone: String,
+        pub timezone_abbreviation: String,
+        pub hourly: Option<HourlyData>,
+        pub daily: Option<DailyData>,
+        pub current: Option<CurrentData>,
+    }
+
+    /// Hourly weather data from `OpenMeteo`
+    #[derive(Debug, Deserialize)]
+    pub struct HourlyData {
+        pub time: Vec<String>,
+        #[serde(rename = "temperature_2m")]
+        pub temperature: Option<Vec<f32>>,
+        #[serde(rename = "windspeed_10m")]
+        pub wind_speed: Option<Vec<f32>>,
+        #[serde(rename = "winddirection_10m")]
+        pub wind_direction: Option<Vec<u16>>,
+        #[serde(rename = "windgusts_10m")]
+        pub wind_gusts: Option<Vec<f32>>,
+        pub precipitation: Option<Vec<f32>>,
+        #[serde(rename = "cloudcover")]
+        pub cloud_cover: Option<Vec<u8>>,
+        #[serde(rename = "surface_pressure")]
+        pub pressure: Option<Vec<f32>>,
+        pub visibility: Option<Vec<f32>>,
+        #[serde(rename = "weathercode")]
+        pub weather_code: Option<Vec<u8>>,
+    }
+
+    /// Daily weather data from `OpenMeteo`
+    #[derive(Debug, Deserialize)]
+    pub struct DailyData {
+        pub time: Vec<String>,
+        #[serde(rename = "temperature_2m_max")]
+        pub temperature_max: Option<Vec<Option<f32>>>,
+        #[serde(rename = "temperature_2m_min")]
+        pub temperature_min: Option<Vec<Option<f32>>>,
+        #[serde(rename = "windspeed_10m_max")]
+        pub wind_speed_max: Option<Vec<Option<f32>>>,
+        #[serde(rename = "winddirection_10m_dominant")]
+        pub wind_direction: Option<Vec<Option<u16>>>,
+        #[serde(rename = "precipitation_sum")]
+        pub precipitation: Option<Vec<Option<f32>>>,
+        #[serde(rename = "weathercode")]
+        pub weather_code: Option<Vec<Option<u8>>>,
+    }
+
+    /// Current weather data from `OpenMeteo` (when available)
+    #[derive(Debug, Deserialize)]
+    pub struct CurrentData {
+        #[serde(rename = "temperature_2m")]
+        pub temperature: f32,
+        #[serde(rename = "windspeed_10m")]
+        pub wind_speed: f32,
+        #[serde(rename = "winddirection_10m")]
+        pub wind_direction: u16,
+        #[serde(rename = "windgusts_10m")]
+        pub wind_gusts: f32,
+        pub precipitation: f32,
+        #[serde(rename = "cloudcover")]
+        pub cloud_cover: u8,
+        #[serde(rename = "surface_pressure")]
+        pub pressure: f32,
+        pub visibility: f32,
+        #[serde(rename = "weathercode")]
+        pub weather_code: u8,
+    }
+
+    /// Geocoding response from `OpenMeteo`
+    #[derive(Debug, Deserialize)]
+    pub struct GeocodingResponse {
+        pub results: Option<Vec<GeocodingResult>>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct GeocodingResult {
+        pub name: String,
+        pub latitude: f64,
+        pub longitude: f64,
+        pub country: Option<String>,
+        pub admin1: Option<String>,
+        pub admin2: Option<String>,
+        pub timezone: Option<String>,
+    }
+
+    /// Convert `OpenMeteo` weather code to human-readable description
+    #[must_use] 
+    pub fn weather_code_to_description(code: u8) -> &'static str {
+        match code {
+            0 => "Clear sky",
+            1 => "Mainly clear",
+            2 => "Partly cloudy",
+            3 => "Overcast",
+            45 => "Fog",
+            48 => "Depositing rime fog",
+            51 => "Light drizzle",
+            53 => "Moderate drizzle",
+            55 => "Dense drizzle",
+            56 => "Light freezing drizzle",
+            57 => "Dense freezing drizzle",
+            61 => "Slight rain",
+            63 => "Moderate rain",
+            65 => "Heavy rain",
+            66 => "Light freezing rain",
+            67 => "Heavy freezing rain",
+            71 => "Slight snow fall",
+            73 => "Moderate snow fall",
+            75 => "Heavy snow fall",
+            77 => "Snow grains",
+            80 => "Slight rain showers",
+            81 => "Moderate rain showers",
+            82 => "Violent rain showers",
+            85 => "Slight snow showers",
+            86 => "Heavy snow showers",
+            95 => "Thunderstorm",
+            96 => "Thunderstorm with slight hail",
+            99 => "Thunderstorm with heavy hail",
+            _ => "Unknown",
+        }
+    }
+
+    // Convert OpenMeteo API responses to internal models
+    impl WeatherForecast {
+        /// Create forecast from `OpenMeteo` API response
+        #[must_use] 
+        pub fn from_openmeteo(response: &ForecastResponse, location_name: String) -> Self {
+            let location = Location::new(response.latitude, response.longitude, location_name);
+
+            let mut forecasts = Vec::new();
+
+            // Process hourly data if available
+            if let Some(hourly) = &response.hourly {
+                let len = hourly.time.len();
+
+                for i in 0..len {
+                    // Parse timestamp
+                    let timestamp =
+                        chrono::NaiveDateTime::parse_from_str(&hourly.time[i], "%Y-%m-%dT%H:%M").map_or_else(|_| Utc::now(), |dt| dt.and_utc());
+
+                    // Extract data with safe indexing and default values
+                    let temperature = *hourly
+                        .temperature
+                        .as_ref()
+                        .and_then(|temps| temps.get(i))
+                        .unwrap_or(&-999.0);
+
+                    let wind_speed = *hourly
+                        .wind_speed
+                        .as_ref()
+                        .and_then(|speeds| speeds.get(i))
+                        .unwrap_or(&-999.0);
+
+                    let wind_direction = *hourly
+                        .wind_direction
+                        .as_ref()
+                        .and_then(|dirs| dirs.get(i))
+                        .unwrap_or(&0);
+
+                    let wind_gust = *hourly
+                        .wind_gusts
+                        .as_ref()
+                        .and_then(|gusts| gusts.get(i))
+                        .unwrap_or(&-999.0);
+
+                    let precipitation = *hourly
+                        .precipitation
+                        .as_ref()
+                        .and_then(|precip| precip.get(i))
+                        .unwrap_or(&-999.0);
+                    let cloud_cover = *hourly
+                        .cloud_cover
+                        .as_ref()
+                        .and_then(|clouds| clouds.get(i))
+                        .unwrap_or(&0);
+
+                    let pressure = *hourly
+                        .pressure
+                        .as_ref()
+                        .and_then(|press| press.get(i))
+                        .unwrap_or(&-999.0);
+
+                    let visibility = *hourly
+                        .visibility
+                        .as_ref()
+                        .and_then(|vis| vis.get(i))
+                        .unwrap_or(&999.0);
+
+                    let weather_code = *hourly
+                        .weather_code
+                        .as_ref()
+                        .and_then(|codes| codes.get(i))
+                        .unwrap_or(&0);
+
+                    let description = weather_code_to_description(weather_code).to_string();
+
+                    let weather_data = WeatherData {
+                        timestamp,
+                        temperature,
+                        wind_speed,
+                        wind_direction,
+                        wind_gust,
+                        precipitation,
+                        cloud_cover,
+                        pressure,
+                        visibility,
+                        description,
+                        icon: None, // OpenMeteo doesn't provide icon codes
+                    };
+
+                    forecasts.push(weather_data);
+                }
+            }
+
+            Self {
+                location,
+                forecasts,
+                retrieved_at: Utc::now(),
+            }
+        }
+    }
+
+    impl From<&GeocodingResult> for Location {
+        fn from(result: &GeocodingResult) -> Self {
+            Self {
+                latitude: result.latitude,
+                longitude: result.longitude,
+                name: result.name.clone(),
+                country: result.country.clone(),
+            }
+        }
+    }
+}
+
 /// Add urlencoding dependency to Cargo.toml (needed for geocoding)
 // Note: We'll need to add `urlencoding = "2.1"` to dependencies
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_rate_limiter() {
-        let mut limiter = RateLimiter::new(2);
-
-        // Should allow first 2 requests
-        assert!(limiter.allow_request());
-        assert!(limiter.allow_request());
-
-        // Should deny 3rd request
-        assert!(!limiter.allow_request());
-
-        // Check time until next request
-        let wait_time = limiter.time_until_next_request();
-        assert!(wait_time > Duration::from_secs(0));
-    }
 
     #[test]
     fn test_location_parser_coordinates() {

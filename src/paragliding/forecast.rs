@@ -127,7 +127,7 @@ pub struct ParaglidingForecastService;
 impl ParaglidingForecastService {
     /// Generate multi-day paragliding forecast
     pub async fn generate_forecast(
-        api_client: &mut WeatherApiClient,
+        api_client: &WeatherApiClient,
         cache: &Cache,
         location_input: LocationInput,
         radius_km: f64,
@@ -169,7 +169,7 @@ impl ParaglidingForecastService {
 
     /// Generate daily forecasts from weather data and sites
     async fn generate_daily_forecasts(
-        api_client: &mut WeatherApiClient,
+        api_client: &WeatherApiClient,
         cache: &Cache,
         sites: &[ParaglidingSite],
         center_location: &Location,
@@ -196,7 +196,7 @@ impl ParaglidingForecastService {
 
     /// Get weather forecast for location using the main weather service
     async fn get_weather_forecast(
-        api_client: &mut WeatherApiClient,
+        api_client: &WeatherApiClient,
         cache: &Cache,
         location: &Location,
     ) -> Result<WeatherForecast> {
@@ -207,7 +207,7 @@ impl ParaglidingForecastService {
 
     /// Get weather forecast for a specific site
     async fn get_site_weather_forecast(
-        api_client: &mut WeatherApiClient,
+        api_client: &WeatherApiClient,
         cache: &Cache,
         site: &ParaglidingSite,
     ) -> Result<WeatherForecast> {
@@ -221,7 +221,7 @@ impl ParaglidingForecastService {
 
     /// Generate forecast for a single day
     async fn generate_daily_forecast(
-        api_client: &mut WeatherApiClient,
+        api_client: &WeatherApiClient,
         cache: &Cache,
         date: NaiveDate,
         day_offset: usize,
