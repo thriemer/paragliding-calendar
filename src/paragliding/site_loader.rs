@@ -6,7 +6,7 @@
 use crate::config::TravelAiConfig;
 use crate::models::Location;
 use crate::paragliding::paragliding_earth::ParaglidingEarthClient;
-use crate::paragliding::sites::{Coordinates, GeographicSearch, ParaglidingSite};
+use crate::paragliding::sites::{Coordinates, GeographicSearch, ParaglidingSite, SiteType};
 use anyhow::Result;
 use tracing::{debug, info, warn};
 
@@ -56,13 +56,7 @@ impl SiteLoader {
             longitude: location.longitude,
         };
 
-        // Create a dummy config since PE API doesn't need it anymore
-        let dummy_config = crate::config::TravelAiConfig::default();
-        let config_ref = config.unwrap_or(&dummy_config);
-
-        if let Some(pe_sites) =
-            Self::load_paragliding_earth_sites(&center, radius_km, config_ref).await?
-        {
+        if let Some(pe_sites) = Self::load_paragliding_earth_sites(&center, radius_km).await? {
             all_sites.extend(pe_sites);
         }
 
@@ -93,7 +87,6 @@ impl SiteLoader {
     async fn load_paragliding_earth_sites(
         center: &Coordinates,
         radius_km: f64,
-        _config: &TravelAiConfig,
     ) -> Result<Option<Vec<ParaglidingSite>>> {
         debug!("Loading sites from Paragliding Earth API (no API key required)");
 
@@ -123,7 +116,13 @@ impl SiteLoader {
         };
 
         let nearby_sites = GeographicSearch::sites_within_radius(sites, &search_center, radius_km);
-        nearby_sites.into_iter().cloned().collect()
+
+        // Filter to only return Hang sites by default (exclude Winch sites)
+        nearby_sites
+            .into_iter()
+            .filter(|site| matches!(site.site_type, SiteType::Hang))
+            .cloned()
+            .collect()
     }
 
     /// Get the distance from a location to a site in kilometers
@@ -157,7 +156,7 @@ mod tests {
             },
             elevation: Some(1000.0),
             launch_directions: vec![],
-            site_type: None,
+            site_type: SiteType::Hang,
             country: None,
             data_source: DataSource::DHV,
             characteristics: SiteCharacteristics {

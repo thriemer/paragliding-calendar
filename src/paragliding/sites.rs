@@ -154,7 +154,7 @@ mod tests {
                 },
                 elevation: Some(1000.0),
                 launch_directions: vec![],
-                site_type: None,
+                site_type: SiteType::Hang,
                 country: None,
                 data_source: DataSource::DHV,
                 characteristics: SiteCharacteristics {
@@ -176,7 +176,7 @@ mod tests {
                 },
                 elevation: Some(1500.0),
                 launch_directions: vec![],
-                site_type: None,
+                site_type: SiteType::Hang,
                 country: None,
                 data_source: DataSource::DHV,
                 characteristics: SiteCharacteristics {

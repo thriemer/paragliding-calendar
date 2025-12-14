@@ -3,8 +3,9 @@
 //! This module contains all the data structures used for representing weather data,
 //! including both the internal models and the external API response types.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, NaiveDate, TimeZone};
 use serde::{Deserialize, Serialize};
+use sunrise::{Coordinates, SolarDay, SolarEvent};
 
 /// Core weather data structure for internal use
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -335,6 +336,55 @@ impl WeatherForecast {
     pub fn is_fresh(&self, ttl_hours: u32) -> bool {
         let age = Utc::now() - self.retrieved_at;
         age.num_hours() < i64::from(ttl_hours)
+    }
+
+    /// Filter weather data to only include daylight hours (sunrise to sunset)
+    /// Returns weather data points that fall between sunrise and sunset for the given date and location
+    #[must_use]
+    pub fn filter_daylight_hours(&self, date: NaiveDate, latitude: f64, longitude: f64) -> Vec<&WeatherData> {
+        // Calculate sunrise and sunset for the given location and date
+        let coords = match Coordinates::new(latitude, longitude) {
+            Some(coords) => coords,
+            None => {
+                // Invalid coordinates, use approximate daylight hours (6 AM to 8 PM)
+                return self.filter_approximate_daylight_hours(date);
+            }
+        };
+
+        let solar_day = SolarDay::new(coords, date);
+        
+        // Get sunrise and sunset times 
+        let sunrise_dt = solar_day.event_time(SolarEvent::Sunrise);
+        let sunset_dt = solar_day.event_time(SolarEvent::Sunset);
+        
+        // Filter weather data to only include daylight hours
+        self.forecasts
+            .iter()
+            .filter(|weather| {
+                weather.timestamp >= sunrise_dt && weather.timestamp <= sunset_dt
+            })
+            .collect()
+    }
+
+    /// Fallback method for filtering daylight hours using approximate times (6 AM to 8 PM)
+    fn filter_approximate_daylight_hours(&self, date: NaiveDate) -> Vec<&WeatherData> {
+        let day_start = Utc.from_local_datetime(&date.and_hms_opt(6, 0, 0).unwrap()).earliest();
+        let day_end = Utc.from_local_datetime(&date.and_hms_opt(20, 0, 0).unwrap()).earliest();
+        
+        match (day_start, day_end) {
+            (Some(start), Some(end)) => {
+                self.forecasts
+                    .iter()
+                    .filter(|weather| {
+                        weather.timestamp >= start && weather.timestamp <= end
+                    })
+                    .collect()
+            }
+            _ => {
+                // Last resort: return all weather for the day
+                self.daily_forecast(0)
+            }
+        }
     }
 }
 

@@ -26,6 +26,7 @@ shellexpand = "3.1"
 quick-xml = { version = "0.31", features = ["serialize"] }
 geo = "0.27"
 haversine = "0.2"
+sunrise = "1.2"
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros", "time"] }
 
 [dev-dependencies]

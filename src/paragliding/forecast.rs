@@ -7,11 +7,11 @@ use crate::models::{Location, WeatherData, WeatherForecast};
 use crate::location_resolver::LocationResolver;
 use crate::paragliding::site_loader::SiteLoader;
 use crate::paragliding::sites::ParaglidingSite;
-use crate::paragliding::wind_analysis::{FlyabilityAnalysis, WindDirectionCompatibility, WindSpeedCategory};
+use crate::paragliding::wind_analysis::{FlyabilityAnalysis, HourlyFlyabilityAnalysis, WindDirectionCompatibility, WindSpeedCategory};
 use crate::{Cache, LocationInput, WeatherApiClient};
 use crate::config::TravelAiConfig;
 use anyhow::Result;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -79,12 +79,14 @@ pub struct SpeedRange {
 pub struct SiteFlyabilityRating {
     /// Site information
     pub site: ParaglidingSite,
-    /// Flyability score (0-10)
+    /// Flyability score (0-10) - best score for the day
     pub score: f32,
     /// Distance from search center in km
     pub distance_km: f64,
-    /// Wind analysis for this site
+    /// Wind analysis for this site (best hour analysis for backward compatibility)
     pub wind_analysis: FlyabilityAnalysis,
+    /// Hourly analysis for the full day
+    pub hourly_analysis: HourlyFlyabilityAnalysis,
     /// Site-specific reasoning
     pub reasoning: String,
 }
@@ -152,15 +154,8 @@ impl ParaglidingForecastService {
             warn!("No paragliding sites found in search area");
         }
 
-        // Get weather forecast
-        let weather_forecast = Self::get_weather_forecast(api_client, cache, &location).await?;
-        debug!(
-            "Retrieved weather forecast with {} data points",
-            weather_forecast.forecasts.len()
-        );
-
-        // Generate daily forecasts
-        let daily_forecasts = Self::generate_daily_forecasts(&weather_forecast, &sites, &location, days);
+        // Generate daily forecasts (weather will be fetched per-site)
+        let daily_forecasts = Self::generate_daily_forecasts(api_client, cache, &sites, &location, days).await?;
 
         Ok(ParaglidingForecast {
             location,
@@ -173,36 +168,30 @@ impl ParaglidingForecastService {
 
 
     /// Generate daily forecasts from weather data and sites
-    fn generate_daily_forecasts(
-        weather_forecast: &WeatherForecast,
+    async fn generate_daily_forecasts(
+        api_client: &mut WeatherApiClient,
+        cache: &Cache,
         sites: &[ParaglidingSite],
         center_location: &Location,
         days: usize,
-    ) -> Vec<DailyFlyabilityForecast> {
+    ) -> Result<Vec<DailyFlyabilityForecast>> {
         let mut daily_forecasts = Vec::new();
 
         for day in 0..days {
-            let day_weather = weather_forecast.daily_forecast(day);
-            if day_weather.is_empty() {
-                debug!(
-                    "No weather data for day {}, stopping forecast generation",
-                    day
-                );
-                break;
-            }
-
-            let date = if weather_forecast.forecasts.is_empty() {
-                Utc::now().date_naive() + chrono::Duration::days(i64::try_from(day).unwrap_or(0))
-            } else {
-                weather_forecast.forecasts[0].timestamp.date_naive()
-                    + chrono::Duration::days(i64::try_from(day).unwrap_or(0))
-            };
-
-            let daily_forecast = Self::generate_daily_forecast(date, day, &day_weather, sites, center_location);
+            let date = Utc::now().date_naive() + chrono::Duration::days(i64::try_from(day).unwrap_or(0));
+            
+            let daily_forecast = Self::generate_daily_forecast(
+                api_client, 
+                cache, 
+                date, 
+                day, 
+                sites, 
+                center_location
+            ).await?;
             daily_forecasts.push(daily_forecast);
         }
 
-        daily_forecasts
+        Ok(daily_forecasts)
     }
 
     /// Get weather forecast for location using the main weather service
@@ -216,36 +205,87 @@ impl ParaglidingForecastService {
         Ok(forecast)
     }
 
+    /// Get weather forecast for a specific site
+    async fn get_site_weather_forecast(
+        api_client: &mut WeatherApiClient,
+        cache: &Cache,
+        site: &ParaglidingSite,
+    ) -> Result<WeatherForecast> {
+        let location_input = LocationInput::Coordinates(
+            site.coordinates.latitude, 
+            site.coordinates.longitude
+        );
+        let forecast = crate::weather::get_weather_forecast(api_client, cache, location_input).await?;
+        Ok(forecast)
+    }
+
     /// Generate forecast for a single day
-    fn generate_daily_forecast(
+    async fn generate_daily_forecast(
+        api_client: &mut WeatherApiClient,
+        cache: &Cache,
         date: NaiveDate,
         day_offset: usize,
-        day_weather: &[&WeatherData],
         sites: &[ParaglidingSite],
         center_location: &Location,
-    ) -> DailyFlyabilityForecast {
+    ) -> Result<DailyFlyabilityForecast> {
         let day_name = Self::format_day_name(day_offset, date);
-        let weather_summary = Self::create_weather_summary(day_weather);
+        
+        // Get center location weather for the daily summary
+        let center_forecast = Self::get_weather_forecast(api_client, cache, center_location).await?;
+        let center_day_weather = center_forecast.daily_forecast(day_offset);
+        let weather_summary = Self::create_weather_summary(&center_day_weather);
 
-        // Calculate flyability for each site
+        // Calculate flyability for each site using site-specific weather
         let mut site_ratings = Vec::new();
         for site in sites {
-            // Use midday weather for site analysis
-            if let Some(midday_weather) = day_weather.get(day_weather.len() / 2) {
-                // Safe conversion: realistic day offsets will always be small
-                let hours_ahead = (day_offset * 24 + 12) as f32;
-                let analysis = FlyabilityAnalysis::analyze(midday_weather, site, hours_ahead);
+            match Self::get_site_weather_forecast(api_client, cache, site).await {
+                Ok(site_forecast) => {
+                    let site_day_weather = site_forecast.daily_forecast(day_offset);
+                    if !site_day_weather.is_empty() {
+                        // Filter to daylight hours only
+                        let daylight_weather = site_forecast.filter_daylight_hours(
+                            date,
+                            site.coordinates.latitude,
+                            site.coordinates.longitude
+                        );
+                        
+                        if !daylight_weather.is_empty() {
+                            // Perform hourly analysis for the full daylight period
+                            let hourly_analysis = HourlyFlyabilityAnalysis::analyze_hourly(
+                                &daylight_weather,
+                                site,
+                                day_offset
+                            );
 
-                // Only include sites with reasonable flyability scores
-                if analysis.flyability_score >= 2.0 {
-                    let rating = SiteFlyabilityRating {
-                        site: site.clone(),
-                        score: analysis.flyability_score,
-                        distance_km: SiteLoader::distance_to_site(center_location, site),
-                        reasoning: Self::generate_site_reasoning(&analysis),
-                        wind_analysis: analysis,
-                    };
-                    site_ratings.push(rating);
+                            // Only include sites that have flyable conditions (at least 25% favorable hours)
+                            if hourly_analysis.is_flyable_day() {
+                                // Get best hour analysis for backward compatibility
+                                let best_hour = hourly_analysis.hourly_scores
+                                    .iter()
+                                    .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+                                
+                                if let Some(best_hour_score) = best_hour {
+                                    let rating = SiteFlyabilityRating {
+                                        site: site.clone(),
+                                        score: hourly_analysis.best_flyability_score(),
+                                        distance_km: SiteLoader::distance_to_site(center_location, site),
+                                        reasoning: Self::generate_hourly_site_reasoning(&hourly_analysis),
+                                        wind_analysis: best_hour_score.analysis.clone(),
+                                        hourly_analysis,
+                                    };
+                                    site_ratings.push(rating);
+                                }
+                            }
+                        } else {
+                            debug!("No daylight weather data for site {} on day {}", site.name, day_offset);
+                        }
+                    } else {
+                        debug!("No weather data for site {} on day {}", site.name, day_offset);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to fetch weather for site {}: {}", site.name, e);
+                    // Continue with other sites rather than failing the entire forecast
                 }
             }
         }
@@ -261,7 +301,7 @@ impl ParaglidingForecastService {
         let confidence = Self::calculate_confidence(day_offset);
         let explanation = Self::generate_day_explanation(&day_rating, &site_ratings);
 
-        DailyFlyabilityForecast {
+        Ok(DailyFlyabilityForecast {
             date,
             day_name,
             weather_summary,
@@ -269,7 +309,7 @@ impl ParaglidingForecastService {
             day_rating,
             confidence,
             explanation,
-        }
+        })
     }
 
     /// Format day name (Today, Tomorrow, day of week)
@@ -384,39 +424,47 @@ impl ParaglidingForecastService {
         }
 
         let site_count = site_ratings.len();
-        let best_score = site_ratings.first().map_or(0.0, |s| s.score);
+        
+        // Calculate average percentage of favorable conditions across all sites
+        let avg_favorable_pct = if site_ratings.is_empty() {
+            0.0
+        } else {
+            site_ratings.iter()
+                .map(|s| s.hourly_analysis.favorable_hours_percentage)
+                .sum::<f32>() / site_ratings.len() as f32
+        };
 
         match day_rating {
             DayRating::Excellent => {
                 format!(
-                    "Excellent flying conditions with {} flyable site{} (best score: {:.1}/10)",
+                    "Excellent ({:.0}% favorable conditions, {} flyable site{})",
+                    avg_favorable_pct,
                     site_count,
-                    if site_count == 1 { "" } else { "s" },
-                    best_score
+                    if site_count == 1 { "" } else { "s" }
                 )
             }
             DayRating::Good => {
                 format!(
-                    "Good flying conditions with {} suitable site{} (best score: {:.1}/10)",
+                    "Good ({:.0}% favorable conditions, {} flyable site{})",
+                    avg_favorable_pct,
                     site_count,
-                    if site_count == 1 { "" } else { "s" },
-                    best_score
+                    if site_count == 1 { "" } else { "s" }
                 )
             }
             DayRating::Marginal => {
                 format!(
-                    "Marginal conditions - {} site{} flyable with caution (best score: {:.1}/10)",
+                    "Marginal ({:.0}% favorable conditions, {} flyable site{})",
+                    avg_favorable_pct,
                     site_count,
-                    if site_count == 1 { " is" } else { "s are" },
-                    best_score
+                    if site_count == 1 { "" } else { "s" }
                 )
             }
             DayRating::Poor => {
                 format!(
-                    "Poor conditions - {} site{} potentially flyable (best score: {:.1}/10)",
+                    "Poor ({:.0}% favorable conditions, {} flyable site{})",
+                    avg_favorable_pct,
                     site_count,
-                    if site_count == 1 { " is" } else { "s are" },
-                    best_score
+                    if site_count == 1 { "" } else { "s" }
                 )
             }
             DayRating::NotFlyable => "Not suitable for flying".to_string(),
@@ -472,6 +520,43 @@ impl ParaglidingForecastService {
                 format!("{}, and {}", reasons.join(", "), last)
             }
         }
+    }
+
+    /// Generate reasoning text for hourly analysis
+    fn generate_hourly_site_reasoning(hourly_analysis: &HourlyFlyabilityAnalysis) -> String {
+        let favorable_pct = hourly_analysis.favorable_hours_percentage;
+        let best_score = hourly_analysis.best_score;
+        let total_hours = hourly_analysis.hourly_scores.len();
+
+        if total_hours == 0 {
+            return "No daylight hours available".to_string();
+        }
+
+        let mut reasoning = Vec::new();
+
+        // Add percentage of favorable conditions
+        reasoning.push(format!("{:.0}% favorable conditions", favorable_pct));
+
+        // Add best window information if available
+        if let Some((start, end, avg_score)) = &hourly_analysis.best_flying_window {
+            reasoning.push(format!(
+                "best window: {}:00-{}:00 (score: {:.1})",
+                start.hour(),
+                end.hour(),
+                avg_score
+            ));
+        }
+
+        // Add overall score information
+        if best_score >= 7.0 {
+            reasoning.push("excellent peak conditions".to_string());
+        } else if best_score >= 5.0 {
+            reasoning.push("good peak conditions".to_string());
+        } else {
+            reasoning.push("marginal peak conditions".to_string());
+        }
+
+        reasoning.join(", ")
     }
 }
 

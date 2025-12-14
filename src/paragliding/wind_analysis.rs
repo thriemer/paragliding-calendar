@@ -5,6 +5,7 @@
 
 use crate::models::WeatherData;
 use crate::paragliding::sites::{LaunchDirectionRange, ParaglidingSite};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -107,6 +108,38 @@ pub struct SafetyMargins {
     pub forecast_confidence: f32,
     /// Time-based degradation factor
     pub time_degradation: f32,
+}
+
+/// Hourly flyability analysis for a full day of flying
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HourlyFlyabilityAnalysis {
+    /// Site being analyzed
+    pub site_id: String,
+    /// Hour-by-hour flyability scores during daylight
+    pub hourly_scores: Vec<HourlyScore>,
+    /// Start and end of daylight flying window
+    pub daylight_window: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    /// Percentage of daylight hours with favorable conditions (score >= 5.0)
+    pub favorable_hours_percentage: f32,
+    /// Best continuous flying window (start, end, average_score)
+    pub best_flying_window: Option<(DateTime<Utc>, DateTime<Utc>, f32)>,
+    /// Overall best score for the day
+    pub best_score: f32,
+    /// Overall worst score for the day
+    pub worst_score: f32,
+    /// Average score across all daylight hours
+    pub average_score: f32,
+}
+
+/// Individual hour analysis within the day
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HourlyScore {
+    /// Timestamp for this hour
+    pub timestamp: DateTime<Utc>,
+    /// Flyability score for this hour
+    pub score: f32,
+    /// Individual analysis for this hour
+    pub analysis: FlyabilityAnalysis,
 }
 
 impl WindDirectionAnalysis {
@@ -239,6 +272,118 @@ impl FlyabilityAnalysis {
             3..=4 => "🔴",  // Red - Poor
             _ => "⚫",       // Black - Dangerous
         }
+    }
+}
+
+impl HourlyFlyabilityAnalysis {
+    /// Perform hourly flyability analysis for a full day
+    #[must_use]
+    pub fn analyze_hourly(
+        daylight_weather: &[&WeatherData],
+        site: &ParaglidingSite,
+        day_offset: usize,
+    ) -> Self {
+        let mut hourly_scores = Vec::new();
+        let mut scores = Vec::new();
+
+        // Analyze each hour of daylight
+        for (i, weather) in daylight_weather.iter().enumerate() {
+            let hours_ahead = (day_offset * 24) as f32 + i as f32;
+            let analysis = FlyabilityAnalysis::analyze(weather, site, hours_ahead);
+            let score = analysis.flyability_score;
+            
+            hourly_scores.push(HourlyScore {
+                timestamp: weather.timestamp,
+                score,
+                analysis,
+            });
+            scores.push(score);
+        }
+
+        // Calculate statistics
+        let best_score = scores.iter().fold(0.0f32, |a, &b| a.max(b));
+        let worst_score = scores.iter().fold(10.0f32, |a, &b| a.min(b));
+        let average_score = if scores.is_empty() {
+            0.0
+        } else {
+            scores.iter().sum::<f32>() / scores.len() as f32
+        };
+
+        // Calculate percentage of favorable hours (score >= 5.0)
+        let favorable_hours = scores.iter().filter(|&&score| score >= 5.0).count();
+        let favorable_hours_percentage = if scores.is_empty() {
+            0.0
+        } else {
+            (favorable_hours as f32 / scores.len() as f32) * 100.0
+        };
+
+        // Determine daylight window
+        let daylight_window = if let (Some(first), Some(last)) = (hourly_scores.first(), hourly_scores.last()) {
+            Some((first.timestamp, last.timestamp))
+        } else {
+            None
+        };
+
+        // Find best continuous flying window (simplified: find best 3-hour window)
+        let best_flying_window = Self::find_best_flying_window(&hourly_scores);
+
+        Self {
+            site_id: site.id.clone(),
+            hourly_scores,
+            daylight_window,
+            favorable_hours_percentage,
+            best_flying_window,
+            best_score,
+            worst_score,
+            average_score,
+        }
+    }
+
+    /// Find the best continuous flying window (best 3-hour period)
+    fn find_best_flying_window(hourly_scores: &[HourlyScore]) -> Option<(DateTime<Utc>, DateTime<Utc>, f32)> {
+        if hourly_scores.len() < 3 {
+            return None;
+        }
+
+        let mut best_window: Option<(usize, f32)> = None;
+
+        // Look for best 3-hour window
+        for i in 0..=hourly_scores.len().saturating_sub(3) {
+            let window_scores: Vec<f32> = hourly_scores[i..i+3]
+                .iter()
+                .map(|hs| hs.score)
+                .collect();
+            
+            let window_avg = window_scores.iter().sum::<f32>() / window_scores.len() as f32;
+            
+            if let Some((_, current_best)) = best_window {
+                if window_avg > current_best {
+                    best_window = Some((i, window_avg));
+                }
+            } else {
+                best_window = Some((i, window_avg));
+            }
+        }
+
+        if let Some((start_idx, avg_score)) = best_window {
+            let start_time = hourly_scores[start_idx].timestamp;
+            let end_time = hourly_scores[start_idx + 2].timestamp;
+            Some((start_time, end_time, avg_score))
+        } else {
+            None
+        }
+    }
+
+    /// Get the best flyability score for the day (for compatibility with existing system)
+    #[must_use]
+    pub fn best_flyability_score(&self) -> f32 {
+        self.best_score
+    }
+
+    /// Check if the day has any flyable hours (at least 25% favorable)
+    #[must_use]
+    pub fn is_flyable_day(&self) -> bool {
+        self.favorable_hours_percentage >= 25.0 && self.best_score >= 3.0
     }
 }
 
