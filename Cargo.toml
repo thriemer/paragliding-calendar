@@ -7,35 +7,21 @@ description = "Intelligent paragliding and outdoor adventure travel planning CLI
 license = "MIT"
 
 [dependencies]
-clap = { version = "4.4", features = ["derive"] }
+
+# general
+
 anyhow = "1.0"
 thiserror = "1.0"
-config = "0.13"
-toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
-dirs = "5.0"
-reqwest = { version = "0.11", features = ["json"] }
 serde_json = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
-sled = "0.34"
-urlencoding = "2.1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tracing-appender = "0.2"
-shellexpand = "3.1"
 quick-xml = { version = "0.31", features = ["serialize"] }
-geo = "0.27"
-haversine = "0.2"
-sunrise = "1.2"
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros", "time"] }
+chrono = {version ="0.4", features = ["serde"]}
 
-[dev-dependencies]
-tempfile = "3.0"
+# weather
+reqwest = {version = "0.12", features = ["blocking", "json"]}
+urlencoding = "2.1"
+sunrise = "2.1"
 
-[lints.clippy]
-# Pedantic lints that are useful for code quality
-pedantic = { level = "warn", priority = -1 }
-# Specific overrides
-module_name_repetitions = "allow"
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
+# geo
+haversine = "0.2"

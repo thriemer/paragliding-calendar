@@ -1,17 +1,11 @@
+use anyhow::Result;
 use quick_xml::de::from_str;
 use serde::Deserialize;
-use std::fs;
 use std::path::Path;
-use tracing::{info, warn};
+use std::{collections::HashMap, fs};
 
-use super::ParaglidingSite;
-use super::{Result, TravelAIError};
+use crate::models::{Location, ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, SiteType};
 
-use crate::paragliding::sites::{Coordinates, DataSource, LaunchDirectionRange, SiteCharacteristics, SiteType};
-use crate::paragliding::sites::parse_direction_text_to_degrees;
-
-/// DHV XML parser and site loader
-pub struct DHVParser;
 /// DHV XML structure for deserialization
 #[derive(Debug, Deserialize)]
 pub struct DHVXml {
@@ -75,202 +69,198 @@ pub struct DHVLocation {
     pub paragliding: Option<bool>,
 }
 
-impl DHVFlyingSite {
-    /// Convert DHV site to unified `ParaglidingSite`
-    pub fn to_paragliding_site(&self) -> Result<ParaglidingSite> {
-        // Find the launch location (LocationType = 1)
-        let launch_location = self.locations.iter()
-            .find(|loc| loc.location_type == Some(1))
-            .or_else(|| self.locations.first()) // Fallback to first location if no launch type found
-            .ok_or_else(|| TravelAIError::ParseError(format!(
-                "No launch location found for site {}", self.site_id
-            )))?;
-
-        let coordinates = launch_location.parse_coordinates()?;
-        let launch_directions = launch_location.parse_launch_directions();
-
-        Ok(ParaglidingSite {
-            id: format!("dhv_{}", self.site_id),
-            name: self.site_name.clone(),
-            coordinates,
-            elevation: launch_location.altitude,
-            launch_directions,
-            site_type: {
-                let has_towing = launch_location.towing_height1.unwrap_or(0.0) > 0.0
-                    || launch_location.towing_height2.unwrap_or(0.0) > 0.0
-                    || launch_location.towing_length.unwrap_or(0.0) > 0.0;
-                
-                if has_towing {
-                    SiteType::Winch
-                } else {
-                    SiteType::Hang
-                }
-            },
-            country: self.site_country.clone(),
-            data_source: DataSource::DHV,
-            characteristics: SiteCharacteristics {
-                height_difference_max: self.height_difference_max,
-                site_url: self.site_url.clone(),
-                access_by_car: launch_location.access_by_car,
-                access_by_foot: launch_location.access_by_foot,
-                access_by_public_transport: launch_location.access_by_public_transport,
-                hanggliding: launch_location.hanggliding,
-                paragliding: launch_location.paragliding,
-            },
-        })
-    }
-}
-
 impl DHVLocation {
-    /// Parse DHV coordinate format "longitude,latitude" to Coordinates
-    pub fn parse_coordinates(&self) -> Result<Coordinates> {
+    fn is_launch(&self) -> bool {
+        if let Some(site_type) = self.location_type
+            && site_type == 1
+        {
+            true
+        } else {
+            false
+        }
+    }
+
+    fn get_type(&self) -> SiteType {
+        if let Some(length) = self.towing_length
+            && length > 0.0
+        {
+            SiteType::Winch
+        } else {
+            SiteType::Hang
+        }
+    }
+    pub fn get_location(&self, country: String) -> Result<Location, String> {
         let parts: Vec<&str> = self.coordinates.split(',').collect();
+
         if parts.len() != 2 {
-            return Err(TravelAIError::ParseError(format!(
-                "Invalid coordinate format: {}",
+            return Err(format!(
+                "Expected format 'longitude,latitude', got '{}'",
                 self.coordinates
-            )));
+            ));
         }
 
         let longitude = parts[0]
             .trim()
             .parse::<f64>()
-            .map_err(|_| TravelAIError::ParseError(format!("Invalid longitude: {}", parts[0])))?;
+            .map_err(|e| format!("Invalid longitude '{}': {}", parts[0], e))?;
 
         let latitude = parts[1]
             .trim()
             .parse::<f64>()
-            .map_err(|_| TravelAIError::ParseError(format!("Invalid latitude: {}", parts[1])))?;
+            .map_err(|e| format!("Invalid latitude '{}': {}", parts[1], e))?;
 
-        Ok(Coordinates {
+        Ok(Location {
             latitude,
             longitude,
+            name: self.location_name.clone().unwrap(),
+            country,
         })
     }
 
-    /// Parse launch directions from DHV format to unified format
-    fn parse_launch_directions(&self) -> Vec<LaunchDirectionRange> {
-        match &self.directions_text {
-            Some(text) => {
-                let text = text.trim();
-                if text.is_empty() {
-                    return vec![];
-                }
-                
-                // Handle range formats like "SO-S" or "SSW-WSW"
-                if text.contains('-') {
-                    let parts: Vec<&str> = text.split('-').map(|s| s.trim()).collect();
-                    if parts.len() == 2 {
-                        let start_degrees = parse_direction_text_to_degrees(parts[0]);
-                        let stop_degrees = parse_direction_text_to_degrees(parts[1]);
-                        
-                        if !start_degrees.is_empty() && !stop_degrees.is_empty() {
-                            return vec![LaunchDirectionRange {
-                                direction_degrees_start: start_degrees[0],
-                                direction_degrees_stop: stop_degrees[0],
-                            }];
-                        }
-                    }
-                }
-                
-                // Handle multiple directions separated by comma or space
-                if text.contains(',') || text.contains(' ') {
-                    let directions = text.split(&[',', ' '][..])
-                        .map(|s| s.trim())
-                        .filter(|s| !s.is_empty())
-                        .collect::<Vec<_>>();
-                    
-                    let mut ranges = Vec::new();
-                    for dir in directions {
-                        let degrees = parse_direction_text_to_degrees(dir);
-                        if !degrees.is_empty() {
-                            // Create 45-degree range around each direction
-                            ranges.push(LaunchDirectionRange {
-                                direction_degrees_start: (degrees[0] - 22.5).rem_euclid(360.0),
-                                direction_degrees_stop: (degrees[0] + 22.5).rem_euclid(360.0),
-                            });
-                        }
-                    }
-                    return ranges;
-                }
-                
-                // Handle single direction
-                let degrees = parse_direction_text_to_degrees(text);
-                if !degrees.is_empty() {
-                    vec![LaunchDirectionRange {
-                        direction_degrees_start: (degrees[0] - 22.5).rem_euclid(360.0),
-                        direction_degrees_stop: (degrees[0] + 22.5).rem_euclid(360.0),
-                    }]
-                } else {
-                    vec![]
-                }
-            }
-            None => vec![],
+    fn get_launch_ranges(&self) -> Vec<(f64, f64)> {
+        let text = self.directions_text.clone().unwrap();
+        if text.is_empty() {
+            return vec![];
         }
-    }
-}
-
-impl DHVParser {
-    /// Load and parse DHV XML file
-    pub fn load_sites<P: AsRef<Path>>(xml_path: P) -> Result<Vec<ParaglidingSite>> {
-        let xml_path = xml_path.as_ref();
-        info!("Loading DHV sites from: {:?}", xml_path);
-
-        if !xml_path.exists() {
-            return Err(TravelAIError::FileNotFound(
-                xml_path.to_string_lossy().to_string(),
-            ));
+        if text.contains(',') && text.contains(',') {
+            return text
+                .split(',')
+                .filter(|t| !t.trim().is_empty())
+                .map(|s| Self::get_launch_range(s))
+                .collect();
         }
-
-        let xml_content = fs::read_to_string(xml_path)
-            .map_err(|e| TravelAIError::IoError(format!("Failed to read DHV XML file: {e}")))?;
-
-        Self::parse_xml(&xml_content)
+        return vec![Self::get_launch_range(&text)];
     }
 
-    /// Parse DHV XML content
-    pub fn parse_xml(xml_content: &str) -> Result<Vec<ParaglidingSite>> {
-        info!("Parsing DHV XML content");
+    fn get_launch_range(text: &str) -> (f64, f64) {
+        let text = text.trim();
+        // Handle range formats like "SO-S" or "SSW-WSW"
+        if text.contains('-') {
+            let parts: Vec<&str> = text.split('-').map(|s| s.trim()).collect();
+            if parts.len() == 2 {
+                let start_degrees = parse_direction_text_to_degrees(parts[0]);
+                let stop_degrees = parse_direction_text_to_degrees(parts[1]);
 
-        let dhv_xml: DHVXml = from_str(xml_content)
-            .map_err(|e| TravelAIError::ParseError(format!("Failed to parse DHV XML: {e}")))?;
-
-        let mut sites = Vec::new();
-        let mut parse_errors = 0;
-
-        for dhv_site in dhv_xml.flying_sites.sites {
-            match dhv_site.to_paragliding_site() {
-                Ok(site) => sites.push(site),
-                Err(e) => {
-                    warn!("Failed to parse DHV site {}: {}", dhv_site.site_id, e);
-                    parse_errors += 1;
-                }
+                return (start_degrees, stop_degrees);
             }
         }
 
-        info!(
-            "Loaded {} sites from DHV XML ({} parse errors)",
-            sites.len(),
-            parse_errors
+        // Handle multiple directions separated by comma or space
+        // TODO: this is potentially very wrong
+        if text.contains(',') || text.contains(' ') {
+            let directions = text
+                .split(&[',', ' '][..])
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|dir| parse_direction_text_to_degrees(dir))
+                .collect::<Vec<_>>();
+            let start = directions.iter().cloned().fold(f64::NAN, f64::min);
+            let finish = directions.iter().cloned().fold(f64::NAN, f64::max);
+            return (start, finish);
+        }
+
+        // Handle single direction
+        let degrees = parse_direction_text_to_degrees(text);
+        return (
+            (degrees - 11.25).rem_euclid(360.0),
+            (degrees + 11.25).rem_euclid(360.0),
         );
-
-        if sites.is_empty() && parse_errors > 0 {
-            return Err(TravelAIError::ParseError(
-                "No valid sites could be parsed from DHV XML".to_string(),
-            ));
-        }
-
-        Ok(sites)
-    }
-
-    /// Get file modification time for cache validation
-    pub fn get_file_mtime<P: AsRef<Path>>(xml_path: P) -> Result<std::time::SystemTime> {
-        let metadata = fs::metadata(xml_path.as_ref())
-            .map_err(|e| TravelAIError::IoError(format!("Failed to get file metadata: {e}")))?;
-
-        metadata.modified().map_err(|e| {
-            TravelAIError::IoError(format!("Failed to get file modification time: {e}"))
-        })
     }
 }
 
+fn parse_direction_text_to_degrees(text: &str) -> f64 {
+    // Direction mappings
+    let direction_map: HashMap<&str, f64> = [
+        ("N", 0.0),
+        ("NNE", 22.5),
+        ("NE", 45.0),
+        ("ENE", 67.5),
+        ("E", 90.0),
+        ("ESE", 112.5),
+        ("SE", 135.0),
+        ("SSE", 157.5),
+        // german version
+        ("NNO", 22.5),
+        ("NO", 45.0),
+        ("ONO", 67.5),
+        ("O", 90.0),
+        ("OSO", 112.5),
+        ("SO", 135.0),
+        ("SSO", 157.5),
+        // german version end
+        ("S", 180.0),
+        ("SSW", 202.5),
+        ("SW", 225.0),
+        ("WSW", 247.5),
+        ("W", 270.0),
+        ("WNW", 292.5),
+        ("NW", 315.0),
+        ("NNW", 337.5),
+    ]
+    .iter()
+    .copied()
+    .collect();
+
+    if let Some(deg) = direction_map.get(text.trim()) {
+        return *deg;
+    } else {
+        println!(
+            "Cannot find direction for text {}, contains - {}, contains: , {}",
+            text,
+            text.contains('-'),
+            text.contains(',')
+        );
+        return 0.0;
+    }
+}
+
+pub fn load_sites<T: AsRef<Path>>(xml_path: T) -> Vec<ParaglidingSite> {
+    let xml_path = xml_path.as_ref();
+    let xml_content = fs::read_to_string(xml_path).unwrap();
+    let dhv_xml: DHVXml = from_str(&xml_content).unwrap();
+    dhv_xml
+        .flying_sites
+        .sites
+        .into_iter()
+        .map(|dhv| dhv.into())
+        .collect()
+}
+
+impl From<DHVFlyingSite> for ParaglidingSite {
+    fn from(value: DHVFlyingSite) -> Self {
+        let country = value.site_country.clone().unwrap();
+        let launches = value
+            .locations
+            .iter()
+            .filter(|site| site.is_launch())
+            .flat_map(|launch| {
+                let ranges = launch.get_launch_ranges();
+                ranges.iter().map(|r| ParaglidingLaunch {
+                    site_type: launch.get_type(),
+                    location: launch.get_location(country.clone()).unwrap(),
+                    direction_degrees_start: r.0,
+                    direction_degrees_stop: r.1,
+                    elevation: launch.altitude.unwrap(),
+                }).collect::<Vec<ParaglidingLaunch>>()
+            })
+            .collect();
+
+        let landings = value
+            .locations
+            .iter()
+            .filter(|site| !site.is_launch())
+            .map(|landing| ParaglidingLanding {
+                location: landing.get_location(country.clone()).unwrap(),
+                elevation: landing.altitude.unwrap(),
+            })
+            .collect();
+
+        ParaglidingSite {
+            name: value.site_name,
+            launches,
+            landings,
+            country: value.site_country,
+            data_source: "DHV".into(),
+        }
+    }
+}
