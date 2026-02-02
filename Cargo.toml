@@ -11,17 +11,27 @@ license = "MIT"
 # general
 
 anyhow = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-quick-xml = { version = "0.31", features = ["serialize"] }
+quick-xml = { version = "0.39", features = ["serialize"] }
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros", "time"] }
 chrono = {version ="0.4", features = ["serde"]}
 
+# integrations
+google-calendar3 = "7.0"
+yup-oauth2 = { version = "12.0", features = ["hyper-rustls"] }
+chrono-tz = "0.10"
+hyper-util = { version = "0.1", features = ["client"] }
+hyper-rustls = "0.27"
+hyper = "1.8"
+http-body-util = "0.1"
+
 # weather
-reqwest = {version = "0.12", features = ["blocking", "json"]}
+reqwest = {version = "0.13", features = ["blocking", "json"]}
 urlencoding = "2.1"
-sunrise = "2.1"
+sunrise = "3.0"
 
 # geo
 haversine = "0.2"
+rustls = { version = "0.23.36", features = ["ring"] }

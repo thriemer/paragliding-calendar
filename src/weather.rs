@@ -47,9 +47,9 @@ pub fn get_sunrise_sunset(location: &Location, date: NaiveDate) -> Result<(DateT
     
     let solar_day = SolarDay::new(coordinates, date);
     
-    let sunrise = solar_day.event_time(SolarEvent::Sunrise);
+    let sunrise = solar_day.event_time(SolarEvent::Sunrise).expect("Expect a sunrise");
     
-    let sunset = solar_day.event_time(SolarEvent::Sunset);
+    let sunset = solar_day.event_time(SolarEvent::Sunset).expect("Expect a sunset");
     
     Ok((sunrise, sunset))
 }
