@@ -3,6 +3,7 @@ use std::{collections::HashMap, fs, path::PathBuf};
 use anyhow::Result;
 use quick_xml::de::from_str;
 use serde::Deserialize;
+use tracing;
 
 use crate::{
     location::Location,
@@ -10,15 +11,15 @@ use crate::{
         ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, ParaglidingSiteProvider, SiteType,
     },
 };
+use tracing::instrument;
 
 pub struct DhvParaglidingSiteProvider {
     sites: Vec<ParaglidingSite>,
 }
 
 impl DhvParaglidingSiteProvider {
+    #[instrument(skip_all)]
     pub fn new(dir: PathBuf) -> anyhow::Result<Self> {
-        let span = tracing::info_span!("Load paragliding sites from directory");
-        let _span = span.enter();
         let paths = fs::read_dir(&dir)?;
         let sites: Vec<ParaglidingSite> = paths
             .filter_map(|p| {
@@ -290,7 +291,7 @@ fn parse_direction_text_to_degrees(text: &str) -> f64 {
     if let Some(deg) = direction_map.get(text.trim()) {
         return *deg;
     } else {
-        println!(
+        tracing::warn!(
             "Cannot find direction for text {}, contains - {}, contains: , {}",
             text,
             text.contains('-'),

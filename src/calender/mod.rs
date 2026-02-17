@@ -3,6 +3,7 @@ use std::fmt::Display;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use google_calendar3::api::{Event, EventDateTime, Scope};
+use tracing;
 
 use crate::calender::google_backend::CalendarHubType;
 
@@ -56,7 +57,7 @@ impl Calendar {
                     };
                     self.lists.push(cl);
                 }
-                Err(err) => println!("WARN: produced error {}", err),
+                Err(err) => tracing::warn!("Failed to fetch calendar: {}", err),
             }
         }
         Ok(())
@@ -69,13 +70,13 @@ impl Calendar {
     pub fn remove_calendar_list(&mut self, name: &str) {
         self.lists.retain(|f| f.name != name);
         for n in &self.lists {
-            println!("{}", n.name);
+            tracing::debug!("Calendar list: {}", n.name);
         }
     }
 
     pub async fn set_calendar_entries(&self, name: &str, events: Vec<CalendarEvent>) -> Result<()> {
         if let Some(id) = self.get_id_from_name(name).await {
-            println!("Found calendar {} for name {}", id, name);
+            tracing::info!("Found calendar {} for name {}", id, name);
             if let Err(e) = self
                 .hub
                 .calendars()
@@ -84,7 +85,7 @@ impl Calendar {
                 .doit()
                 .await
             {
-                println!("WARN {} not found. Error {}", name, e);
+                tracing::warn!("Failed to delete calendar {}: {}", name, e);
             }
         }
         let mut cal = google_calendar3::api::Calendar::default();
@@ -136,9 +137,9 @@ impl Calendar {
 
     pub fn print_events(&self) {
         for list in &self.lists {
-            println!("Calendar: {}", list.name);
+            tracing::debug!("Calendar: {}", list.name);
             for event in &list.events {
-                println!("{}", event);
+                tracing::debug!("{}", event);
             }
         }
     }

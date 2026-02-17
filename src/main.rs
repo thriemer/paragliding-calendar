@@ -5,7 +5,7 @@ use chrono::{Duration, Utc};
 use futures::{StreamExt, future, stream};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
-use tracing::{Instrument, instrument};
+use tracing::instrument;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
@@ -55,32 +55,67 @@ async fn flying_sites_with_weather(
 
     let mut result = vec![];
 
-    for (site, distance) in nearby_sites.iter() {
-        // Get weather forecast for the site's first launch location
+    for (site, _distance) in nearby_sites.iter() {
         if let Some(launch) = site.launches.first() {
-            if let Ok(forecast) = weather::open_meteo::get_forecast(launch.location.clone()).await {
-                let evaluation = evaluate_site(site, &forecast);
-                result.push((evaluation, site.clone()));
+            match weather::open_meteo::get_forecast(launch.location.clone()).await {
+                Ok(forecast) => {
+                    let evaluation = evaluate_site(site, &forecast);
+                    result.push((evaluation, site.clone()));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        site = %site.name,
+                        "Failed to get weather forecast: {}",
+                        e
+                    );
+                }
             }
         }
     }
     result
 }
 
+#[instrument()]
 async fn create_calender_entries() -> Result<()> {
-    let location = weather::open_meteo::geocode("Gornau/Erz").await.unwrap()[0].clone();
+    let location = match weather::open_meteo::geocode("Gornau/Erz").await {
+        Ok(loc) => loc,
+        Err(e) => {
+            tracing::error!("Failed to geocode location: {}", e);
+            return Err(e.into());
+        }
+    };
+    let location = location.into_iter().next().expect("No location found");
     let calender_name = "Paragliding";
 
-    let mut cal = GoogleCalendar::new().await?;
-    cal.create_calendar(calender_name).await?;
+    let mut cal = match GoogleCalendar::new().await {
+        Ok(cal) => cal,
+        Err(e) => {
+            tracing::error!("Failed to create Google Calendar: {}", e);
+            return Err(e);
+        }
+    };
+    if let Err(e) = cal.create_calendar(calender_name).await {
+        tracing::error!("Failed to create calendar {}: {}", calender_name, e);
+        return Err(e);
+    }
 
-    let mut others_name = cal.get_calendar_names().await?;
+    let others_name = match cal.get_calendar_names().await {
+        Ok(names) => names,
+        Err(e) => {
+            tracing::error!("Failed to get calendar names: {}", e);
+            return Err(e);
+        }
+    };
+    let mut others_name = others_name;
     others_name.retain(|n| n != calender_name);
     tracing::info!("Found calendars {:?}", others_name);
 
     let sites = flying_sites_with_weather(&location).await;
 
-    cal.clear_calendar(calender_name).await?;
+    if let Err(e) = cal.clear_calendar(calender_name).await {
+        tracing::error!("Failed to clear calendar {}: {}", calender_name, e);
+        return Err(e);
+    }
     let mut event_counter = 0;
 
     for (eval, site) in sites {
@@ -155,7 +190,9 @@ async fn main() -> Result<()> {
         .expect("Failed to install rustls crypto provider");
 
     cache::init("./cache")?;
-    let span = tracing::info_span!("Creating calendar entries");
-    create_calender_entries().instrument(span).await?;
+    if let Err(e) = create_calender_entries().await {
+        tracing::error!("Failed to create calendar entries: {}", e);
+        return Err(e);
+    }
     Ok(())
 }
