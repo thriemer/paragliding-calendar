@@ -1,7 +1,38 @@
+use crate::location::Location;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use chrono::{NaiveDate, NaiveTime};
 use serde::{Deserialize, Serialize};
+use sunrise::{Coordinates, SolarDay, SolarEvent};
 
-use crate::models::Location;
+pub mod open_meteo;
+
+pub fn get_sunrise_sunset(
+    location: &Location,
+    date: NaiveDate,
+) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
+    let coordinates =
+        Coordinates::new(location.latitude, location.longitude).with_context(|| {
+            format!(
+                "Invalid coordinates: lat={}, lng={}",
+                location.latitude, location.longitude
+            )
+        })?;
+
+    let solar_day = SolarDay::new(coordinates, date);
+
+    let sunrise = solar_day.event_time(SolarEvent::Sunrise).unwrap_or(
+        date.and_time(NaiveTime::from_hms_opt(6, 0, 0).unwrap())
+            .and_utc(),
+    );
+
+    let sunset = solar_day.event_time(SolarEvent::Sunset).unwrap_or(
+        date.and_time(NaiveTime::from_hms_opt(19, 0, 0).unwrap())
+            .and_utc(),
+    );
+
+    Ok((sunrise, sunset))
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WeatherForecast {

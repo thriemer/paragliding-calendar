@@ -1,34 +1,62 @@
-use crate::models::{weather::WeatherForecast, Location, WeatherData};
-use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDate, Utc};
-use sunrise::{Coordinates, SolarDay, SolarEvent};
+use std::time::Duration;
 
-pub fn get_forecast(location: Location) -> Result<WeatherForecast> {
+use crate::{cache, location::Location, weather::WeatherForecast};
+use anyhow::{Context, Result};
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+use rand::{Rng, RngExt};
+use sunrise::{Coordinates, SolarDay, SolarEvent};
+use tracing::instrument;
+
+#[instrument()]
+pub async fn get_forecast(source: Location) -> Result<WeatherForecast> {
+    let key = format!("weather_for_{}", source.to_key());
+
+    if let Some(cached) = cache::get::<WeatherForecast>(&key).await? {
+        return Ok(cached);
+    }
+
+    let seconds = get_forecast_raw(source.clone()).await?;
+    let jitter: f32 = rand::rng().random_range(0.9..1.1);
+    cache::put(
+        &key,
+        seconds.clone(),
+        Duration::from_hours((6f32 * jitter) as u64),
+    )
+    .await?;
+    tracing::info!("Weather fetch for {} was successful.", source.to_key());
+    Ok(seconds)
+}
+
+async fn get_forecast_raw(location: Location) -> Result<WeatherForecast> {
     let url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&hourly=temperature_2m,windspeed_10m,winddirection_10m,windgusts_10m,precipitation,cloudcover,surface_pressure,visibility,weathercode&timezone=auto&forecast_days=7&wind_speed_unit=ms", location.latitude, location.longitude
+        "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&hourly=temperature_2m,windspeed_10m,winddirection_10m,windgusts_10m,precipitation,cloudcover,surface_pressure,visibility,weathercode&timezone=auto&forecast_days=7&wind_speed_unit=ms",
+        location.latitude, location.longitude
     );
 
-    let response = reqwest::blocking::get(url)?;
+    let response = reqwest::get(url).await?;
 
     let forecast_response: openmeteo::ForecastResponse = response
         .json()
+        .await
         .with_context(|| "Failed to parse OpenMeteo forecast response")?;
 
     let forecast = WeatherForecast::from_openmeteo(&forecast_response, location);
     Ok(forecast)
 }
 
-pub fn geocode(location_name: &str) -> Result<Vec<Location>> {
+#[instrument()]
+pub async fn geocode(location_name: &str) -> Result<Vec<Location>> {
     // OpenMeteo geocoding API (no API key required)
     let url = format!(
         "https://geocoding-api.open-meteo.com/v1/search?name={}&count=5&language=en&format=json",
         urlencoding::encode(location_name)
     );
 
-    let response = reqwest::blocking::get(url)?;
+    let response = reqwest::get(url).await?;
 
     let openmeteo_response: openmeteo::GeocodingResponse = response
         .json()
+        .await
         .with_context(|| "Failed to parse OpenMeteo geocoding response")?;
 
     // Convert OpenMeteo results to our existing GeocodingResult format
@@ -38,25 +66,21 @@ pub fn geocode(location_name: &str) -> Result<Vec<Location>> {
         .into_iter()
         .map(|geocoding_result| geocoding_result.into())
         .collect();
+
+    tracing::info!(
+        "Geocoding found {} results for {}.",
+        geocoding_results.len(),
+        location_name
+    );
     Ok(geocoding_results)
 }
 
-pub fn get_sunrise_sunset(location: &Location, date: NaiveDate) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
-    let coordinates = Coordinates::new(location.latitude, location.longitude)
-        .with_context(|| format!("Invalid coordinates: lat={}, lng={}", location.latitude, location.longitude))?;
-    
-    let solar_day = SolarDay::new(coordinates, date);
-    
-    let sunrise = solar_day.event_time(SolarEvent::Sunrise).expect("Expect a sunrise");
-    
-    let sunset = solar_day.event_time(SolarEvent::Sunset).expect("Expect a sunset");
-    
-    Ok((sunrise, sunset))
-}
 
 /// `OpenMeteo` API response structures and conversion utilities
 mod openmeteo {
-    use super::{Location, WeatherData, WeatherForecast};
+    use crate::weather::WeatherData;
+
+    use super::{Location, WeatherForecast};
     use chrono::Utc;
     use serde::Deserialize;
 
@@ -150,9 +174,14 @@ mod openmeteo {
         pub timezone: Option<String>,
     }
 
-    impl Into<Location> for GeocodingResult{
+    impl Into<Location> for GeocodingResult {
         fn into(self) -> Location {
-            Location { latitude: self.latitude, longitude: self.longitude, name: self.name, country: self.country.unwrap_or("Unknown".into()) }
+            Location {
+                latitude: self.latitude,
+                longitude: self.longitude,
+                name: self.name,
+                country: self.country.unwrap_or("Unknown".into()),
+            }
         }
     }
 
@@ -197,7 +226,6 @@ mod openmeteo {
         /// Create forecast from `OpenMeteo` API response
         #[must_use]
         pub fn from_openmeteo(response: &ForecastResponse, location: Location) -> Self {
-
             let mut forecasts = Vec::new();
 
             // Process hourly data if available

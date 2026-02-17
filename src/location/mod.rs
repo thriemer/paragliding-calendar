@@ -40,4 +40,11 @@ impl Location {
         };
         distance(from_haversine, to_haversine, Units::Kilometers)
     }
+
+    pub fn to_key(&self) -> String {
+        // Round to 6 decimal places (~0.1 meter precision)
+        let lat = (self.latitude * 1_000_000.0).round() as i64;
+        let lon = (self.longitude * 1_000_000.0).round() as i64;
+        format!("{}_{}_{}_{}", lat, lon, self.name, self.country)
+    }
 }

@@ -16,7 +16,15 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 quick-xml = { version = "0.39", features = ["serialize"] }
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros", "time"] }
+futures = "0.3"
 chrono = {version ="0.4", features = ["serde"]}
+rand = "0.10"
+tracing = {version = "0.1", features = ["log"]}
+tracing-subscriber = {version =  "0.3", features = ["env-filter"]}
+
+# cache
+postcard = {version="1.1", features = ["use-std"]}
+fjall = "3.0"
 
 # integrations
 google-calendar3 = "7.0"
@@ -26,12 +34,17 @@ hyper-util = { version = "0.1", features = ["client"] }
 hyper-rustls = "0.27"
 hyper = "1.8"
 http-body-util = "0.1"
+rustls = { version = "0.23.36", features = ["ring"] }
 
 # weather
-reqwest = {version = "0.13", features = ["blocking", "json"]}
+reqwest = {version = "0.13", features = [ "json"]}
+reqwest-middleware = "0.5"
+reqwest-retry = "0.9"
 urlencoding = "2.1"
 sunrise = "3.0"
 
 # geo
 haversine = "0.2"
-rustls = { version = "0.23.36", features = ["ring"] }
+
+#dev 
+rstest = "0.26"

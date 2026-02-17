@@ -1,10 +1,94 @@
 use anyhow::Result;
 use quick_xml::de::from_str;
 use serde::Deserialize;
-use std::path::Path;
+use std::path::PathBuf;
 use std::{collections::HashMap, fs};
 
-use crate::models::{Location, ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, SiteType};
+use crate::location::Location;
+use crate::paragliding::{
+    ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, ParaglidingSiteProvider, SiteType,
+};
+
+pub struct DhvParaglidingSiteProvider {
+    sites: Vec<ParaglidingSite>,
+}
+
+impl DhvParaglidingSiteProvider {
+    pub fn new(dir: PathBuf) -> anyhow::Result<Self> {
+        let span = tracing::info_span!("Load paragliding sites from directory");
+        let _span = span.enter();
+        let paths = fs::read_dir(&dir)?;
+        let sites: Vec<ParaglidingSite> = paths
+            .filter_map(|p| {
+                let path = match p {
+                    Ok(path) => path,
+                    Err(err) => {
+                        tracing::warn!(
+                            "Error while reading directory {:?}. load file. {:?}",
+                            dir,
+                            err
+                        );
+                        return None;
+                    }
+                };
+
+                let dhv_sites: anyhow::Result<DHVXml> = load_sites(path.path());
+                match dhv_sites {
+                    Ok(dhv_xml) => Some(dhv_xml.flying_sites.sites),
+                    Err(err) => {
+                        tracing::warn!("Error while loading flying sites. {:?}", err);
+                        None
+                    }
+                }
+            })
+            .flatten()
+            .map(|dhv| dhv.into())
+            .collect();
+        tracing::info!("Loaded {} flying sites.", sites.len());
+        Ok(DhvParaglidingSiteProvider { sites })
+    }
+}
+
+fn load_sites(xml_path: PathBuf) -> anyhow::Result<DHVXml> {
+    let xml_content = fs::read_to_string(xml_path)?;
+    let dhv_xml: DHVXml = from_str(&xml_content)?;
+    Ok(dhv_xml)
+}
+
+impl ParaglidingSiteProvider for DhvParaglidingSiteProvider {
+    async fn fetch_launches_within_radius(
+        &self,
+        center: &Location,
+        radius_km: f64,
+    ) -> Vec<(ParaglidingSite, f64)> {
+        let mut results = Vec::new();
+
+        for site in &self.sites {
+            // Find the closest launch to the center point
+            let mut min_distance = f64::INFINITY;
+
+            for launch in &site.launches {
+                let distance = center.distance_to(&launch.location);
+                if distance < min_distance {
+                    min_distance = distance;
+                }
+            }
+
+            // Include site if any launch is within radius
+            if min_distance <= radius_km {
+                results.push((site.clone(), min_distance));
+            }
+        }
+
+        // Sort by distance (closest first)
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        results
+    }
+
+    async fn fetch_all_sites(&self) -> Vec<ParaglidingSite> {
+        self.sites.clone()
+    }
+}
 
 /// DHV XML structure for deserialization
 #[derive(Debug, Deserialize)]
@@ -214,18 +298,6 @@ fn parse_direction_text_to_degrees(text: &str) -> f64 {
     }
 }
 
-pub fn load_sites<T: AsRef<Path>>(xml_path: T) -> Vec<ParaglidingSite> {
-    let xml_path = xml_path.as_ref();
-    let xml_content = fs::read_to_string(xml_path).unwrap();
-    let dhv_xml: DHVXml = from_str(&xml_content).unwrap();
-    dhv_xml
-        .flying_sites
-        .sites
-        .into_iter()
-        .map(|dhv| dhv.into())
-        .collect()
-}
-
 impl From<DHVFlyingSite> for ParaglidingSite {
     fn from(value: DHVFlyingSite) -> Self {
         let country = value.site_country.clone().unwrap();
@@ -235,13 +307,16 @@ impl From<DHVFlyingSite> for ParaglidingSite {
             .filter(|site| site.is_launch())
             .flat_map(|launch| {
                 let ranges = launch.get_launch_ranges();
-                ranges.iter().map(|r| ParaglidingLaunch {
-                    site_type: launch.get_type(),
-                    location: launch.get_location(country.clone()).unwrap(),
-                    direction_degrees_start: r.0,
-                    direction_degrees_stop: r.1,
-                    elevation: launch.altitude.unwrap(),
-                }).collect::<Vec<ParaglidingLaunch>>()
+                ranges
+                    .iter()
+                    .map(|r| ParaglidingLaunch {
+                        site_type: launch.get_type(),
+                        location: launch.get_location(country.clone()).unwrap(),
+                        direction_degrees_start: r.0,
+                        direction_degrees_stop: r.1,
+                        elevation: launch.altitude.unwrap(),
+                    })
+                    .collect::<Vec<ParaglidingLaunch>>()
             })
             .collect();
 
