@@ -1,8 +1,12 @@
-use crate::paragliding::{ParaglidingLaunch, ParaglidingSite};
-use crate::weather::{self, WeatherData, WeatherForecast};
-use chrono::{DateTime, Duration, NaiveDate, Timelike, Utc};
 use std::collections::HashMap;
+
+use chrono::{DateTime, Duration, NaiveDate, Timelike, Utc};
 use sunrise::{Coordinates, SolarDay};
+
+use crate::{
+    paragliding::{ParaglidingLaunch, ParaglidingSite},
+    weather::{self, WeatherData, WeatherForecast},
+};
 
 #[derive(Debug, Clone)]
 pub struct HourlyScore {

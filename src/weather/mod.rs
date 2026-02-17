@@ -1,9 +1,9 @@
-use crate::location::Location;
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
-use chrono::{NaiveDate, NaiveTime};
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use sunrise::{Coordinates, SolarDay, SolarEvent};
+
+use crate::location::Location;
 
 pub mod open_meteo;
 

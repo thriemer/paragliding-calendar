@@ -1,3 +1,9 @@
+use std::{
+    env,
+    hash::{DefaultHasher, Hash},
+    time::Duration,
+};
+
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, TimeZone, Utc, Weekday};
 use google_calendar3::{
@@ -6,11 +12,6 @@ use google_calendar3::{
 };
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
-use std::{
-    env,
-    hash::{DefaultHasher, Hash},
-    time::Duration,
-};
 use tracing::instrument;
 use yup_oauth2::{ApplicationSecret, InstalledFlowAuthenticator, InstalledFlowReturnMethod};
 

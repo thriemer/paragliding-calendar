@@ -1,11 +1,12 @@
 use std::time::Duration;
 
-use crate::{cache, location::Location, weather::WeatherForecast};
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use rand::{Rng, RngExt};
 use sunrise::{Coordinates, SolarDay, SolarEvent};
 use tracing::instrument;
+
+use crate::{cache, location::Location, weather::WeatherForecast};
 
 #[instrument()]
 pub async fn get_forecast(source: Location) -> Result<WeatherForecast> {
@@ -75,14 +76,13 @@ pub async fn geocode(location_name: &str) -> Result<Vec<Location>> {
     Ok(geocoding_results)
 }
 
-
 /// `OpenMeteo` API response structures and conversion utilities
 mod openmeteo {
-    use crate::weather::WeatherData;
-
-    use super::{Location, WeatherForecast};
     use chrono::Utc;
     use serde::Deserialize;
+
+    use super::{Location, WeatherForecast};
+    use crate::weather::WeatherData;
 
     /// Current weather and forecast response from `OpenMeteo` API
     #[derive(Debug, Deserialize)]

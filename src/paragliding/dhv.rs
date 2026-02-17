@@ -1,12 +1,14 @@
+use std::{collections::HashMap, fs, path::PathBuf};
+
 use anyhow::Result;
 use quick_xml::de::from_str;
 use serde::Deserialize;
-use std::path::PathBuf;
-use std::{collections::HashMap, fs};
 
-use crate::location::Location;
-use crate::paragliding::{
-    ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, ParaglidingSiteProvider, SiteType,
+use crate::{
+    location::Location,
+    paragliding::{
+        ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, ParaglidingSiteProvider, SiteType,
+    },
 };
 
 pub struct DhvParaglidingSiteProvider {

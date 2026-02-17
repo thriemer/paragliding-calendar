@@ -1,18 +1,21 @@
-use crate::calender::google_backend::GoogleCalendar;
-use crate::calender::{CalendarEvent, CalendarProvider};
-use crate::location::Location;
-use crate::paragliding::site_evaluator::{HourlyScore, SiteEvaluationResult, evaluate_site};
-use crate::paragliding::{ParaglidingSite, ParaglidingSiteProvider, dhv};
+use std::sync::LazyLock;
+
 use anyhow::Result;
 use chrono::{Duration, Utc};
 use futures::{StreamExt, future, stream};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
-use std::sync::LazyLock;
 use tracing::{Instrument, instrument};
-use tracing_subscriber::fmt;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
+
+use crate::{
+    calender::{CalendarEvent, CalendarProvider, google_backend::GoogleCalendar},
+    location::Location,
+    paragliding::{
+        ParaglidingSite, ParaglidingSiteProvider, dhv,
+        site_evaluator::{HourlyScore, SiteEvaluationResult, evaluate_site},
+    },
+};
 
 mod cache;
 mod calender;

@@ -1,12 +1,13 @@
+use std::{
+    fmt::Debug,
+    path::Path,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
 use anyhow::{Result, anyhow};
 use fjall::Keyspace;
-use serde::Deserialize;
-use serde::{Serialize, de::DeserializeOwned};
-use std::fmt::Debug;
-use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::OnceCell;
-use tokio::task;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use tokio::{sync::OnceCell, task};
 
 static GLOBAL_CACHE: OnceCell<PersistentCache> = OnceCell::const_new();
 
@@ -111,7 +112,11 @@ fn get_cache() -> &'static PersistentCache {
 }
 
 // Public, ergonomic API endpoints that use the global cache.
-pub async fn put<T: Serialize + Send + Debug + 'static>(key: &str, value: T, ttl: Duration) -> Result<()> {
+pub async fn put<T: Serialize + Send + Debug + 'static>(
+    key: &str,
+    value: T,
+    ttl: Duration,
+) -> Result<()> {
     get_cache().put(key, value, ttl).await
 }
 
