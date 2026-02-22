@@ -17,12 +17,14 @@ use crate::{
     },
 };
 
+mod api;
 mod cache;
 mod calender;
 mod location;
 mod paragliding;
 mod routing;
 mod weather;
+mod web;
 
 static API_CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
     let retry_policy = ExponentialBackoff::builder()
@@ -194,6 +196,13 @@ async fn main() -> Result<()> {
         .expect("Failed to install rustls crypto provider");
 
     cache::init("./cache")?;
+
+    let args: Vec<String> = std::env::args().collect();
+    if args.contains(&"--serve".to_string()) || args.contains(&"-s".to_string()) {
+        web::run(8080).await;
+        return Ok(());
+    }
+
     if let Err(e) = create_calender_entries().await {
         tracing::error!("Failed to create calendar entries: {}", e);
         return Err(e);
