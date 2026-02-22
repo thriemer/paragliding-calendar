@@ -199,7 +199,7 @@ async fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     if args.contains(&"--serve".to_string()) || args.contains(&"-s".to_string()) {
-        web::run(8080).await;
+        web::run(8081).await;
         return Ok(());
     }
 

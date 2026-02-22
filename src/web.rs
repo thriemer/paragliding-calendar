@@ -1,9 +1,6 @@
-use axum::{
-    Router,
-    response::{Html, IntoResponse},
-    routing::get,
-};
+use axum::{Router, routing::get};
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
 
 use crate::api;
 
@@ -14,9 +11,8 @@ pub async fn run(port: u16) {
         .allow_headers(Any);
 
     let app = Router::new()
-        .route("/", get(editor))
-        .route("/index.html", get(editor))
         .nest("/api", api::router())
+        .fallback_service(ServeDir::new("frontend/dist"))
         .layer(cors);
 
     let addr = format!("0.0.0.0:{}", port);
