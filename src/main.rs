@@ -9,7 +9,7 @@ use tracing::instrument;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
-    calender::{CalendarEvent, CalendarProvider, google_backend::GoogleCalendar},
+    calender::{CalendarEvent, CalendarProvider, google::GoogleCalendar},
     location::Location,
     paragliding::{
         ParaglidingSite, ParaglidingSiteProvider, dhv,
@@ -38,19 +38,19 @@ static API_CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
     client
 });
 
-#[instrument()]
+#[instrument(skip_all, fields(location = %location.name))]
 async fn flying_sites_with_weather(
     location: &Location,
 ) -> Vec<(SiteEvaluationResult, ParaglidingSite)> {
-    let provider = dhv::DhvParaglidingSiteProvider::new("dhv_sites".into()).unwrap();
-    // Search for sites within 50km of the location
     let radius_km = 150.0;
+    let provider = dhv::DhvParaglidingSiteProvider::new("dhv_sites".into()).unwrap();
     let nearby_sites = provider
         .fetch_launches_within_radius(location, radius_km)
         .await;
     tracing::info!(
-        "Found {} nearby sites. Fetching weather for all of them",
-        nearby_sites.len()
+        location = %location.name,
+        count = nearby_sites.len(),
+        "Found nearby sites, fetching weather"
     );
 
     let mut result = vec![];
@@ -59,14 +59,16 @@ async fn flying_sites_with_weather(
         if let Some(launch) = site.launches.first() {
             match weather::open_meteo::get_forecast(launch.location.clone()).await {
                 Ok(forecast) => {
-                    let evaluation = evaluate_site(site, &forecast);
+                    let evaluation = evaluate_site(site, &forecast).await;
                     result.push((evaluation, site.clone()));
                 }
                 Err(e) => {
                     tracing::warn!(
                         site = %site.name,
-                        "Failed to get weather forecast: {}",
-                        e
+                        lat = %launch.location.latitude,
+                        lon = %launch.location.longitude,
+                        error = %e,
+                        "Failed to get weather forecast"
                     );
                 }
             }
@@ -108,7 +110,7 @@ async fn create_calender_entries() -> Result<()> {
     };
     let mut others_name = others_name;
     others_name.retain(|n| n != calender_name);
-    tracing::info!("Found calendars {:?}", others_name);
+    tracing::info!(calendars = ?others_name, "Found calendars");
 
     let sites = flying_sites_with_weather(&location).await;
 
@@ -128,7 +130,7 @@ async fn create_calender_entries() -> Result<()> {
                     .iter()
                     .map(async |h| {
                         let h = h.clone();
-                        let recommended = h.score > 50
+                        let recommended = h.is_flyable
                             && !cal
                                 .is_busy(
                                     &others_name,
@@ -156,7 +158,7 @@ async fn create_calender_entries() -> Result<()> {
                     cal.create_event(
                         calender_name,
                         CalendarEvent {
-                            summary: format!("{} - {}", site.name, r.avg_score),
+                            summary: site.name.clone(),
                             start_time: r.start,
                             end_time: r.end,
                             is_all_day: false,
@@ -170,9 +172,9 @@ async fn create_calender_entries() -> Result<()> {
     }
 
     tracing::info!(
-        "Created {} events in calendar {}",
-        event_counter,
-        calender_name
+        event_count = event_counter,
+        calendar = %calender_name,
+        "Created events in calendar"
     );
 
     Ok(())
@@ -185,6 +187,8 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
+    tracing::info!("Starting travelai application");
+
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
@@ -194,5 +198,6 @@ async fn main() -> Result<()> {
         tracing::error!("Failed to create calendar entries: {}", e);
         return Err(e);
     }
+    tracing::info!("Travelai finished successfully");
     Ok(())
 }

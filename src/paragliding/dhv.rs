@@ -59,6 +59,7 @@ fn load_sites(xml_path: PathBuf) -> anyhow::Result<DHVXml> {
 }
 
 impl ParaglidingSiteProvider for DhvParaglidingSiteProvider {
+    #[instrument(skip_all, fields(center_lat = %center.latitude, center_lon = %center.longitude, radius_km = radius_km))]
     async fn fetch_launches_within_radius(
         &self,
         center: &Location,

@@ -8,7 +8,7 @@ use tracing::instrument;
 
 use crate::{cache, location::Location, weather::WeatherForecast};
 
-#[instrument()]
+#[instrument(skip_all, fields(lat = %source.latitude, lon = %source.longitude))]
 pub async fn get_forecast(source: Location) -> Result<WeatherForecast> {
     let key = format!("weather_for_{}", source.to_key());
 
@@ -45,7 +45,7 @@ async fn get_forecast_raw(location: Location) -> Result<WeatherForecast> {
     Ok(forecast)
 }
 
-#[instrument()]
+#[instrument(skip_all, fields(location_name = %location_name))]
 pub async fn geocode(location_name: &str) -> Result<Vec<Location>> {
     // OpenMeteo geocoding API (no API key required)
     let url = format!(

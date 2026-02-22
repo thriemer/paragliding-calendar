@@ -187,6 +187,7 @@ impl CalendarProvider for GoogleCalendar {
         Ok(b)
     }
 
+    #[instrument(skip(self), fields(calendar = %name))]
     async fn clear_calendar(&mut self, name: &str) -> anyhow::Result<()> {
         let calendar_id = self.get_id_for_name(name).await?;
         let (_, list) = self.hub.events().list(&calendar_id).doit().await?;
@@ -204,12 +205,14 @@ impl CalendarProvider for GoogleCalendar {
         Ok(())
     }
 
+    #[instrument(skip(self), fields(calendar = %calendar))]
     async fn create_event(&mut self, calendar: &str, event: CalendarEvent) -> Result<()> {
         let id = self.get_id_for_name(calendar).await?;
         self.hub.events().insert(event.into(), &id).doit().await?;
         Ok(())
     }
 
+    #[instrument(skip(self))]
     async fn get_calendar_names(&self) -> Result<Vec<String>> {
         let lists = self.get_calendar_list().await?;
         let mut names = vec![];
@@ -223,6 +226,7 @@ impl CalendarProvider for GoogleCalendar {
         Ok(names)
     }
 
+    #[instrument(skip(self), fields(calendar = %name))]
     async fn create_calendar(&mut self, name: &str) -> Result<()> {
         if self.get_calendar_names().await?.contains(&name.to_owned()) {
             tracing::info!("Calendar {} already exists, Skipping creation", name);

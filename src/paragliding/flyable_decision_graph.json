@@ -1,0 +1,90 @@
+{
+  "contentType": "application/vnd.gorules.decision",
+  "nodes": [
+    {
+      "type": "inputNode",
+      "content": {
+        "schema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"weather\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"timestamp\": {\n          \"type\": \"string\",\n          \"format\": \"date-time\"\n        },\n        \"temperature\": {\n          \"type\": \"number\"\n        },\n        \"wind_speed_ms\": {\n          \"type\": \"number\"\n        },\n        \"wind_direction\": {\n          \"type\": \"number\"\n        },\n        \"wind_gust_ms\": {\n          \"type\": \"number\"\n        },\n        \"precipitation\": {\n          \"type\": \"number\"\n        },\n        \"cloud_cover\": {\n          \"type\": \"number\"\n        },\n        \"pressure\": {\n          \"type\": \"number\"\n        },\n        \"visibility\": {\n          \"type\": \"number\"\n        },\n        \"description\": {\n          \"type\": \"string\"\n        }\n      }\n    },\n    \"launch\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"site_type\": {\n          \"type\": \"string\"\n        },\n        \"location\": {\n          \"type\": \"object\",\n          \"properties\": {\n            \"latitude\": {\n              \"type\": \"number\"\n            },\n            \"longitude\": {\n              \"type\": \"number\"\n            },\n            \"name\": {\n              \"type\": \"string\"\n            },\n            \"country\": {\n              \"type\": \"string\"\n            }\n          }\n        },\n        \"direction_degrees_start\": {\n          \"type\": \"number\"\n        },\n        \"direction_degrees_stop\": {\n          \"type\": \"number\"\n        },\n        \"elevation\": {\n          \"type\": \"number\"\n        }\n      }\n    }\n  }\n}"
+      },
+      "id": "46d082b6-3c91-49f9-9865-cf9674bd12a6",
+      "name": "LaunchWeather",
+      "position": {
+        "x": 135,
+        "y": 190
+      }
+    },
+    {
+      "type": "outputNode",
+      "content": {
+        "schema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"flyable\": {\n      \"type\": \"boolean\"\n    }\n  }\n}"
+      },
+      "id": "777d9621-7982-4512-bf37-1b0194a196a1",
+      "name": "Flyable",
+      "position": {
+        "x": 1090,
+        "y": 185
+      }
+    },
+    {
+      "type": "expressionNode",
+      "content": {
+        "expressions": [
+          {
+            "id": "a8d2525c-e2d9-480b-a385-3568bbbfc824",
+            "key": "FlyableWindDirection",
+            "value": "launch.direction_degrees_start < launch.direction_degrees_stop ? (launch.direction_degrees_start < weather.wind_direction and weather.wind_direction < launch.direction_degrees_stop) : (launch.direction_degrees_start < weather.wind_direction or weather.wind_direction < launch.direction_degrees_stop)"
+          },
+          {
+            "id": "a687023a-6796-4040-92f1-e86f3a58dfd5",
+            "key": "FlyableGusts",
+            "value": "weather.wind_gust_ms < 40/3.6"
+          },
+          {
+            "id": "ac642251-e862-4c90-b4d5-5bc32c1a0136",
+            "key": "FlyableWind",
+            "value": "weather.wind_speed_ms < 25/3.6"
+          },
+          {
+            "id": "4f01c9c6-2cdc-4694-9c2e-f6c50cb89458",
+            "key": "NoRain",
+            "value": "weather.precipitation == 0"
+          },
+          {
+            "id": "450a9cc5-2947-4356-aefe-3294ae2f7439",
+            "key": "IsMountainStart",
+            "value": "launch.site_type == \"Hang\""
+          },
+          {
+            "id": "640162b7-d9b1-4d3e-988a-0f31ae27dff2",
+            "key": "flyable",
+            "value": "$.FlyableGusts and $.FlyableWind and $.FlyableWindDirection and $.NoRain and $.IsMountainStart"
+          }
+        ],
+        "passThrough": false,
+        "inputField": null,
+        "outputPath": null,
+        "executionMode": "single"
+      },
+      "id": "f9039a83-c2d4-4ced-8b6f-15ad49d544fe",
+      "name": "IsFlyable",
+      "position": {
+        "x": 540,
+        "y": 190
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "0715161e-553f-430e-889d-121ce1e4a7e4",
+      "sourceId": "46d082b6-3c91-49f9-9865-cf9674bd12a6",
+      "type": "edge",
+      "targetId": "f9039a83-c2d4-4ced-8b6f-15ad49d544fe"
+    },
+    {
+      "id": "4f6e3396-a248-458b-8ba4-378115ad33fb",
+      "sourceId": "f9039a83-c2d4-4ced-8b6f-15ad49d544fe",
+      "type": "edge",
+      "targetId": "777d9621-7982-4512-bf37-1b0194a196a1"
+    }
+  ]
+}
