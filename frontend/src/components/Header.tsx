@@ -1,4 +1,5 @@
 import { FC } from "react";
+import styles from "./Header.module.css";
 
 interface HeaderProps {
   onLoad: () => void;
@@ -9,8 +10,8 @@ interface HeaderProps {
 
 export const Header: FC<HeaderProps> = ({ onLoad, onSave, saving, onBack }) => {
   return (
-    <header className="header">
-      <div className="header-left">
+    <header className={styles.header}>
+      <div className={styles.headerLeft}>
         {onBack && (
           <button onClick={onBack} className="btn btn-back">
             ← Back
@@ -18,7 +19,7 @@ export const Header: FC<HeaderProps> = ({ onLoad, onSave, saving, onBack }) => {
         )}
         <h2>Flyable Decision Rule Editor</h2>
       </div>
-      <div className="header-actions">
+      <div className={styles.headerActions}>
         <button onClick={onLoad} className="btn" disabled={saving}>
           Load
         </button>

@@ -4,6 +4,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { ApiSite } from "../hooks/useSites";
 import { Legend } from "./Legend";
+import styles from "./SitesMap.module.css";
 
 const fixLeafletIcon = () => {
   // @ts-ignore
@@ -149,7 +150,7 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange }: Sites
   const mapCenter = mapView?.center ?? center;
 
   return (
-    <div style={{ position: "relative", height: "100%", width: "100%" }}>
+    <div className={styles.mapContainer}>
       <MapContainer center={mapCenter} zoom={mapView?.zoom ?? 6} style={{ height: "100%", width: "100%" }}>
         <MapController onMapViewChange={onMapViewChange} />
         <TileLayer
@@ -176,7 +177,7 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange }: Sites
                     <>
                       <br />
                       <button
-                        className="popup-edit-btn"
+                        className={styles.popupEditBtn}
                         onClick={() => {
                           const site = sites.find((s) => s.name === landing.siteName);
                           if (site) onSiteClick(site);
@@ -211,7 +212,7 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange }: Sites
                       <>
                         <br />
                         <button
-                          className="popup-edit-btn"
+                          className={styles.popupEditBtn}
                           onClick={() => {
                             const site = sites.find((s) => s.name === launch.siteName);
                             if (site) onSiteClick(site);
@@ -246,7 +247,7 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange }: Sites
                     <>
                       <br />
                       <button
-                        className="popup-edit-btn"
+                        className={styles.popupEditBtn}
                         onClick={() => onSiteClick(site)}
                       >
                         Edit

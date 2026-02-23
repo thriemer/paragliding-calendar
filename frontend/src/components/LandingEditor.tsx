@@ -1,4 +1,5 @@
 import { LocationPicker } from "./LocationPicker";
+import styles from "./LandingEditor.module.css";
 
 interface Landing {
   location: { latitude: number; longitude: number; name: string; country: string | null };
@@ -29,12 +30,12 @@ export function LandingEditor({ landing, index, onChange, onRemove }: LandingEdi
   };
 
   return (
-    <div className="item-card">
-      <div className="item-header">
+    <div className={styles.itemCard}>
+      <div className={styles.itemHeader}>
         <span>Landing {index + 1}</span>
         <button className="btn btn-danger btn-small" onClick={() => onRemove(index)}>Remove</button>
       </div>
-      <div className="item-row">
+      <div className={styles.itemRow}>
         <label>Location & Elevation:</label>
         <LocationPicker
           location={landing.location}

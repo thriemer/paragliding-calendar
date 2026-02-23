@@ -1,0 +1,165 @@
+.launchEditor {
+  background: #f5f5f5;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.launchHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  cursor: pointer;
+  background: #e8e8e8;
+  user-select: none;
+}
+
+.launchHeader:hover {
+  background: #ddd;
+}
+
+.launchTitle {
+  flex: 1;
+  font-weight: 600;
+}
+
+.chevron {
+  transition: transform 0.2s;
+  font-size: 10px;
+}
+
+.chevronCollapsed {
+  transform: rotate(0deg);
+}
+
+.chevronNotCollapsed {
+  transform: rotate(90deg);
+}
+
+.launchContent {
+  padding: 12px;
+}
+
+.launchRow {
+  margin-bottom: 12px;
+}
+
+.launchRow:last-child {
+  margin-bottom: 0;
+}
+
+.launchDetails {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.launchField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.launchField label {
+  font-weight: 600;
+  font-size: 12px;
+  color: #666;
+}
+
+.compassField {
+  flex-shrink: 0;
+}
+
+.locationField {
+  flex: 1;
+  min-width: 250px;
+}
+
+.locationInline {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.inlineMapContainer {
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid #ccc;
+  flex-shrink: 0;
+}
+
+.inlineInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inlineCoords {
+  font-family: monospace;
+  font-size: 12px;
+  color: #666;
+}
+
+.inlineInfo label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.inlineInfo span {
+  color: #666;
+}
+
+.inlineInfo input {
+  width: 70px;
+  padding: 4px 6px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.locationDisplay {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.locationCoords {
+  font-family: monospace;
+  font-size: 12px;
+  color: #666;
+}
+
+.locationElevation {
+  font-size: 12px;
+  color: #666;
+  padding: 2px 6px;
+  background: #eee;
+  border-radius: 3px;
+}
+
+.elevationLoading {
+  font-size: 12px;
+  color: #999;
+  font-style: italic;
+}
+
+.compassRose {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.compassRose svg {
+  user-select: none;
+}
+
+.compassLabels {
+  display: flex;
+  gap: 20px;
+  font-size: 12px;
+}

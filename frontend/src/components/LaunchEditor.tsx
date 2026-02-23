@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { CompassRose } from "./CompassRose";
 import { LocationPicker } from "./LocationPicker";
+import styles from "./LaunchEditor.module.css";
 
 interface Launch {
   location: { latitude: number; longitude: number; name: string; country: string | null };
@@ -46,13 +47,13 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
   };
 
   const title = launch.location.name || `Launch ${index + 1}`;
-  const chevronClass = isCollapsed ? "chevron collapsed" : "chevron";
+  const chevronClass = isCollapsed ? `${styles.chevron} ${styles.chevronCollapsed}` : `${styles.chevron} ${styles.chevronNotCollapsed}`;
 
   return (
-    <div className="launch-editor">
-      <div className="launch-header" onClick={() => setIsCollapsed(!isCollapsed)}>
+    <div className={styles.launchEditor}>
+      <div className={styles.launchHeader} onClick={() => setIsCollapsed(!isCollapsed)}>
         <span className={chevronClass}>▶</span>
-        <span className="launch-title">
+        <span className={styles.launchTitle}>
           {title} ({launch.site_type}) - {launch.elevation}m
         </span>
         <button 
@@ -67,9 +68,9 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
       </div>
       
       {!isCollapsed && (
-        <div className="launch-content">
-          <div className="launch-row">
-            <div className="launch-field">
+        <div className={styles.launchContent}>
+          <div className={styles.launchRow}>
+            <div className={styles.launchField}>
               <label>Type:</label>
               <select
                 value={launch.site_type}
@@ -81,8 +82,8 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
             </div>
           </div>
           
-          <div className="launch-row launch-details">
-            <div className="launch-field compass-field">
+          <div className={`${styles.launchRow} ${styles.launchDetails}`}>
+            <div className={`${styles.launchField} ${styles.compassField}`}>
               <label>Direction:</label>
               <CompassRose
                 startDegrees={launch.direction_degrees_start}
@@ -91,7 +92,7 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
               />
             </div>
             
-            <div className="launch-field location-field">
+            <div className={`${styles.launchField} ${styles.locationField}`}>
               <label>Location:</label>
               <LocationPicker
                 location={launch.location}

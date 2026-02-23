@@ -1,0 +1,24 @@
+.header {
+  padding: 10px;
+  background: #1a1a2e;
+  color: white;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header h2 {
+  margin: 0;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.headerActions {
+  display: flex;
+  gap: 10px;
+}

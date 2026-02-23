@@ -1,4 +1,5 @@
 import { ApiSite } from "../hooks/useSites";
+import styles from "./FilterPanel.module.css";
 
 export interface Filters {
   siteType: string;
@@ -20,8 +21,8 @@ export function FilterPanel({ filters, onFilterChange, sites }: FilterPanelProps
   ).sort();
 
   return (
-    <div className="filter-panel">
-      <div className="filter-group">
+    <div className={styles.filterPanel}>
+      <div className={styles.filterGroup}>
         <label>Site Type:</label>
         <select
           value={filters.siteType}

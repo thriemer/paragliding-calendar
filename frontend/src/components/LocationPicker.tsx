@@ -2,6 +2,8 @@ import { useState } from "react";
 import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import styles from "./LocationPicker.module.css";
+import launchStyles from "./LaunchEditor.module.css";
 
 interface LocationPickerProps {
   location: { latitude: number; longitude: number; name: string; country: string | null };
@@ -90,8 +92,8 @@ export function LocationPicker({ location, elevation, onChange, inline = false }
 
   if (inline) {
     return (
-      <div className="location-inline">
-        <div className="inline-map-container">
+      <div className={launchStyles.locationInline}>
+        <div className={launchStyles.inlineMapContainer}>
           <MapContainer
             center={[pickLat, pickLng]}
             zoom={13}
@@ -111,12 +113,12 @@ export function LocationPicker({ location, elevation, onChange, inline = false }
             />
           </MapContainer>
         </div>
-        <div className="inline-info">
-          <span className="inline-coords">{pickLat.toFixed(4)}, {pickLng.toFixed(4)}</span>
+        <div className={launchStyles.inlineInfo}>
+          <span className={launchStyles.inlineCoords}>{pickLat.toFixed(4)}, {pickLng.toFixed(4)}</span>
           <label>
             <span>Elev (m):</span>
             {loadingElevation ? (
-              <span className="elevation-loading">...</span>
+              <span className={launchStyles.elevationLoading}>...</span>
             ) : (
               <input
                 type="number"
@@ -132,11 +134,11 @@ export function LocationPicker({ location, elevation, onChange, inline = false }
 
   if (isPickerOpen) {
     return (
-      <div className="location-picker-modal">
-        <div className="location-picker-content">
+      <div className={styles.locationPickerModal}>
+        <div className={styles.locationPickerContent}>
           <h5>Pick Location on Map</h5>
-          <p className="hint">Click on the map or drag the marker</p>
-          <div className="picker-map">
+          <p className={styles.hint}>Click on the map or drag the marker</p>
+          <div className={styles.pickerMap}>
             <MapContainer
               center={[pickLat, pickLng]}
               zoom={13}
@@ -156,7 +158,7 @@ export function LocationPicker({ location, elevation, onChange, inline = false }
               />
             </MapContainer>
           </div>
-          <div className="picker-inputs">
+          <div className={styles.pickerInputs}>
             <label>
               Latitude:
               <input
@@ -178,7 +180,7 @@ export function LocationPicker({ location, elevation, onChange, inline = false }
             <label>
               Elevation (m):
               {loadingElevation ? (
-                <span className="elevation-loading">Loading...</span>
+                <span className={launchStyles.elevationLoading}>Loading...</span>
               ) : (
                 <input
                   type="number"
@@ -188,7 +190,7 @@ export function LocationPicker({ location, elevation, onChange, inline = false }
               )}
             </label>
           </div>
-          <div className="picker-actions">
+          <div className={styles.pickerActions}>
             <button className="btn btn-small" onClick={handleConfirm}>Confirm</button>
             <button className="btn btn-small btn-cancel" onClick={() => setIsPickerOpen(false)}>Cancel</button>
           </div>
@@ -198,11 +200,11 @@ export function LocationPicker({ location, elevation, onChange, inline = false }
   }
 
   return (
-    <div className="location-display">
-      <span className="location-coords">
+    <div className={launchStyles.locationDisplay}>
+      <span className={launchStyles.locationCoords}>
         {location.latitude.toFixed(4)}, {location.longitude.toFixed(4)}
       </span>
-      <span className="location-elevation">{elevation}m</span>
+      <span className={launchStyles.locationElevation}>{elevation}m</span>
       <button className="btn btn-small" onClick={handleOpenPicker}>Pick on Map</button>
     </div>
   );

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ApiSite } from "../hooks/useSites";
 import { LaunchEditor } from "./LaunchEditor";
 import { LandingEditor } from "./LandingEditor";
+import styles from "./SiteEditor.module.css";
 
 interface SiteEditorProps {
   site: ApiSite;
@@ -85,10 +86,10 @@ export function SiteEditor({ site, onSave, onCancel }: SiteEditorProps) {
   };
 
   return (
-    <div className="site-editor">
+    <div className={styles.siteEditor}>
       <h3>Edit Site</h3>
       
-      <div className="form-group">
+      <div className={styles.formGroup}>
         <label>Site Name:</label>
         <input
           type="text"
@@ -97,7 +98,7 @@ export function SiteEditor({ site, onSave, onCancel }: SiteEditorProps) {
         />
       </div>
       
-      <div className="form-group">
+      <div className={styles.formGroup}>
         <label>Country:</label>
         <input
           type="text"
@@ -106,8 +107,8 @@ export function SiteEditor({ site, onSave, onCancel }: SiteEditorProps) {
         />
       </div>
 
-      <div className="section">
-        <div className="section-header">
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
           <h4>Launches</h4>
           <button className="btn btn-small" onClick={addLaunch}>+ Add</button>
         </div>
@@ -122,8 +123,8 @@ export function SiteEditor({ site, onSave, onCancel }: SiteEditorProps) {
         ))}
       </div>
 
-      <div className="section">
-        <div className="section-header">
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
           <h4>Landings</h4>
           <button className="btn btn-small" onClick={addLanding}>+ Add</button>
         </div>
@@ -138,7 +139,7 @@ export function SiteEditor({ site, onSave, onCancel }: SiteEditorProps) {
         ))}
       </div>
 
-      <div className="actions">
+      <div className={styles.actions}>
         <button className="btn" onClick={handleSave}>Save</button>
         <button className="btn btn-cancel" onClick={onCancel}>Cancel</button>
       </div>

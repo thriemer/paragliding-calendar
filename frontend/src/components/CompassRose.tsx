@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { calculateLargeArc, degreesToRadians } from "../utils/compassUtils";
+import styles from "./LaunchEditor.module.css";
 
 interface CompassRoseProps {
   startDegrees: number;
@@ -54,7 +55,7 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
   const sweepFlag = 1;
 
   return (
-    <div className="compass-rose">
+    <div className={styles.compassRose}>
       <svg 
         width={center * 2} 
         height={center * 2} 
@@ -113,7 +114,7 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
           style={{ cursor: 'grab' }}
         />
       </svg>
-      <div className="compass-labels">
+      <div className={styles.compassLabels}>
         <span style={{ color: '#2196f3' }}>Start: {Math.round(startDegrees)}°</span>
         <span style={{ color: '#f44336' }}>Stop: {Math.round(stopDegrees)}°</span>
       </div>

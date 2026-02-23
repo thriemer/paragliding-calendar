@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import "@gorules/jdm-editor/dist/style.css";
 import "./styles/App.css";
+import styles from "./styles/App.module.css";
 import { JdmConfigProvider, DecisionGraph } from "@gorules/jdm-editor";
 import { useDecisionGraph } from "./hooks/useDecisionGraph";
 import { useSites, ApiSite } from "./hooks/useSites";
@@ -52,9 +53,9 @@ function App() {
   if (screen === "edit") {
     return (
       <JdmConfigProvider>
-        <div className="app">
+        <div className={styles.app}>
           <Header onLoad={load} onSave={save} saving={saving} onBack={() => setScreen("main")} />
-          <div className="editor">
+          <div className={styles.editor}>
             <DecisionGraph value={graph} onChange={setGraph} />
           </div>
         </div>
@@ -63,9 +64,9 @@ function App() {
   }
 
   return (
-    <div className="app">
-      <div className="main-screen">
-        <aside className="side-panel">
+    <div className={styles.app}>
+      <div className={styles.mainScreen}>
+        <aside className={styles.sidePanel}>
           <h2>Menu</h2>
           <button className="btn" onClick={() => setScreen("edit")}>
             Edit Flyable Decision Rule
@@ -78,18 +79,18 @@ function App() {
             />
           )}
         </aside>
-        <main className="main-content">
+        <main className={styles.mainContent}>
           {sitesLoading ? (
             <p>Loading sites...</p>
           ) : (
-            <div className="map-container">
+            <div className={styles.mapContainer}>
               <SitesMap sites={filteredSites} onSiteClick={handleSiteClick} mapView={mapView} onMapViewChange={setMapView} />
             </div>
           )}
         </main>
       </div>
       {selectedSite && (
-        <div className="modal-overlay">
+        <div className={styles.modalOverlay}>
           <SiteEditor
             site={selectedSite}
             onSave={handleSaveSite}
