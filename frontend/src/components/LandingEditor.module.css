@@ -1,87 +1,69 @@
-.itemCard {
+.landingEditor {
   background: #f5f5f5;
-  padding: 12px;
   border-radius: 6px;
   margin-bottom: 12px;
+  overflow: hidden;
 }
 
-.itemHeader {
+.landingHeader {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  gap: 10px;
+  padding: 12px;
+  cursor: pointer;
+  background: #e8e8e8;
+  user-select: none;
+}
+
+.landingHeader:hover {
+  background: #ddd;
+}
+
+.landingTitle {
+  flex: 1;
   font-weight: 600;
 }
 
-.itemRow {
+.chevron {
+  transition: transform 0.2s;
+  font-size: 10px;
+}
+
+.chevronCollapsed {
+  transform: rotate(0deg);
+}
+
+.chevronNotCollapsed {
+  transform: rotate(90deg);
+}
+
+.landingContent {
+  padding: 12px;
+}
+
+.landingRow {
+  margin-bottom: 12px;
+}
+
+.landingRow:last-child {
+  margin-bottom: 0;
+}
+
+.landingField {
   display: flex;
-  gap: 10px;
-  margin-bottom: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.itemRow > label {
-  min-width: 120px;
-  font-weight: 500;
-}
-
-.itemRow.directions {
   flex-direction: column;
-  align-items: flex-start;
+  gap: 6px;
 }
 
-.itemRow select,
-.itemRow input {
-  padding: 6px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-}
-
-.itemRow input[type="number"] {
-  width: 100px;
-}
-
-.itemRow .coords {
+.landingField > label {
+  font-weight: 600;
   font-size: 12px;
   color: #666;
 }
 
-.directionGroup {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.directionGroup label {
-  min-width: 100px;
-  font-weight: 500;
-}
-
-.directionGroup select {
+.landingField input[type="text"] {
   padding: 6px;
   border: 1px solid #ccc;
   border-radius: 4px;
-}
-
-.locationEditor {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  flex: 1;
-}
-
-.locationEditor input {
-  padding: 6px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-}
-
-.locationEditor input[type="text"] {
-  flex: 1;
-  min-width: 120px;
-}
-
-.locationEditor input[type="number"] {
-  width: 100px;
+  font-size: 14px;
 }

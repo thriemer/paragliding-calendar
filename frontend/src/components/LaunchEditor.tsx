@@ -25,8 +25,8 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
     const updated = { ...launch };
     if (field === "site_type") {
       updated.site_type = value;
-    } else if (field === "elevation") {
-      updated.elevation = parseFloat(value) || 0;
+    } else if (field === "name") {
+      updated.location = { ...updated.location, name: value };
     } else if (field === "direction_start") {
       updated.direction_degrees_start = parseFloat(value) || 0;
     } else if (field === "direction_stop") {
@@ -54,7 +54,7 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
       <div className={styles.launchHeader} onClick={() => setIsCollapsed(!isCollapsed)}>
         <span className={chevronClass}>▶</span>
         <span className={styles.launchTitle}>
-          {title} ({launch.site_type}) - {launch.elevation}m
+          {title} ({launch.site_type})
         </span>
         <button 
           className="btn btn-danger btn-small" 
@@ -69,6 +69,18 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
       
       {!isCollapsed && (
         <div className={styles.launchContent}>
+          <div className={styles.launchRow}>
+            <div className={styles.launchField}>
+              <label>Name:</label>
+              <input
+                type="text"
+                value={launch.location.name}
+                onChange={(e) => handleChange("name", e.target.value)}
+                placeholder="Launch name"
+              />
+            </div>
+          </div>
+
           <div className={styles.launchRow}>
             <div className={styles.launchField}>
               <label>Type:</label>
@@ -98,7 +110,6 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
                 location={launch.location}
                 elevation={launch.elevation}
                 onChange={handleLocationChange}
-                inline={true}
               />
             </div>
           </div>

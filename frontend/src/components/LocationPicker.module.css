@@ -1,62 +1,21 @@
-.locationPickerModal {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
+.locationPicker {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 3000;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.locationPickerContent {
-  background: white;
-  padding: 20px;
-  border-radius: 8px;
-  min-width: 300px;
-}
-
-.locationPickerContent h5 {
-  margin: 0 0 10px;
-}
-
-.hint {
-  font-size: 12px;
-  color: #666;
-  margin-bottom: 15px;
-}
-
-.pickerMap {
+.mapContainer {
   border-radius: 4px;
   overflow: hidden;
-  margin-bottom: 15px;
   border: 1px solid #ccc;
 }
 
-.pickerInputs {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-bottom: 15px;
-}
-
-.pickerInputs label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.elevation {
   font-size: 12px;
-  font-weight: 600;
+  color: #666;
 }
 
-.pickerInputs input {
-  padding: 6px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-}
-
-.pickerActions {
-  display: flex;
-  gap: 10px;
+.elevationLoading {
+  font-style: italic;
+  color: #999;
 }

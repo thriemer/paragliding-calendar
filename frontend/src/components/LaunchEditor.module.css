@@ -67,6 +67,20 @@
   color: #666;
 }
 
+.launchField input[type="text"] {
+  padding: 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.launchField select {
+  padding: 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
 .compassField {
   flex-shrink: 0;
 }
