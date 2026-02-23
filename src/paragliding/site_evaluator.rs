@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
-use chrono::{DateTime, Duration, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::Serialize;
-use serde_json::json;
-use sunrise::{Coordinates, SolarDay};
 use zen_engine::{DecisionEngine, model::DecisionContent};
 
 use crate::{

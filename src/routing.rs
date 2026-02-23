@@ -1,7 +1,7 @@
 use std::{env, time::Duration};
 
 use anyhow::{Context, Ok, Result, anyhow};
-use rand::{Rng, RngExt};
+use rand::RngExt;
 use serde::Deserialize;
 use tracing::instrument;
 

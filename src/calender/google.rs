@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, TimeZone, Utc, Weekday};
+use chrono::{DateTime, Datelike, NaiveTime, TimeZone, Utc};
 use google_calendar3::{
     CalendarHub,
     api::{CalendarList, Event, Events, FreeBusyRequest, FreeBusyRequestItem, Scope},
@@ -234,7 +234,7 @@ impl CalendarProvider for GoogleCalendar {
         }
         let mut cal = google_calendar3::api::Calendar::default();
         cal.summary = Some(name.into());
-        let (_, cal) = self
+        let (_, _cal) = self
             .hub
             .calendars()
             .insert(cal)

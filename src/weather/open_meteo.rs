@@ -1,9 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-use rand::{Rng, RngExt};
-use sunrise::{Coordinates, SolarDay, SolarEvent};
+use rand::RngExt;
 use tracing::instrument;
 
 use crate::{cache, location::Location, weather::WeatherForecast};

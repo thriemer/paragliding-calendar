@@ -1,8 +1,8 @@
 use std::sync::LazyLock;
 
 use anyhow::Result;
-use chrono::{Duration, Utc};
-use futures::{StreamExt, future, stream};
+use chrono::Duration;
+use futures::{StreamExt, future};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use tracing::instrument;
@@ -199,7 +199,7 @@ async fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     if args.contains(&"--serve".to_string()) || args.contains(&"-s".to_string()) {
-        web::run(8081).await;
+        web::run(8080).await;
         return Ok(());
     }
 

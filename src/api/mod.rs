@@ -4,7 +4,7 @@ use axum::{
     Router,
     http::StatusCode,
     response::Json,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -94,6 +94,7 @@ impl From<&ParaglidingSite> for ApiSite {
 pub fn router() -> Router {
     Router::new()
         .route("/sites", get(get_sites))
+        .route("/sites", put(update_site))
         .route("/decision-graph", get(get_decision_graph))
         .route("/decision-graph", post(save_decision_graph))
 }
@@ -102,6 +103,18 @@ async fn get_sites() -> Result<Json<Vec<ApiSite>>, StatusCode> {
     let all_sites = SITE_PROVIDER.fetch_all_sites().await;
     let api_sites: Vec<ApiSite> = all_sites.iter().map(ApiSite::from).collect();
     Ok(Json(api_sites))
+}
+
+async fn update_site(Json(site): Json<ApiSite>) -> Result<StatusCode, StatusCode> {
+    let site_json = serde_json::to_string(&site).map_err(|_| StatusCode::BAD_REQUEST)?;
+    cache::put::<String>(
+        &format!("site_{}", site.name),
+        site_json,
+        std::time::Duration::from_secs(365 * 24 * 60 * 60),
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::OK)
 }
 
 async fn get_decision_graph() -> Result<Json<Value>, StatusCode> {

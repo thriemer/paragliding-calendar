@@ -4,7 +4,6 @@ pub mod site_evaluator;
 use serde::{Deserialize, Serialize};
 
 use super::Location;
-use crate::location;
 
 pub trait ParaglidingSiteProvider {
     async fn fetch_all_sites(&self) -> Vec<ParaglidingSite>;
