@@ -32,6 +32,7 @@ const API_URL = "/api/sites";
 export function useSites() {
   const [sites, setSites] = useState<ApiSite[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     fetch(API_URL)
@@ -43,5 +44,16 @@ export function useSites() {
       .catch(console.error);
   }, []);
 
-  return { sites, loading };
+  const refresh = () => {
+    setRefreshing(true);
+    fetch(API_URL)
+      .then((res) => res.json())
+      .then((data) => {
+        setSites(data);
+        setRefreshing(false);
+      })
+      .catch(console.error);
+  };
+
+  return { sites, loading, refreshing, refresh };
 }

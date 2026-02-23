@@ -45,6 +45,12 @@ export function LocationPicker({ location, elevation, onChange, inline = false }
       if (response.ok) {
         const data = await response.json();
         setPickElev(data.elevation);
+        if (inline) {
+          onChange(
+            { ...location, latitude: lat, longitude: lng },
+            data.elevation
+          );
+        }
       }
     } catch (error) {
       console.error("Failed to fetch elevation:", error);

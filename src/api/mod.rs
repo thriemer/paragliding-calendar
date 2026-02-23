@@ -41,7 +41,7 @@ async fn get_elevation(
 static SITE_PROVIDER: LazyLock<dhv::DhvParaglidingSiteProvider> =
     LazyLock::new(|| dhv::DhvParaglidingSiteProvider::new("dhv_sites".into()).unwrap());
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ApiLocation {
     pub latitude: f64,
     pub longitude: f64,
@@ -49,7 +49,7 @@ pub struct ApiLocation {
     pub country: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ApiLaunch {
     pub location: ApiLocation,
     pub direction_degrees_start: f64,
@@ -58,13 +58,13 @@ pub struct ApiLaunch {
     pub site_type: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ApiLanding {
     pub location: ApiLocation,
     pub elevation: f64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ApiSite {
     pub name: String,
     pub country: Option<String>,
@@ -124,15 +124,22 @@ pub fn router() -> Router {
 
 async fn get_sites() -> Result<Json<Vec<ApiSite>>, StatusCode> {
     let all_sites = SITE_PROVIDER.fetch_all_sites().await;
-    let api_sites: Vec<ApiSite> = all_sites.iter().map(ApiSite::from).collect();
+    let mut api_sites: Vec<ApiSite> = all_sites.iter().map(ApiSite::from).collect();
+
+    for site in api_sites.iter_mut() {
+        let cache_key = format!("site_{}", site.name);
+        if let Ok(Some(cached_site)) = cache::get::<ApiSite>(&cache_key).await {
+            *site = cached_site;
+        }
+    }
+
     Ok(Json(api_sites))
 }
 
 async fn update_site(Json(site): Json<ApiSite>) -> Result<StatusCode, StatusCode> {
-    let site_json = serde_json::to_string(&site).map_err(|_| StatusCode::BAD_REQUEST)?;
-    cache::put::<String>(
+    cache::put(
         &format!("site_{}", site.name),
-        site_json,
+        site.clone(),
         std::time::Duration::from_secs(365 * 24 * 60 * 60),
     )
     .await

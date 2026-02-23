@@ -35,18 +35,23 @@ const landingIcon = createColoredIcon("red");
 interface SitesMapProps {
   sites: ApiSite[];
   onSiteClick?: (site: ApiSite) => void;
+  mapView: { center: [number, number]; zoom: number } | null;
+  onMapViewChange: (view: { center: [number, number]; zoom: number }) => void;
 }
 
-function MapController({ onZoomChange }: { onZoomChange: (zoom: number) => void }) {
+function MapController({ onMapViewChange }: { onMapViewChange: (view: { center: [number, number]; zoom: number }) => void }) {
   const map = useMap();
 
   useEffect(() => {
-    onZoomChange(map.getZoom());
+    onMapViewChange({ center: map.getCenter(), zoom: map.getZoom() });
   }, []);
 
   useMapEvents({
     zoomend: () => {
-      onZoomChange(map.getZoom());
+      onMapViewChange({ center: map.getCenter(), zoom: map.getZoom() });
+    },
+    moveend: () => {
+      onMapViewChange({ center: map.getCenter(), zoom: map.getZoom() });
     },
   });
   return null;
@@ -90,8 +95,7 @@ interface LandingData {
   siteCountry: string | null;
 }
 
-export function SitesMap({ sites, onSiteClick }: SitesMapProps) {
-  const [zoom, setZoom] = useState(6);
+export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange }: SitesMapProps) {
 
   const launches: LaunchData[] = sites
     .flatMap((site) =>
@@ -140,12 +144,14 @@ export function SitesMap({ sites, onSiteClick }: SitesMapProps) {
         ]
       : [47.0, 10.0];
 
-  const isZoomedIn = zoom >= 11;
+  const isZoomedIn = mapView ? mapView.zoom >= 11 : false;
+
+  const mapCenter = mapView?.center ?? center;
 
   return (
     <div style={{ position: "relative", height: "100%", width: "100%" }}>
-      <MapContainer center={center} zoom={6} style={{ height: "100%", width: "100%" }}>
-        <MapController onZoomChange={setZoom} />
+      <MapContainer center={mapCenter} zoom={mapView?.zoom ?? 6} style={{ height: "100%", width: "100%" }}>
+        <MapController onMapViewChange={onMapViewChange} />
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"

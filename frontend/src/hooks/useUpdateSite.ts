@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { ApiSite } from "../hooks/useSites";
 
 export function useUpdateSite() {
@@ -12,9 +12,13 @@ export function useUpdateSite() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(site),
       });
+      if (!response.ok) {
+        const text = await response.text();
+        console.error("useUpdateSite: Failed to save site:", text);
+      }
       return response.ok;
     } catch (error) {
-      console.error("Failed to save site:", error);
+      console.error("useUpdateSite: Failed to save site:", error);
       return false;
     } finally {
       setSaving(false);

@@ -16,8 +16,9 @@ function App() {
   const [screen, setScreen] = useState<Screen>("main");
   const [filters, setFilters] = useState<Filters>({ siteType: "" });
   const [selectedSite, setSelectedSite] = useState<ApiSite | null>(null);
+  const [mapView, setMapView] = useState<{ center: [number, number]; zoom: number } | null>(null);
   const { graph, setGraph, loading, saving, load, save } = useDecisionGraph();
-  const { sites, loading: sitesLoading, refresh } = useSites();
+  const { sites, loading: sitesLoading, refreshing, refresh } = useSites();
   const { updateSite } = useUpdateSite();
 
   const filteredSites = useMemo(() => {
@@ -82,7 +83,7 @@ function App() {
             <p>Loading sites...</p>
           ) : (
             <div className="map-container">
-              <SitesMap sites={filteredSites} onSiteClick={handleSiteClick} />
+              <SitesMap sites={filteredSites} onSiteClick={handleSiteClick} mapView={mapView} onMapViewChange={setMapView} />
             </div>
           )}
         </main>
