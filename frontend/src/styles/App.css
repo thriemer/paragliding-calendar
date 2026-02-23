@@ -12,6 +12,16 @@
   margin: 0;
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-back {
+  background: #666;
+}
+
 .header-actions {
   display: flex;
   gap: 10px;
@@ -40,4 +50,34 @@
 
 .editor {
   flex: 1;
+}
+
+.main-screen {
+  display: flex;
+  flex: 1;
+}
+
+.side-panel {
+  width: 250px;
+  background: #1a1a2e;
+  color: white;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.side-panel h2 {
+  margin: 0 0 10px 0;
+  font-size: 1.2rem;
+}
+
+.main-content {
+  flex: 1;
+  padding: 40px;
+  background: #f5f5f5;
+}
+
+.main-content h1 {
+  margin-top: 0;
 }
