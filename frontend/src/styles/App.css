@@ -177,7 +177,8 @@
   background: white;
   padding: 20px;
   border-radius: 8px;
-  max-width: 700px;
+  width: 700px;
+  max-width: 90vw;
   max-height: 85vh;
   overflow-y: auto;
 }
@@ -339,6 +340,128 @@
   background: #555;
 }
 
+.launch-editor {
+  background: #f5f5f5;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.launch-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  cursor: pointer;
+  background: #e8e8e8;
+  user-select: none;
+}
+
+.launch-header:hover {
+  background: #ddd;
+}
+
+.launch-title {
+  flex: 1;
+  font-weight: 600;
+}
+
+.chevron {
+  transition: transform 0.2s;
+  font-size: 10px;
+}
+
+.chevron.collapsed {
+  transform: rotate(0deg);
+}
+
+.chevron:not(.collapsed) {
+  transform: rotate(90deg);
+}
+
+.launch-content {
+  padding: 12px;
+}
+
+.launch-row {
+  margin-bottom: 12px;
+}
+
+.launch-row:last-child {
+  margin-bottom: 0;
+}
+
+.launch-details {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.launch-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.launch-field > label {
+  font-weight: 600;
+  font-size: 12px;
+  color: #666;
+}
+
+.compass-field {
+  flex-shrink: 0;
+}
+
+.location-field {
+  flex: 1;
+  min-width: 250px;
+}
+
+.location-inline {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.inline-map-container {
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid #ccc;
+  flex-shrink: 0;
+}
+
+.inline-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inline-coords {
+  font-family: monospace;
+  font-size: 12px;
+  color: #666;
+}
+
+.inline-info label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.inline-info span {
+  color: #666;
+}
+
+.inline-info input {
+  width: 70px;
+  padding: 4px 6px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
 .compass-rose {
   display: flex;
   flex-direction: column;
@@ -377,6 +500,12 @@
   border-radius: 3px;
 }
 
+.elevation-loading {
+  font-size: 12px;
+  color: #999;
+  font-style: italic;
+}
+
 .location-picker-modal {
   position: fixed;
   top: 0;
@@ -405,6 +534,13 @@
   font-size: 12px;
   color: #666;
   margin-bottom: 15px;
+}
+
+.picker-map {
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 15px;
+  border: 1px solid #ccc;
 }
 
 .picker-inputs {

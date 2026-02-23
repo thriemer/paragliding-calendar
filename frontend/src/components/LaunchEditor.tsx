@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { CompassRose } from "./CompassRose";
 import { LocationPicker } from "./LocationPicker";
 
@@ -17,6 +18,8 @@ interface LaunchEditorProps {
 }
 
 export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditorProps) {
+  const [isCollapsed, setIsCollapsed] = useState(true);
+
   const handleChange = (field: string, value: any) => {
     const updated = { ...launch };
     if (field === "site_type") {
@@ -42,38 +45,64 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
     onChange(index, { ...launch, location, elevation });
   };
 
+  const title = launch.location.name || `Launch ${index + 1}`;
+  const chevronClass = isCollapsed ? "chevron collapsed" : "chevron";
+
   return (
-    <div className="item-card">
-      <div className="item-header">
-        <span>Launch {index + 1}</span>
-        <button className="btn btn-danger btn-small" onClick={() => onRemove(index)}>Remove</button>
-      </div>
-      <div className="item-row">
-        <label>Type:</label>
-        <select
-          value={launch.site_type}
-          onChange={(e) => handleChange("site_type", e.target.value)}
+    <div className="launch-editor">
+      <div className="launch-header" onClick={() => setIsCollapsed(!isCollapsed)}>
+        <span className={chevronClass}>▶</span>
+        <span className="launch-title">
+          {title} ({launch.site_type}) - {launch.elevation}m
+        </span>
+        <button 
+          className="btn btn-danger btn-small" 
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove(index);
+          }}
         >
-          <option value="Hang">Hang</option>
-          <option value="Winch">Winch</option>
-        </select>
+          Remove
+        </button>
       </div>
-      <div className="item-row">
-        <label>Direction:</label>
-        <CompassRose
-          startDegrees={launch.direction_degrees_start}
-          stopDegrees={launch.direction_degrees_stop}
-          onChange={handleDirectionChange}
-        />
-      </div>
-      <div className="item-row">
-        <label>Location & Elevation:</label>
-        <LocationPicker
-          location={launch.location}
-          elevation={launch.elevation}
-          onChange={handleLocationChange}
-        />
-      </div>
+      
+      {!isCollapsed && (
+        <div className="launch-content">
+          <div className="launch-row">
+            <div className="launch-field">
+              <label>Type:</label>
+              <select
+                value={launch.site_type}
+                onChange={(e) => handleChange("site_type", e.target.value)}
+              >
+                <option value="Hang">Hang</option>
+                <option value="Winch">Winch</option>
+              </select>
+            </div>
+          </div>
+          
+          <div className="launch-row launch-details">
+            <div className="launch-field compass-field">
+              <label>Direction:</label>
+              <CompassRose
+                startDegrees={launch.direction_degrees_start}
+                stopDegrees={launch.direction_degrees_stop}
+                onChange={handleDirectionChange}
+              />
+            </div>
+            
+            <div className="launch-field location-field">
+              <label>Location:</label>
+              <LocationPicker
+                location={launch.location}
+                elevation={launch.elevation}
+                onChange={handleLocationChange}
+                inline={true}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

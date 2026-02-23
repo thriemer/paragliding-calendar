@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rand::RngExt;
 use tracing::instrument;
 
@@ -72,6 +72,41 @@ pub async fn geocode(location_name: &str) -> Result<Vec<Location>> {
         location_name
     );
     Ok(geocoding_results)
+}
+
+#[instrument()]
+pub async fn fetch_elevation(latitude: f64, longitude: f64) -> Result<f64> {
+    let rounded_lat = (latitude * 1000.0).round() / 1000.0;
+    let rounded_lon = (longitude * 1000.0).round() / 1000.0;
+    let cache_key = format!("elevation_{}_{}", rounded_lat, rounded_lon);
+
+    if let Some(cached) = cache::get::<f64>(&cache_key).await? {
+        return Ok(cached);
+    }
+
+    let url = format!(
+        "https://api.open-meteo.com/v1/elevation?latitude={}&longitude={}",
+        latitude, longitude
+    );
+
+    let response = reqwest::get(&url).await?;
+
+    let data: serde_json::Value = response.json().await?;
+
+    let elevation = data["elevation"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.as_f64())
+        .ok_or(anyhow!("No elevation provided in response"))?;
+
+    let _ = cache::put(
+        &cache_key,
+        elevation,
+        std::time::Duration::from_secs(365 * 24 * 60 * 60),
+    )
+    .await;
+
+    Ok(elevation)
 }
 
 /// `OpenMeteo` API response structures and conversion utilities

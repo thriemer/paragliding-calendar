@@ -2,6 +2,7 @@ use std::sync::LazyLock;
 
 use axum::{
     Router,
+    extract::Query,
     http::StatusCode,
     response::Json,
     routing::{get, post, put},
@@ -12,9 +13,30 @@ use serde_json::Value;
 use crate::{
     cache,
     paragliding::{ParaglidingSite, ParaglidingSiteProvider, SiteType, dhv},
+    weather::open_meteo,
 };
 
 const CACHE_KEY: &str = "decision_graph";
+
+#[derive(Serialize, Deserialize)]
+pub struct ElevationResponse {
+    pub elevation: f64,
+}
+
+#[derive(Deserialize)]
+pub struct ElevationQuery {
+    latitude: f64,
+    longitude: f64,
+}
+
+async fn get_elevation(
+    Query(query): Query<ElevationQuery>,
+) -> Result<Json<ElevationResponse>, StatusCode> {
+    let elevation = open_meteo::fetch_elevation(query.latitude, query.longitude)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(ElevationResponse { elevation }))
+}
 
 static SITE_PROVIDER: LazyLock<dhv::DhvParaglidingSiteProvider> =
     LazyLock::new(|| dhv::DhvParaglidingSiteProvider::new("dhv_sites".into()).unwrap());
@@ -95,6 +117,7 @@ pub fn router() -> Router {
     Router::new()
         .route("/sites", get(get_sites))
         .route("/sites", put(update_site))
+        .route("/elevation", get(get_elevation))
         .route("/decision-graph", get(get_decision_graph))
         .route("/decision-graph", post(save_decision_graph))
 }
