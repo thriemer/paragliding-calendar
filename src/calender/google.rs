@@ -1,8 +1,4 @@
-use std::{
-    env,
-    hash::{DefaultHasher, Hash},
-    time::Duration,
-};
+use std::{env, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Datelike, NaiveTime, TimeZone, Utc};
@@ -12,8 +8,12 @@ use google_calendar3::{
 };
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::instrument;
 use yup_oauth2::{ApplicationSecret, InstalledFlowAuthenticator, InstalledFlowReturnMethod};
+
+use async_trait::async_trait;
+use yup_oauth2::storage::{TokenInfo, TokenStorage, TokenStorageError};
 
 use crate::{
     cache,
@@ -21,7 +21,45 @@ use crate::{
 };
 pub type CalendarHubType =
     CalendarHub<HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>>;
-use std::hash::Hasher;
+
+struct CalendarTokenStorage;
+
+impl CalendarTokenStorage {
+    fn cache_key(&self, scopes: &[&str]) -> String {
+        let mut hasher = DefaultHasher::new();
+        for scope in scopes {
+            scope.hash(&mut hasher);
+        }
+        //format!("calendar_token:{:x}", hasher.finish())
+        "calendar_token".into()
+    }
+}
+
+#[async_trait]
+impl TokenStorage for CalendarTokenStorage {
+    async fn set(&self, scopes: &[&str], token: TokenInfo) -> Result<(), TokenStorageError> {
+        let key = self.cache_key(scopes);
+
+        cache::put(&key, token, chrono::Duration::days(365).to_std().unwrap())
+            .await
+            .map_err(|e| TokenStorageError::Other(e.to_string().into()))?;
+
+        Ok(())
+    }
+
+    async fn get(&self, scopes: &[&str]) -> Option<TokenInfo> {
+        let key = self.cache_key(scopes);
+
+        let token: Option<TokenInfo> = match cache::get(&key).await {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::warn!("Failed to get calendar token from cache: {}", e);
+                return None;
+            }
+        };
+        token
+    }
+}
 
 pub struct GoogleCalendar {
     hub: CalendarHubType,
@@ -30,7 +68,6 @@ pub struct GoogleCalendar {
 impl GoogleCalendar {
     pub async fn new() -> Result<Self> {
         let secret = load_credentials().await?;
-
         // Build an HTTP client with TLS
         let connector = HttpsConnectorBuilder::new()
             .with_native_roots()
@@ -41,17 +78,23 @@ impl GoogleCalendar {
 
         let hyper_client = Client::builder(TokioExecutor::new()).build(connector);
 
-        // Build the authenticator
+        // Build the authenticator with cache-based token storage
+        let token_storage = CalendarTokenStorage {};
         let auth = InstalledFlowAuthenticator::builder(
             secret.clone(),
             InstalledFlowReturnMethod::HTTPRedirect,
         )
-        .persist_tokens_to_disk("tokens.json")
+        .with_storage(Box::new(token_storage))
+        .force_account_selection(true)
         .build()
         .await
         .context("Failed to create authenticator")?;
         let _token = auth
-            .token(&["https://www.googleapis.com/auth/calendar"])
+            .token(&[
+                "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+                "https://www.googleapis.com/auth/calendar.app.created",
+                "https://www.googleapis.com/auth/calendar.freebusy",
+            ])
             .await
             .context("Failed to acquire token with required scopes")?;
 
@@ -96,7 +139,7 @@ impl GoogleCalendar {
             .hub
             .calendar_list()
             .list()
-            .add_scope(Scope::Full)
+            .add_scope(Scope::CalendarlistReadonly)
             .doit()
             .await?;
         Ok(lists)
@@ -160,6 +203,7 @@ impl CalendarProvider for GoogleCalendar {
                         calendar_expansion_max: None,
                         time_zone: None,
                     })
+                    .add_scope(Scope::Freebusy)
                     .doit()
                     .await?;
 
@@ -190,13 +234,20 @@ impl CalendarProvider for GoogleCalendar {
     #[instrument(skip(self), fields(calendar = %name))]
     async fn clear_calendar(&mut self, name: &str) -> anyhow::Result<()> {
         let calendar_id = self.get_id_for_name(name).await?;
-        let (_, list) = self.hub.events().list(&calendar_id).doit().await?;
+        let (_, list) = self
+            .hub
+            .events()
+            .list(&calendar_id)
+            .add_scope(Scope::AppCreated)
+            .doit()
+            .await?;
         if let Some(events) = list.items {
             for e in events {
                 if let Some(event_id) = e.id {
                     self.hub
                         .events()
                         .delete(&calendar_id, &event_id)
+                        .add_scope(Scope::AppCreated)
                         .doit()
                         .await?;
                 }
@@ -208,7 +259,12 @@ impl CalendarProvider for GoogleCalendar {
     #[instrument(skip(self), fields(calendar = %calendar))]
     async fn create_event(&mut self, calendar: &str, event: CalendarEvent) -> Result<()> {
         let id = self.get_id_for_name(calendar).await?;
-        self.hub.events().insert(event.into(), &id).doit().await?;
+        self.hub
+            .events()
+            .insert(event.into(), &id)
+            .add_scope(Scope::AppCreated)
+            .doit()
+            .await?;
         Ok(())
     }
 
@@ -238,7 +294,7 @@ impl CalendarProvider for GoogleCalendar {
             .hub
             .calendars()
             .insert(cal)
-            .add_scope(Scope::Full)
+            .add_scope(Scope::AppCreated)
             .doit()
             .await?;
         Ok(())
@@ -262,105 +318,4 @@ async fn load_credentials() -> Result<ApplicationSecret> {
         auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
         ..ApplicationSecret::default()
     })
-}
-
-/// Fetch events from primary calendar within time range
-pub async fn fetch_calendar_events(
-    hub: &CalendarHubType,
-    time_min: &DateTime<Utc>,
-    time_max: &DateTime<Utc>,
-    list: &str,
-) -> Result<Vec<CalendarEvent>> {
-    // Get events from primary calendar
-    let result = hub
-        .events()
-        .list(list)
-        .add_scopes(&[
-            Scope::EventReadonly,
-            Scope::Readonly,
-            Scope::EventPublicReadonly,
-        ])
-        .time_min(*time_min)
-        .time_max(*time_max)
-        .single_events(true)
-        .doit()
-        .await?;
-
-    let events_response: Events = result.1;
-    let mut events = Vec::new();
-
-    if let Some(items) = events_response.items {
-        for event in items {
-            // Parse start and end times
-            let (start_time, end_time, is_all_day) = parse_event_times(&event)?;
-
-            // Extract summary (title)
-            let summary = event.summary.unwrap_or_else(|| "No title".to_string());
-
-            // Extract location
-            let location = event.location;
-
-            events.push(CalendarEvent {
-                summary,
-                start_time,
-                end_time,
-                is_all_day,
-                location,
-            });
-        }
-    }
-
-    Ok(events)
-}
-
-/// Parse event start and end times
-fn parse_event_times(event: &Event) -> Result<(DateTime<Utc>, DateTime<Utc>, bool)> {
-    let (start_time, is_all_day) = if let Some(ref start) = event.start {
-        if let Some(ref date_time) = start.date_time {
-            (*date_time, false)
-        } else if let Some(ref naive_date) = start.date {
-            let dt = Utc
-                .with_ymd_and_hms(
-                    naive_date.year(),
-                    naive_date.month(),
-                    naive_date.day(),
-                    0,
-                    0,
-                    0,
-                )
-                .single()
-                .context("Invalid start date")?;
-            (dt, true)
-        } else {
-            anyhow::bail!("Event has no start time");
-        }
-    } else {
-        anyhow::bail!("Event missing start field");
-    };
-
-    let end_time = if let Some(ref end) = event.end {
-        if let Some(ref date_time_str) = end.date_time {
-            *date_time_str
-        } else if let Some(ref naive_date) = end.date {
-            // All-day event
-            let dt = Utc
-                .with_ymd_and_hms(
-                    naive_date.year(),
-                    naive_date.month(),
-                    naive_date.day(),
-                    23,
-                    59,
-                    59,
-                )
-                .single()
-                .context("Invalid end date")?;
-            dt
-        } else {
-            anyhow::bail!("Event has no end time");
-        }
-    } else {
-        anyhow::bail!("Event missing end field");
-    };
-
-    Ok((start_time, end_time, is_all_day))
 }
