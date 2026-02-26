@@ -20,6 +20,7 @@ use crate::{
 mod api;
 mod cache;
 mod calender;
+mod email;
 mod location;
 mod paragliding;
 mod routing;
@@ -103,14 +104,13 @@ async fn create_calender_entries() -> Result<()> {
         return Err(e);
     }
 
-    let others_name = match cal.get_calendar_names().await {
+    let mut others_name = match cal.get_calendar_names().await {
         Ok(names) => names,
         Err(e) => {
             tracing::error!("Failed to get calendar names: {}", e);
             return Err(e);
         }
     };
-    let mut others_name = others_name;
     others_name.retain(|n| n != calender_name);
     tracing::info!(calendars = ?others_name, "Found calendars");
 
@@ -196,6 +196,7 @@ async fn main() -> Result<()> {
         .expect("Failed to install rustls crypto provider");
 
     cache::init("./cache")?;
+    cache::remove("calendar_token").await?;
 
     let args: Vec<String> = std::env::args().collect();
     if args.contains(&"--serve".to_string()) || args.contains(&"-s".to_string()) {

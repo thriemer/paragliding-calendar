@@ -1,4 +1,4 @@
-use std::{env, time::Duration};
+use std::{env, future::Future, pin::Pin, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Datelike, NaiveTime, TimeZone, Utc};
@@ -10,7 +10,10 @@ use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::instrument;
-use yup_oauth2::{ApplicationSecret, InstalledFlowAuthenticator, InstalledFlowReturnMethod};
+use yup_oauth2::{
+    ApplicationSecret, DeviceFlowAuthenticator,
+    authenticator_delegate::{DeviceAuthResponse, DeviceFlowDelegate},
+};
 
 use async_trait::async_trait;
 use yup_oauth2::storage::{TokenInfo, TokenStorage, TokenStorageError};
@@ -18,9 +21,34 @@ use yup_oauth2::storage::{TokenInfo, TokenStorage, TokenStorageError};
 use crate::{
     cache,
     calender::{CalendarEvent, CalendarProvider},
+    email,
 };
+
 pub type CalendarHubType =
     CalendarHub<HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>>;
+
+struct EmailDeviceFlowDelegate;
+
+impl DeviceFlowDelegate for EmailDeviceFlowDelegate {
+    fn present_user_code<'a>(
+        &'a self,
+        device_auth_response: &'a DeviceAuthResponse,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        let verification_uri = device_auth_response.verification_uri.clone();
+        let user_code = device_auth_response.user_code.clone();
+
+        Box::pin(async move {
+            tracing::info!(
+                "Sending device authentication info via email with code: {}",
+                user_code
+            );
+
+            if let Err(e) = email::send_device_auth(&verification_uri, &user_code).await {
+                tracing::error!("Failed to send device auth email: {}", e);
+            }
+        })
+    }
+}
 
 struct CalendarTokenStorage;
 
@@ -174,9 +202,9 @@ impl CalendarProvider for GoogleCalendar {
         // snap start and finish to start/end of the week to reduce requests
         let start_weekday = start.weekday().num_days_from_monday() as u64;
         let end_weekday = end.weekday().num_days_from_monday() as u64;
-        let start = start.date_naive().and_time(NaiveTime::MIN).and_utc()
+        let week_start_datetime = start.date_naive().and_time(NaiveTime::MIN).and_utc()
             - Duration::from_hours(24u64 * start_weekday);
-        let end = end
+        let week_end_datetime = end
             .date_naive()
             .and_time(NaiveTime::from_hms_opt(23, 59, 59).unwrap())
             .and_utc()
@@ -184,8 +212,8 @@ impl CalendarProvider for GoogleCalendar {
 
         let mut hasher = DefaultHasher::new();
         calendars.hash(&mut hasher);
-        start.hash(&mut hasher);
-        end.hash(&mut hasher);
+        week_start_datetime.hash(&mut hasher);
+        week_end_datetime.hash(&mut hasher);
         let cache_key = format!("Calendar_free_busy_hash_{}", hasher.finish());
 
         let busy = {
@@ -196,9 +224,9 @@ impl CalendarProvider for GoogleCalendar {
                     .hub
                     .freebusy()
                     .query(FreeBusyRequest {
-                        items: Some(items),
-                        time_min: Some(start),
-                        time_max: Some(end),
+                        items: Some(items.clone()),
+                        time_min: Some(week_start_datetime),
+                        time_max: Some(week_end_datetime),
                         group_expansion_max: None,
                         calendar_expansion_max: None,
                         time_zone: None,
@@ -212,22 +240,27 @@ impl CalendarProvider for GoogleCalendar {
             }
         };
 
-        let b: bool = busy
-            .calendars
-            .and_then(|calendars| {
-                if let Some(fb) = calendars.get("busy") {
-                    return Some(fb.clone());
-                }
-                None
-            })
-            .and_then(|m| m.busy.clone())
-            .and_then(|v| {
-                Some(
-                    v.iter()
-                        .any(|tp| start < tp.end.unwrap() && end > tp.start.unwrap()),
-                )
-            })
-            .unwrap_or(false);
+        let mut b: bool = false;
+
+        if let Some(freebusy) = busy.calendars {
+            b = items
+                .iter()
+                .filter_map(|i| i.id.clone())
+                .filter_map(|i| {
+                    if let Some(fb) = freebusy.get(&i) {
+                        return fb.busy.clone();
+                    }
+                    None
+                })
+                .flatten()
+                .any(|tp| start < tp.end.unwrap() && end > tp.start.unwrap());
+        }
+        tracing::debug!(
+            "Range from {} - {} is {}",
+            start,
+            end,
+            if b { "busy" } else { "free" }
+        );
         Ok(b)
     }
 
@@ -241,6 +274,7 @@ impl CalendarProvider for GoogleCalendar {
             .add_scope(Scope::AppCreated)
             .doit()
             .await?;
+        let mut counter = 0;
         if let Some(events) = list.items {
             for e in events {
                 if let Some(event_id) = e.id {
@@ -250,9 +284,11 @@ impl CalendarProvider for GoogleCalendar {
                         .add_scope(Scope::AppCreated)
                         .doit()
                         .await?;
+                    counter += 1;
                 }
             }
         }
+        tracing::info!("Cleared {} events", counter);
         Ok(())
     }
 
@@ -290,13 +326,18 @@ impl CalendarProvider for GoogleCalendar {
         }
         let mut cal = google_calendar3::api::Calendar::default();
         cal.summary = Some(name.into());
-        let (_, _cal) = self
+        let (_, cal) = self
             .hub
             .calendars()
             .insert(cal)
             .add_scope(Scope::AppCreated)
             .doit()
             .await?;
+
+        if let Some(id) = cal.id {
+            let key = format!("calendar_name_id_map_{}", name);
+            cache::put(&key, id, Duration::from_hours(24)).await?;
+        }
         Ok(())
     }
 }
