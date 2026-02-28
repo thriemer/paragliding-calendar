@@ -1,4 +1,4 @@
-use std::{env, future::Future, pin::Pin, time::Duration};
+use std::{env, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Datelike, NaiveTime, TimeZone, Utc};
@@ -10,84 +10,15 @@ use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::instrument;
-use yup_oauth2::{
-    ApplicationSecret, DeviceFlowAuthenticator,
-    authenticator_delegate::{DeviceAuthResponse, DeviceFlowDelegate},
-};
-
-use async_trait::async_trait;
-use yup_oauth2::storage::{TokenInfo, TokenStorage, TokenStorageError};
 
 use crate::{
+    auth::{StoredToken, WebFlowAuthenticator, get_redirect_uri},
     cache,
     calender::{CalendarEvent, CalendarProvider},
-    email,
 };
 
 pub type CalendarHubType =
     CalendarHub<HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>>;
-
-struct EmailDeviceFlowDelegate;
-
-impl DeviceFlowDelegate for EmailDeviceFlowDelegate {
-    fn present_user_code<'a>(
-        &'a self,
-        device_auth_response: &'a DeviceAuthResponse,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        let verification_uri = device_auth_response.verification_uri.clone();
-        let user_code = device_auth_response.user_code.clone();
-
-        Box::pin(async move {
-            tracing::info!(
-                "Sending device authentication info via email with code: {}",
-                user_code
-            );
-
-            if let Err(e) = email::send_device_auth(&verification_uri, &user_code).await {
-                tracing::error!("Failed to send device auth email: {}", e);
-            }
-        })
-    }
-}
-
-struct CalendarTokenStorage;
-
-impl CalendarTokenStorage {
-    fn cache_key(&self, scopes: &[&str]) -> String {
-        let mut hasher = DefaultHasher::new();
-        for scope in scopes {
-            scope.hash(&mut hasher);
-        }
-        //format!("calendar_token:{:x}", hasher.finish())
-        "calendar_token".into()
-    }
-}
-
-#[async_trait]
-impl TokenStorage for CalendarTokenStorage {
-    async fn set(&self, scopes: &[&str], token: TokenInfo) -> Result<(), TokenStorageError> {
-        let key = self.cache_key(scopes);
-
-        cache::put(&key, token, chrono::Duration::days(365).to_std().unwrap())
-            .await
-            .map_err(|e| TokenStorageError::Other(e.to_string().into()))?;
-
-        Ok(())
-    }
-
-    async fn get(&self, scopes: &[&str]) -> Option<TokenInfo> {
-        let key = self.cache_key(scopes);
-
-        let token: Option<TokenInfo> = match cache::get(&key).await {
-            Ok(data) => data,
-            Err(e) => {
-                tracing::warn!("Failed to get calendar token from cache: {}", e);
-                return None;
-            }
-        };
-        token
-    }
-}
 
 pub struct GoogleCalendar {
     hub: CalendarHubType,
@@ -95,8 +26,10 @@ pub struct GoogleCalendar {
 
 impl GoogleCalendar {
     pub async fn new() -> Result<Self> {
-        let secret = load_credentials().await?;
-        // Build an HTTP client with TLS
+        // Wait for authentication if needed
+        Self::wait_for_authentication().await?;
+
+        // Build HTTP client
         let connector = HttpsConnectorBuilder::new()
             .with_native_roots()
             .context("Failed to build HTTPS connector")?
@@ -106,29 +39,58 @@ impl GoogleCalendar {
 
         let hyper_client = Client::builder(TokioExecutor::new()).build(connector);
 
-        // Build the authenticator with cache-based token storage
-        let token_storage = CalendarTokenStorage {};
-        let auth = InstalledFlowAuthenticator::builder(
-            secret.clone(),
-            InstalledFlowReturnMethod::HTTPRedirect,
-        )
-        .with_storage(Box::new(token_storage))
-        .force_account_selection(true)
-        .build()
-        .await
-        .context("Failed to create authenticator")?;
-        let _token = auth
-            .token(&[
-                "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
-                "https://www.googleapis.com/auth/calendar.app.created",
-                "https://www.googleapis.com/auth/calendar.freebusy",
-            ])
+        // Get stored token from cache
+        let stored_token = cache::get::<StoredToken>("calendar_token")
             .await
-            .context("Failed to acquire token with required scopes")?;
+            .context("Failed to get token from cache")?
+            .context("No token found after authentication")?;
 
-        // Create Calendar Hub with the hyper_client and the authenticator
+        // Create WebFlowAuthenticator and set the stored token
+        let client_id = env::var("GOOGLE_CLIENT_ID")
+            .or_else(|_| env::var("GOOGLE_CALENDAR_CLIENT_ID"))
+            .context("Missing GOOGLE_CLIENT_ID")?;
+        let client_secret = env::var("GOOGLE_CLIENT_SECRET")
+            .or_else(|_| env::var("GOOGLE_CALENDAR_CLIENT_SECRET"))
+            .context("Missing GOOGLE_CLIENT_SECRET")?;
+        let redirect_uri = get_redirect_uri();
+
+        let auth = WebFlowAuthenticator::new(client_id, client_secret, redirect_uri);
+        auth.set_stored_token(stored_token);
+
         let hub = CalendarHub::new(hyper_client, auth);
         Ok(GoogleCalendar { hub })
+    }
+
+    async fn wait_for_authentication() -> Result<()> {
+        // Check if valid token exists in cache
+        let token: Option<crate::auth::web_flow_authenticator::StoredToken> =
+            match cache::get("calendar_token").await {
+                Ok(Some(token)) => Some(token),
+                _ => None,
+            };
+
+        if let Some(token) = token {
+            if token.expiry > chrono::Utc::now().timestamp() {
+                tracing::info!("Found valid token in cache");
+                return Ok(());
+            }
+        }
+
+        // Need to authenticate - use WebFlowAuthenticator
+        let client_id = env::var("GOOGLE_CLIENT_ID")
+            .or_else(|_| env::var("GOOGLE_CALENDAR_CLIENT_ID"))
+            .context("Missing GOOGLE_CLIENT_ID")?;
+        let client_secret = env::var("GOOGLE_CLIENT_SECRET")
+            .or_else(|_| env::var("GOOGLE_CALENDAR_CLIENT_SECRET"))
+            .context("Missing GOOGLE_CLIENT_SECRET")?;
+        let redirect_uri = get_redirect_uri();
+
+        let auth = crate::auth::WebFlowAuthenticator::new(client_id, client_secret, redirect_uri);
+
+        // This will loop: send email every 2 days until authenticated
+        auth.wait_for_authentication().await?;
+
+        Ok(())
     }
 
     async fn get_id_for_name(&self, name: &str) -> Result<String> {
@@ -340,23 +302,4 @@ impl CalendarProvider for GoogleCalendar {
         }
         Ok(())
     }
-}
-
-/// Load Google API credentials from environment variables
-async fn load_credentials() -> Result<ApplicationSecret> {
-    let client_id = env::var("GOOGLE_CLIENT_ID")
-        .or_else(|_| env::var("GOOGLE_CALENDAR_CLIENT_ID"))
-        .context("Missing GOOGLE_CLIENT_ID environment variable")?;
-
-    let client_secret = env::var("GOOGLE_CLIENT_SECRET")
-        .or_else(|_| env::var("GOOGLE_CALENDAR_CLIENT_SECRET"))
-        .context("Missing GOOGLE_CLIENT_SECRET environment variable")?;
-
-    Ok(ApplicationSecret {
-        client_id,
-        client_secret,
-        token_uri: "https://oauth2.googleapis.com/token".to_string(),
-        auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
-        ..ApplicationSecret::default()
-    })
 }

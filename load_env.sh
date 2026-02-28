@@ -1,62 +1,130 @@
 #!/usr/bin/env bash
 #
-# load-env.sh – Decrypt .env.gpg and print 'export' statements for eval.
+# load-env.sh – Decrypt .env.gpg and print 'export' statements for eval,
+#               or edit the encrypted file in‑place.
 #
 # Usage:
 #   eval "$(./load-env.sh [<encrypted-file>])"
+#   ./load-env.sh --edit [<encrypted-file>]
 #
-# If no file is given, defaults to '.env.gpg' in the current directory.
+# If no file is given, defaults to '.env_enc' in the current directory.
 
 set -euo pipefail
 
-# Use first argument or default file name
-ENCRYPTED_FILE="${1:-.env_enc}"
+DEFAULT_FILE=".env_enc"
+EDIT_MODE=false
+FILE=""
 
-# Check that the encrypted file exists
-if [[ ! -f "$ENCRYPTED_FILE" ]]; then
-  echo "Error: Encrypted file '$ENCRYPTED_FILE' not found." >&2
-  exit 1
+# Parse options
+if [[ $# -gt 0 && "$1" == "--edit" ]]; then
+    EDIT_MODE=true
+    shift
 fi
 
-# Prompt for passphrase securely (no echo, no history)
-read -s -p "Enter passphrase for $ENCRYPTED_FILE: " PASSPHRASE
-echo >&2 # Add a newline after the prompt
+ENCRYPTED_FILE="${1:-$DEFAULT_FILE}"
 
-# Decrypt the file, capturing output and checking for errors.
-# The passphrase is fed via stdin (--passphrase-fd 0).
-# We discard gpg's status messages (2>/dev/null) but you can remove that if you prefer to see them.
-DECRYPTED=$(gpg --batch -d --passphrase-fd 0 "$ENCRYPTED_FILE" 2>/dev/null <<<"$PASSPHRASE") || {
-  echo "Error: Decryption failed (wrong passphrase or corrupted file)." >&2
-  exit 1
+if [[ ! -f "$ENCRYPTED_FILE" ]]; then
+    echo "Error: Encrypted file '$ENCRYPTED_FILE' not found." >&2
+    exit 1
+fi
+
+# ----------------------------------------------------------------------
+# Function: decrypt to stdout (original behaviour, unchanged)
+# ----------------------------------------------------------------------
+decrypt_to_stdout() {
+    read -s -p "Enter passphrase for $ENCRYPTED_FILE: " PASSPHRASE
+    echo >&2
+
+    DECRYPTED=$(gpg --batch -d --passphrase-fd 0 "$ENCRYPTED_FILE" 2>/dev/null <<<"$PASSPHRASE") || {
+        echo "Error: Decryption failed (wrong passphrase or corrupted file)." >&2
+        unset PASSPHRASE
+        exit 1
+    }
+
+    unset PASSPHRASE
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+            continue
+        fi
+        line="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        key="${line%%=*}"
+        value="${line#*=}"
+        if [[ -z "$key" ]]; then
+            echo "Warning: skipping malformed line (no key): $line" >&2
+            continue
+        fi
+        printf "export %s=%s\n" "$key" "$(printf '%q' "$value")"
+    done <<<"$DECRYPTED"
+
+    unset DECRYPTED
 }
 
-# Clear the passphrase variable immediately (no longer needed)
-unset PASSPHRASE
+# ----------------------------------------------------------------------
+# Function: edit the encrypted file in‑place (fixed version)
+# ----------------------------------------------------------------------
+edit_encrypted_file() {
+    read -s -p "Enter passphrase for $ENCRYPTED_FILE: " PASSPHRASE
+    echo >&2
 
-# Parse the decrypted content line by line
-while IFS= read -r line || [[ -n "$line" ]]; do
-  # Skip empty lines and comments (lines starting with '#')
-  if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
-    continue
-  fi
+    TEMP_FILE=$(mktemp) || {
+        echo "Error: Cannot create temporary file." >&2
+        unset PASSPHRASE
+        exit 1
+    }
+    trap 'rm -f "$TEMP_FILE"' EXIT
 
-  # Trim leading and trailing whitespace
-  line="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    # Decrypt without --output, using redirection. Capture stderr separately.
+    echo "Decrypting ..." >&2
+    if ! gpg --batch -d --passphrase-fd 0 "$ENCRYPTED_FILE" > "$TEMP_FILE" 2> >(cat >&2) <<<"$PASSPHRASE"; then
+        echo "Error: Decryption failed. Wrong passphrase or corrupted file." >&2
+        rm -f "$TEMP_FILE"
+        unset PASSPHRASE
+        exit 1
+    fi
 
-  # Extract key (everything before first '=') and value (everything after first '=')
-  key="${line%%=*}"
-  value="${line#*=}"
+    # Verify that we got some content (optional)
+    if [[ ! -s "$TEMP_FILE" ]]; then
+        echo "Error: Decrypted file is empty." >&2
+        rm -f "$TEMP_FILE"
+        unset PASSPHRASE
+        exit 1
+    fi
 
-  # Sanity check: key must be non‑empty
-  if [[ -z "$key" ]]; then
-    echo "Warning: skipping malformed line (no key): $line" >&2
-    continue
-  fi
+    EDITOR="${EDITOR:-vi}"
+    echo "Opening editor ($EDITOR) on decrypted content..." >&2
+    $EDITOR "$TEMP_FILE"
 
-  # Safely quote the value using Bash's %q – this produces a shell‑escaped representation.
-  # The resulting output can be safely eval'd.
-  printf "export %s=%s\n" "$key" "$(printf '%q' "$value")"
-done <<<"$DECRYPTED"
+    echo >&2
+    read -p "Re-encrypt and replace original file? (y/N) " -n 1 -r
+    echo >&2
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Edit cancelled. Original file unchanged." >&2
+        rm -f "$TEMP_FILE"
+        unset PASSPHRASE
+        exit 0
+    fi
 
-# (Optional) unset the decrypted content variable – not strictly necessary, but good practice.
-unset DECRYPTED
+    # Re-encrypt with explicit AES256 and the same passphrase
+    echo "Re-encrypting ..." >&2
+    if ! gpg --yes --batch --symmetric --cipher-algo AES256 --passphrase-fd 0 --output "$ENCRYPTED_FILE" "$TEMP_FILE" 2>&1 <<<"$PASSPHRASE"; then
+        echo "Error: Encryption failed. Original file unchanged." >&2
+        rm -f "$TEMP_FILE"
+        unset PASSPHRASE
+        exit 1
+    fi
+
+    echo "Successfully re-encrypted $ENCRYPTED_FILE" >&2
+    rm -f "$TEMP_FILE"
+    unset PASSPHRASE
+    trap - EXIT
+}
+
+# ----------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------
+if $EDIT_MODE; then
+    edit_encrypted_file
+else
+    decrypt_to_stdout
+fi

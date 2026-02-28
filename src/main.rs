@@ -5,6 +5,7 @@ use chrono::Duration;
 use futures::{StreamExt, future};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
+use tokio::time;
 use tracing::instrument;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -18,6 +19,7 @@ use crate::{
 };
 
 mod api;
+mod auth;
 mod cache;
 mod calender;
 mod email;
@@ -196,18 +198,15 @@ async fn main() -> Result<()> {
         .expect("Failed to install rustls crypto provider");
 
     cache::init("./cache")?;
-    cache::remove("calendar_token").await?;
 
-    let args: Vec<String> = std::env::args().collect();
-    if args.contains(&"--serve".to_string()) || args.contains(&"-s".to_string()) {
-        web::run(8080).await;
-        return Ok(());
-    }
-
-    if let Err(e) = create_calender_entries().await {
-        tracing::error!("Failed to create calendar entries: {}", e);
-        return Err(e);
-    }
-    tracing::info!("Travelai finished successfully");
+    tokio::join!(async { web::run(443).await }, async {
+        let mut interval = time::interval(time::Duration::from_secs(86400));
+        loop {
+            interval.tick().await;
+            if let Err(e) = create_calender_entries().await {
+                tracing::error!("Failed to create calendar entries: {}", e);
+            }
+        }
+    });
     Ok(())
 }
