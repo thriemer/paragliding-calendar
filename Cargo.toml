@@ -1,3 +1,8 @@
+[features]
+default = ["tls"]
+tls = ["axum-server/tls-rustls", "rustls-pemfile"]
+http = []
+
 [package]
 name = "travelai"
 version = "0.1.0"

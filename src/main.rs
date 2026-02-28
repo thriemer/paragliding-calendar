@@ -199,7 +199,7 @@ async fn main() -> Result<()> {
 
     cache::init("./cache")?;
 
-    tokio::join!(async { web::run(443).await }, async {
+    tokio::join!(async { web::run(0).await }, async {
         let mut interval = time::interval(time::Duration::from_secs(86400));
         loop {
             interval.tick().await;

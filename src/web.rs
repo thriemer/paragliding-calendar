@@ -1,6 +1,7 @@
 use std::{env, fs::File, io::BufReader, sync::Arc};
 
 use axum::{Router, extract::Query, routing::get};
+#[cfg(feature = "tls")]
 use axum_server::tls_rustls::RustlsConfig;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -9,6 +10,21 @@ use tower_http::services::ServeDir;
 
 use crate::api;
 use crate::auth::get_redirect_uri;
+
+static PORT: LazyLock<u16> = LazyLock::new(|| {
+    env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8080)
+});
+
+static CERT_PATH: LazyLock<Option<String>> = LazyLock::new(|| {
+    env::var("TLS_CERT_PATH").ok()
+});
+
+static KEY_PATH: LazyLock<Option<String>> = LazyLock::new(|| {
+    env::var("TLS_KEY_PATH").ok()
+});
 
 static AUTHENTICATOR: LazyLock<Arc<tokio::sync::Mutex<Option<crate::auth::WebFlowAuthenticator>>>> =
     LazyLock::new(|| {
@@ -44,7 +60,7 @@ async fn oauth_callback(Query(params): Query<HashMap<String, String>>) -> Result
     }
 }
 
-pub async fn run(port: u16) {
+pub async fn run(_port: u16) {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -56,27 +72,29 @@ pub async fn run(port: u16) {
         .fallback_service(ServeDir::new("frontend/dist"))
         .layer(cors);
 
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("0.0.0.0:{}", *PORT);
 
-    // Check if TLS certs exist, if so use HTTPS
-    let cert_path = "certs/cert.pem";
-    let key_path = "certs/key.pem";
+    #[cfg(feature = "tls")]
+    {
+        if let (Some(cert_path), Some(key_path)) = (CERT_PATH.as_ref(), KEY_PATH.as_ref()) {
+            if std::path::Path::new(cert_path).exists() && std::path::Path::new(key_path).exists() {
+                tracing::info!("Starting HTTPS server on port {}", *PORT);
 
-    if std::path::Path::new(cert_path).exists() && std::path::Path::new(key_path).exists() {
-        tracing::info!("Starting HTTPS server on port {}", port);
+                let config = RustlsConfig::from_pem_file(cert_path, key_path)
+                    .await
+                    .expect("Failed to load TLS config");
 
-        let config = RustlsConfig::from_pem_file(cert_path, key_path)
-            .await
-            .expect("Failed to load TLS config");
-
-        axum_server::bind_rustls(addr.parse().unwrap(), config)
-            .serve(app.into_make_service())
-            .await
-            .expect("HTTPS server error");
-    } else {
-        tracing::info!("No TLS certs found, starting HTTP server on port {}", port);
-        let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-        tracing::info!("Web server running at http://localhost:{}", port);
-        axum::serve(listener, app).await.unwrap();
+                axum_server::bind_rustls(addr.parse().unwrap(), config)
+                    .serve(app.into_make_service())
+                    .await
+                    .expect("HTTPS server error");
+                return;
+            }
+        }
     }
+
+    tracing::info!("Starting HTTP server on port {}", *PORT);
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    tracing::info!("Web server running at http://localhost:{}", *PORT);
+    axum::serve(listener, app).await.unwrap();
 }
