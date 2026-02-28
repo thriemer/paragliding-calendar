@@ -82,6 +82,7 @@ export function SiteEditor({ site, onSave, onCancel }: SiteEditorProps) {
       country: country || null,
       launches,
       landings,
+      data_source: site.data_source || "API",
     });
   };
 

@@ -1,10 +1,18 @@
 import { useState, useEffect } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { ApiSite } from "../hooks/useSites";
+import { UserSettings } from "../hooks/useSettings";
 import { Legend } from "./Legend";
 import styles from "./SitesMap.module.css";
+
+interface LocationSettings {
+  latitude: number;
+  longitude: number;
+  name: string;
+  radius_km: number;
+}
 
 const fixLeafletIcon = () => {
   // @ts-ignore
@@ -32,12 +40,14 @@ const winchIcon = createColoredIcon("blue");
 const hangIcon = createColoredIcon("green");
 const bothIcon = createColoredIcon("violet");
 const landingIcon = createColoredIcon("red");
+const userLocationIcon = createColoredIcon("orange");
 
 interface SitesMapProps {
   sites: ApiSite[];
   onSiteClick?: (site: ApiSite) => void;
   mapView: { center: [number, number]; zoom: number } | null;
   onMapViewChange: (view: { center: [number, number]; zoom: number }) => void;
+  settings?: UserSettings;
 }
 
 function MapController({ onMapViewChange }: { onMapViewChange: (view: { center: [number, number]; zoom: number }) => void }) {
@@ -96,7 +106,7 @@ interface LandingData {
   siteCountry: string | null;
 }
 
-export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange }: SitesMapProps) {
+export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, settings }: SitesMapProps) {
 
   const launches: LaunchData[] = sites
     .flatMap((site) =>
@@ -149,6 +159,8 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange }: Sites
 
   const mapCenter = mapView?.center ?? center;
 
+  const hasLocationSettings = settings && settings.location_latitude && settings.location_longitude;
+
   return (
     <div className={styles.mapContainer}>
       <MapContainer center={mapCenter} zoom={mapView?.zoom ?? 6} style={{ height: "100%", width: "100%" }}>
@@ -157,6 +169,34 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange }: Sites
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
+        {hasLocationSettings && (
+          <>
+            <Circle
+              center={[settings.location_latitude, settings.location_longitude]}
+              radius={settings.search_radius_km * 1000}
+              pathOptions={{
+                color: "#000000",
+                weight: 2,
+                opacity: 0.7,
+                fillColor: "#000000",
+                fillOpacity: 0.05,
+                dashArray: "5, 5",
+              }}
+            />
+            <Marker
+              position={[settings.location_latitude, settings.location_longitude]}
+              icon={userLocationIcon}
+            >
+              <Popup>
+                <strong>Your Location</strong>
+                <br />
+                {settings.location_name}
+                <br />
+                Radius: {settings.search_radius_km} km
+              </Popup>
+            </Marker>
+          </>
+        )}
         {isZoomedIn ? (
           <>
             {landingsWithOverlap.map((landing, idx) => (
@@ -260,7 +300,7 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange }: Sites
           )
         )}
       </MapContainer>
-      <Legend isZoomedIn={isZoomedIn} />
+      <Legend isZoomedIn={isZoomedIn} hasLocationSettings={!!hasLocationSettings} />
     </div>
   );
 }

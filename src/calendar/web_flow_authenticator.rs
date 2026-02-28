@@ -1,17 +1,17 @@
-use std::{env, sync::Arc, sync::Mutex, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
 use google_apis_common::GetToken;
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl, basic::BasicClient,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope,
+    TokenResponse, TokenUrl, basic::BasicClient,
 };
-use reqwest::Client;
-use tokio::sync::Mutex as AsyncMutex;
 
 use crate::cache;
 use crate::email;
+
+const TOKEN_CACHE_KEY: &str = "calendar_token";
 
 const SCOPES: [&str; 3] = [
     "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
@@ -19,21 +19,9 @@ const SCOPES: [&str; 3] = [
     "https://www.googleapis.com/auth/calendar.freebusy",
 ];
 
-pub fn get_redirect_uri() -> String {
-    env::var("OAUTH_REDIRECT_URL")
-        .unwrap_or_else(|_| "https://linus-x1.bangus-firefighter.ts.net/oauth/callback".to_string())
-}
-
-static PKCE_VERIFIER: std::sync::LazyLock<std::sync::Mutex<Option<String>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
-
 pub struct WebFlowAuthenticator {
     client: BasicClient,
     redirect_uri: String,
-    http_client: Client,
-    pkce_verifier: Mutex<Option<PkceCodeVerifier>>,
-    stored_token: Arc<Mutex<Option<StoredToken>>>,
-    authenticated: Arc<Mutex<bool>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -61,20 +49,10 @@ impl WebFlowAuthenticator {
         Self {
             client,
             redirect_uri,
-            http_client: Client::new(),
-            pkce_verifier: Mutex::new(None),
-            stored_token: Arc::new(Mutex::new(None)),
-            authenticated: Arc::new(Mutex::new(false)),
         }
     }
 
-    pub fn set_stored_token(&self, token: StoredToken) {
-        *self.stored_token.lock().unwrap() = Some(token);
-    }
-
     pub fn build_authorization_url(&self) -> (String, String) {
-        let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-
         let (auth_url, csrf_token) = self
             .client
             .authorize_url(CsrfToken::new_random)
@@ -83,16 +61,12 @@ impl WebFlowAuthenticator {
             .add_scope(Scope::new(SCOPES[2].to_string()))
             .add_extra_param("access_type", "offline")
             .add_extra_param("prompt", "consent")
-            .set_pkce_challenge(pkce_challenge)
             .url();
-
-        // Store verifier in static so callback can access it
-        *PKCE_VERIFIER.lock().unwrap() = Some(pkce_verifier.secret().clone());
 
         (auth_url.to_string(), csrf_token.secret().clone())
     }
 
-    pub async fn wait_for_authentication(&self) -> Result<()> {
+    pub async fn wait_for_authentication(&self) -> Result<String> {
         let two_days_secs = 2 * 24 * 60 * 60;
         let check_interval_secs = 10u64;
         let max_attempts = two_days_secs / check_interval_secs;
@@ -110,16 +84,10 @@ impl WebFlowAuthenticator {
             for _ in 0..max_attempts {
                 tokio::time::sleep(Duration::from_secs(check_interval_secs)).await;
 
-                if let Ok(Some(token)) = cache::get::<StoredToken>("calendar_token").await {
+                if let Ok(Some(token)) = cache::get::<StoredToken>(TOKEN_CACHE_KEY).await {
                     if token.expiry > Utc::now().timestamp() {
-                        let authenticated = self.authenticated.clone();
-                        tokio::task::spawn_blocking(move || {
-                            *authenticated.lock().unwrap() = true;
-                        })
-                        .await
-                        .unwrap();
                         tracing::info!("User authenticated successfully");
-                        return Ok(());
+                        return Ok(token.access_token);
                     }
                 }
             }
@@ -134,17 +102,9 @@ impl WebFlowAuthenticator {
             self.redirect_uri
         );
 
-        let pkce_verifier_str = PKCE_VERIFIER
-            .lock()
-            .unwrap()
-            .take()
-            .context("No PKCE verifier found - authentication flow may have restarted")?;
-        let pkce_verifier = PkceCodeVerifier::new(pkce_verifier_str);
-
         let token_response = self
             .client
             .exchange_code(AuthorizationCode::new(code.to_string()))
-            .set_pkce_verifier(pkce_verifier)
             .request_async(oauth2::reqwest::async_http_client)
             .await
             .context("Failed to exchange code for token")?;
@@ -165,19 +125,12 @@ impl WebFlowAuthenticator {
         };
 
         cache::put(
-            "calendar_token",
+            TOKEN_CACHE_KEY,
             stored_token.clone(),
             Duration::from_secs(365 * 24 * 60 * 60),
         )
         .await
         .context("Failed to store token in cache")?;
-
-        let authenticated = self.authenticated.clone();
-        tokio::task::spawn_blocking(move || {
-            *authenticated.lock().unwrap() = true;
-        })
-        .await
-        .unwrap();
 
         tracing::info!("Successfully stored token in cache");
 
@@ -211,7 +164,7 @@ impl WebFlowAuthenticator {
         };
 
         cache::put(
-            "calendar_token",
+            TOKEN_CACHE_KEY,
             stored_token.clone(),
             Duration::from_secs(365 * 24 * 60 * 60),
         )
@@ -222,16 +175,10 @@ impl WebFlowAuthenticator {
     }
 
     async fn get_token_internal(&self) -> Result<Option<String>> {
-        let stored_token = self.stored_token.clone();
-        let cached_token = cache::get::<StoredToken>("calendar_token")
+        let token = cache::get::<StoredToken>(TOKEN_CACHE_KEY)
             .await
             .ok()
             .flatten();
-
-        let token = tokio::task::spawn_blocking(move || stored_token.lock().unwrap().clone())
-            .await
-            .unwrap()
-            .or(cached_token);
 
         if let Some(ref token) = token {
             if token.expiry > Utc::now().timestamp() + 300 {
@@ -239,17 +186,11 @@ impl WebFlowAuthenticator {
             }
 
             if let Some(ref refresh_token) = token.refresh_token {
-                let refresh_token = refresh_token.clone();
-
                 match self.refresh_token(&refresh_token).await {
                     Ok(new_token) => {
                         let access_token = new_token.access_token.clone();
-                        let stored = self.stored_token.clone();
-                        tokio::task::spawn_blocking(move || {
-                            *stored.lock().unwrap() = Some(new_token);
-                        })
-                        .await
-                        .unwrap();
+                        cache::put(TOKEN_CACHE_KEY, new_token, Duration::from_hours(24 * 30))
+                            .await?;
                         return Ok(Some(access_token));
                     }
                     Err(e) => {
@@ -259,7 +200,7 @@ impl WebFlowAuthenticator {
             }
         }
 
-        Ok(None)
+        Ok(Some(self.wait_for_authentication().await?))
     }
 }
 
@@ -294,10 +235,6 @@ impl Clone for WebFlowAuthenticator {
         Self {
             client: self.client.clone(),
             redirect_uri: self.redirect_uri.clone(),
-            http_client: Client::new(),
-            pkce_verifier: Mutex::new(None),
-            stored_token: Arc::new(Mutex::new(None)),
-            authenticated: Arc::new(Mutex::new(false)),
         }
     }
 }

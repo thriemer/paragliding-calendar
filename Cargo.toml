@@ -1,3 +1,8 @@
+[features]
+default = ["tls"]
+tls = ["axum-server/tls-rustls", "rustls-pemfile"]
+http = []
+
 [package]
 name = "travelai"
 version = "0.1.0"
@@ -55,11 +60,11 @@ haversine = "0.2"
 rstest = "0.26"
 
 # web
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
-rustls-pemfile = "2"
+rustls-pemfile = { version =  "2", optional = true}
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "cors"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "limit", "timeout"] }
 
 # email - using rustls instead of native-tls to avoid openssl dependency
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "rustls-tls", "builder"] }

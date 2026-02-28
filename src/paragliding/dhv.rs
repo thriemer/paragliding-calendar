@@ -35,9 +35,9 @@ impl DhvParaglidingSiteProvider {
                     }
                 };
 
-                let dhv_sites: anyhow::Result<DHVXml> = load_sites(path.path());
+                let dhv_sites: anyhow::Result<Vec<ParaglidingSite>> = load_sites(path.path());
                 match dhv_sites {
-                    Ok(dhv_xml) => Some(dhv_xml.flying_sites.sites),
+                    Ok(sites) => Some(sites),
                     Err(err) => {
                         tracing::warn!("Error while loading flying sites. {:?}", err);
                         None
@@ -45,17 +45,26 @@ impl DhvParaglidingSiteProvider {
                 }
             })
             .flatten()
-            .map(|dhv| dhv.into())
             .collect();
         tracing::info!("Loaded {} flying sites.", sites.len());
         Ok(DhvParaglidingSiteProvider { sites })
     }
 }
 
-fn load_sites(xml_path: PathBuf) -> anyhow::Result<DHVXml> {
+fn load_sites(xml_path: PathBuf) -> anyhow::Result<Vec<ParaglidingSite>> {
     let xml_content = fs::read_to_string(xml_path)?;
-    let dhv_xml: DHVXml = from_str(&xml_content)?;
-    Ok(dhv_xml)
+    parse_sites_from_xml(&xml_content)
+}
+
+pub fn parse_sites_from_xml(xml_content: &str) -> anyhow::Result<Vec<ParaglidingSite>> {
+    let dhv_xml: DHVXml = from_str(xml_content)?;
+    let sites: Vec<ParaglidingSite> = dhv_xml
+        .flying_sites
+        .sites
+        .into_iter()
+        .map(|dhv| dhv.into())
+        .collect();
+    Ok(sites)
 }
 
 impl ParaglidingSiteProvider for DhvParaglidingSiteProvider {

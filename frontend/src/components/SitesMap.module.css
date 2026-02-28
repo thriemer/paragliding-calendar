@@ -30,6 +30,20 @@
   display: inline-block;
 }
 
+.legendDashed {
+  width: 20px;
+  height: 3px;
+  background: repeating-linear-gradient(
+    to right,
+    #000 ,
+    #0000px 5px,
+    transparent 5px,
+    transparent 10px
+  );
+  display: inline-block;
+  margin-top: 8px;
+}
+
 .popupEditBtn {
   margin-top: 8px;
   padding: 5px 10px;

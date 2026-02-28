@@ -1,50 +1,32 @@
-use std::{env, fs::File, io::BufReader, sync::Arc};
-
 use axum::{Router, extract::Query, routing::get};
+#[cfg(feature = "tls")]
 use axum_server::tls_rustls::RustlsConfig;
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::ServeDir;
+use tower_http::timeout::TimeoutLayer;
 
-use crate::api;
-use crate::auth::get_redirect_uri;
-
-static AUTHENTICATOR: LazyLock<Arc<tokio::sync::Mutex<Option<crate::auth::WebFlowAuthenticator>>>> =
-    LazyLock::new(|| {
-        let client_id = env::var("GOOGLE_CLIENT_ID")
-            .or_else(|_| env::var("GOOGLE_CALENDAR_CLIENT_ID"))
-            .expect("Missing GOOGLE_CLIENT_ID");
-        let client_secret = env::var("GOOGLE_CLIENT_SECRET")
-            .or_else(|_| env::var("GOOGLE_CALENDAR_CLIENT_SECRET"))
-            .expect("Missing GOOGLE_CLIENT_SECRET");
-
-        let auth =
-            crate::auth::WebFlowAuthenticator::new(client_id, client_secret, get_redirect_uri());
-        Arc::new(tokio::sync::Mutex::new(Some(auth)))
-    });
+use crate::calendar::google;
+use crate::{api, config};
 
 async fn oauth_callback(Query(params): Query<HashMap<String, String>>) -> Result<String, String> {
     let code = params.get("code").ok_or("Missing code parameter")?;
 
-    let mut auth_guard = AUTHENTICATOR.lock().await;
-    if let Some(ref auth) = *auth_guard {
-        match auth.exchange_code(code).await {
-            Ok(_token) => {
-                tracing::info!("Successfully exchanged code for token and stored in cache");
-                Ok("Authentication successful! You can close this window.".to_string())
-            }
-            Err(e) => {
-                tracing::error!("Failed to exchange code: {}", e);
-                Err(format!("Failed to exchange code: {}", e))
-            }
+    match google::AUTH.exchange_code(code).await {
+        Ok(_token) => {
+            tracing::info!("Successfully exchanged code for token and stored in cache");
+            Ok("Authentication successful! You can close this window.".to_string())
         }
-    } else {
-        Err("Authenticator not initialized".to_string())
+        Err(e) => {
+            tracing::error!("Failed to exchange code: {}", e);
+            Err(format!("Failed to exchange code: {}", e))
+        }
     }
 }
 
-pub async fn run(port: u16) {
+pub async fn run() {
+    let config = config::WebConfig::load().unwrap();
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -54,29 +36,32 @@ pub async fn run(port: u16) {
         .route("/oauth/callback", get(oauth_callback))
         .nest("/api", api::router())
         .fallback_service(ServeDir::new("frontend/dist"))
-        .layer(cors);
+        .layer(cors)
+        .layer(TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(300),
+        )) // 5 min timeout
+        .layer(RequestBodyLimitLayer::new(50 * 1024 * 1024)); // 50MB limit
 
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("0.0.0.0:{}", config.port);
+    tracing::info!("Starting HTTP server on {}", addr);
 
-    // Check if TLS certs exist, if so use HTTPS
-    let cert_path = "certs/cert.pem";
-    let key_path = "certs/key.pem";
+    #[cfg(feature = "tls")]
+    {
+        let (cert_path, key_path) = &config.tls_config_path;
+        if std::path::Path::new(cert_path).exists() && std::path::Path::new(key_path).exists() {
+            let config = RustlsConfig::from_pem_file(cert_path, key_path)
+                .await
+                .expect("Failed to load TLS config");
 
-    if std::path::Path::new(cert_path).exists() && std::path::Path::new(key_path).exists() {
-        tracing::info!("Starting HTTPS server on port {}", port);
-
-        let config = RustlsConfig::from_pem_file(cert_path, key_path)
-            .await
-            .expect("Failed to load TLS config");
-
-        axum_server::bind_rustls(addr.parse().unwrap(), config)
-            .serve(app.into_make_service())
-            .await
-            .expect("HTTPS server error");
-    } else {
-        tracing::info!("No TLS certs found, starting HTTP server on port {}", port);
-        let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-        tracing::info!("Web server running at http://localhost:{}", port);
-        axum::serve(listener, app).await.unwrap();
+            axum_server::bind_rustls(addr.parse().unwrap(), config)
+                .serve(app.into_make_service())
+                .await
+                .expect("HTTPS server error");
+            return;
+        }
     }
+
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }

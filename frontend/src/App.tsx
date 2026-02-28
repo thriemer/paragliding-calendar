@@ -6,10 +6,13 @@ import { JdmConfigProvider, DecisionGraph } from "@gorules/jdm-editor";
 import { useDecisionGraph } from "./hooks/useDecisionGraph";
 import { useSites, ApiSite } from "./hooks/useSites";
 import { useUpdateSite } from "./hooks/useUpdateSite";
+import { useSettings, UserSettings } from "./hooks/useSettings";
 import { SitesMap } from "./components/SitesMap";
 import { Header } from "./components/Header";
 import { FilterPanel, Filters } from "./components/FilterPanel";
 import { SiteEditor } from "./components/SiteEditor";
+import { FileUploader } from "./components/FileUploader";
+import { SettingsModal } from "./components/SettingsModal";
 
 type Screen = "main" | "edit";
 
@@ -17,10 +20,12 @@ function App() {
   const [screen, setScreen] = useState<Screen>("main");
   const [filters, setFilters] = useState<Filters>({ siteType: "" });
   const [selectedSite, setSelectedSite] = useState<ApiSite | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
   const [mapView, setMapView] = useState<{ center: [number, number]; zoom: number } | null>(null);
   const { graph, setGraph, loading, saving, load, save } = useDecisionGraph();
   const { sites, loading: sitesLoading, refreshing, refresh } = useSites();
   const { updateSite } = useUpdateSite();
+  const { settings, updateSettings } = useSettings();
 
   const filteredSites = useMemo(() => {
     return sites.filter((site) => {
@@ -43,6 +48,13 @@ function App() {
     if (success) {
       await refresh();
       setSelectedSite(null);
+    }
+  };
+
+  const handleSaveSettings = async (newSettings: UserSettings) => {
+    const success = await updateSettings(newSettings);
+    if (success) {
+      setShowSettings(false);
     }
   };
 
@@ -71,12 +83,18 @@ function App() {
           <button className="btn" onClick={() => setScreen("edit")}>
             Edit Flyable Decision Rule
           </button>
+          <button className="btn" onClick={() => setShowSettings(true)}>
+            Settings
+          </button>
           {sitesLoading ? null : (
-            <FilterPanel
-              filters={filters}
-              onFilterChange={setFilters}
-              sites={sites}
-            />
+            <>
+              <FilterPanel
+                filters={filters}
+                onFilterChange={setFilters}
+                sites={sites}
+              />
+              <FileUploader onImport={refresh} />
+            </>
           )}
         </aside>
         <main className={styles.mainContent}>
@@ -84,7 +102,13 @@ function App() {
             <p>Loading sites...</p>
           ) : (
             <div className={styles.mapContainer}>
-              <SitesMap sites={filteredSites} onSiteClick={handleSiteClick} mapView={mapView} onMapViewChange={setMapView} />
+              <SitesMap 
+                sites={filteredSites} 
+                onSiteClick={handleSiteClick} 
+                mapView={mapView} 
+                onMapViewChange={setMapView}
+                settings={settings ?? undefined}
+              />
             </div>
           )}
         </main>
@@ -97,6 +121,13 @@ function App() {
             onCancel={() => setSelectedSite(null)}
           />
         </div>
+      )}
+      {showSettings && settings && (
+        <SettingsModal
+          settings={settings}
+          onSave={handleSaveSettings}
+          onCancel={() => setShowSettings(false)}
+        />
       )}
     </div>
   );

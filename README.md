@@ -1,5 +1,13 @@
 # TravelAI
 
+## Important:
+
+Loading secrets from env
+
+```bash
+eval "$(./load_env.sh)"
+```
+
 Intelligent paragliding and outdoor adventure travel planning CLI
 
 ## Description

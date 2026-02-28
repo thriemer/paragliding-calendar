@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod dhv;
 pub mod site_evaluator;
 
@@ -40,6 +41,7 @@ pub struct ParaglidingLanding {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub enum SiteType {
     Hang,
     Winch,

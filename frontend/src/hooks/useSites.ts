@@ -25,6 +25,7 @@ export interface ApiSite {
   country: string | null;
   launches: ApiLaunch[];
   landings: ApiLanding[];
+  data_source: string;
 }
 
 const API_URL = "/api/sites";

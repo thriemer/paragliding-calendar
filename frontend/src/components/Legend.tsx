@@ -2,11 +2,24 @@ import styles from "./SitesMap.module.css";
 
 interface LegendProps {
   isZoomedIn: boolean;
+  hasLocationSettings?: boolean;
 }
 
-export function Legend({ isZoomedIn }: LegendProps) {
+export function Legend({ isZoomedIn, hasLocationSettings }: LegendProps) {
   return (
     <div className={styles.legend}>
+      {hasLocationSettings && (
+        <div className={styles.legendItem}>
+          <span className={styles.legendColor} style={{ backgroundColor: "#ff9800" }}></span>
+          Your Location
+        </div>
+      )}
+      {hasLocationSettings && (
+        <div className={styles.legendItem}>
+          <span className={styles.legendDashed}></span>
+          Search Radius
+        </div>
+      )}
       {isZoomedIn ? (
         <>
           <div className={styles.legendItem}>

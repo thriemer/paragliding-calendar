@@ -1,8 +1,7 @@
-use std::sync::LazyLock;
+use std::{env, sync::LazyLock};
 
 use anyhow::Result;
-use chrono::Duration;
-use futures::{StreamExt, future};
+use futures::StreamExt;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use tokio::time;
@@ -10,18 +9,21 @@ use tracing::instrument;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
-    calender::{CalendarEvent, CalendarProvider, google::GoogleCalendar},
+    application::ParaglidingCalendarService,
+    calendar::{CalendarProvider, google::GoogleCalendar},
     location::Location,
     paragliding::{
-        ParaglidingSite, ParaglidingSiteProvider, dhv,
-        site_evaluator::{HourlyScore, SiteEvaluationResult, evaluate_site},
+        ParaglidingSite, ParaglidingSiteProvider,
+        cache::{CachedParaglidingSiteProvider, UserSettings},
+        site_evaluator::SiteEvaluationResult,
     },
 };
 
 mod api;
-mod auth;
+mod application;
 mod cache;
-mod calender;
+mod calendar;
+mod config;
 mod email;
 mod location;
 mod paragliding;
@@ -43,56 +45,22 @@ static API_CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
     client
 });
 
-#[instrument(skip_all, fields(location = %location.name))]
-async fn flying_sites_with_weather(
-    location: &Location,
-) -> Vec<(SiteEvaluationResult, ParaglidingSite)> {
-    let radius_km = 150.0;
-    let provider = dhv::DhvParaglidingSiteProvider::new("dhv_sites".into()).unwrap();
-    let nearby_sites = provider
-        .fetch_launches_within_radius(location, radius_km)
-        .await;
-    tracing::info!(
-        location = %location.name,
-        count = nearby_sites.len(),
-        "Found nearby sites, fetching weather"
-    );
-
-    let mut result = vec![];
-
-    for (site, _distance) in nearby_sites.iter() {
-        if let Some(launch) = site.launches.first() {
-            match weather::open_meteo::get_forecast(launch.location.clone()).await {
-                Ok(forecast) => {
-                    let evaluation = evaluate_site(site, &forecast).await;
-                    result.push((evaluation, site.clone()));
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        site = %site.name,
-                        lat = %launch.location.latitude,
-                        lon = %launch.location.longitude,
-                        error = %e,
-                        "Failed to get weather forecast"
-                    );
-                }
-            }
-        }
-    }
-    result
-}
-
-#[instrument()]
+// Create calendar entries for paragliding based on settings from cache
 async fn create_calender_entries() -> Result<()> {
-    let location = match weather::open_meteo::geocode("Gornau/Erz").await {
-        Ok(loc) => loc,
-        Err(e) => {
-            tracing::error!("Failed to geocode location: {}", e);
-            return Err(e.into());
+    let settings = match CachedParaglidingSiteProvider::get_settings().await? {
+        Some(s) => s,
+        None => {
+            tracing::warn!("No settings found in cache, using defaults");
+            UserSettings::default()
         }
     };
-    let location = location.into_iter().next().expect("No location found");
-    let calender_name = "Paragliding";
+
+    let location = Location::new(
+        settings.location_latitude,
+        settings.location_longitude,
+        settings.location_name.clone(),
+        "".to_string(),
+    );
 
     let mut cal = match GoogleCalendar::new().await {
         Ok(cal) => cal,
@@ -101,83 +69,42 @@ async fn create_calender_entries() -> Result<()> {
             return Err(e);
         }
     };
-    if let Err(e) = cal.create_calendar(calender_name).await {
-        tracing::error!("Failed to create calendar {}: {}", calender_name, e);
+
+    let provider = CachedParaglidingSiteProvider::new();
+    let service = ParaglidingCalendarService::new();
+    let config = crate::application::CalendarConfig {
+        search_radius_km: settings.search_radius_km,
+        minimum_flyable_duration: chrono::Duration::hours(settings.minimum_flyable_hours as i64),
+    };
+
+    let events = service
+        .create_events_for_location(
+            &provider,
+            &location,
+            &mut cal,
+            &settings.calendar_name,
+            config,
+        )
+        .await?;
+
+    // Clear and recreate all events
+    if let Err(e) = cal.clear_calendar(&settings.calendar_name).await {
+        tracing::error!("Failed to clear calendar {}: {}", settings.calendar_name, e);
         return Err(e);
     }
 
-    let mut others_name = match cal.get_calendar_names().await {
-        Ok(names) => names,
-        Err(e) => {
-            tracing::error!("Failed to get calendar names: {}", e);
+    let mut event_counter = 0;
+    for event in events {
+        if let Err(e) = cal.create_event(&settings.calendar_name, event).await {
+            tracing::error!("Failed to create event: {}", e);
             return Err(e);
         }
-    };
-    others_name.retain(|n| n != calender_name);
-    tracing::info!(calendars = ?others_name, "Found calendars");
-
-    let sites = flying_sites_with_weather(&location).await;
-
-    if let Err(e) = cal.clear_calendar(calender_name).await {
-        tracing::error!("Failed to clear calendar {}: {}", calender_name, e);
-        return Err(e);
-    }
-    let mut event_counter = 0;
-
-    for (eval, site) in sites {
-        let drive_to_site = Duration::seconds(
-            routing::get_travel_time(&location, &site.launches[0].location).await? as i64,
-        );
-        for mut e in eval.daily_summaries {
-            let mut scores: Vec<(HourlyScore, bool)> = future::join_all(
-                e.hourly_scores
-                    .iter()
-                    .map(async |h| {
-                        let h = h.clone();
-                        let recommended = h.is_flyable
-                            && !cal
-                                .is_busy(
-                                    &others_name,
-                                    h.timestamp - Duration::minutes(30),
-                                    h.timestamp + Duration::minutes(30),
-                                )
-                                .await
-                                .unwrap();
-                        (h, recommended)
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .await;
-
-            scores.retain(|(_, recommendation)| *recommendation);
-            e.hourly_scores = scores.into_iter().map(|(score, _)| score).collect();
-
-            e.calculate_flyable_time_ranges();
-            for mut r in e.ranges {
-                //Assumption that driving time is symmetrical
-                r.start += drive_to_site;
-                r.end -= drive_to_site;
-                if r.is_longer_than(drive_to_site + drive_to_site) {
-                    event_counter += 1;
-                    cal.create_event(
-                        calender_name,
-                        CalendarEvent {
-                            summary: site.name.clone(),
-                            start_time: r.start,
-                            end_time: r.end,
-                            is_all_day: false,
-                            location: None,
-                        },
-                    )
-                    .await?;
-                }
-            }
-        }
+        event_counter += 1;
     }
 
     tracing::info!(
         event_count = event_counter,
-        calendar = %calender_name,
+        calendar = %settings.calendar_name,
         "Created events in calendar"
     );
 
@@ -197,10 +124,15 @@ async fn main() -> Result<()> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    cache::init("./cache")?;
+    cache::init(
+        env::var("XDG_CACHE_HOME")
+            .ok()
+            .or(env::var("CACHE_DIRECTORY").ok())
+            .expect("Cache environment variable not set."),
+    )?;
 
-    tokio::join!(async { web::run(443).await }, async {
-        let mut interval = time::interval(time::Duration::from_secs(86400));
+    tokio::join!(async { web::run().await }, async {
+        let mut interval = time::interval(time::Duration::from_hours(24));
         loop {
             interval.tick().await;
             if let Err(e) = create_calender_entries().await {

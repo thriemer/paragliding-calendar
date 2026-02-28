@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use fjall::Keyspace;
+use fjall::{Iter, Keyspace};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{sync::OnceCell, task};
 
@@ -24,6 +24,7 @@ pub struct PersistentCache {
 fn get_from_store(store: Keyspace, key: Vec<u8>) -> anyhow::Result<Option<Vec<u8>>> {
     Ok(store.get(key)?.map(|v| v.to_vec()))
 }
+
 impl PersistentCache {
     fn new(path: impl AsRef<Path>) -> Result<Self> {
         let db = fjall::Database::builder(&path).open()?;
@@ -84,6 +85,38 @@ impl PersistentCache {
         }
     }
 
+    pub async fn get_all_starting_with<T: DeserializeOwned + Send + 'static>(
+        &self,
+        key: &str,
+    ) -> Result<Vec<T>> {
+        let store = self.store.clone();
+        let key_bytes = key.as_bytes().to_vec();
+        let maybe_bytes: Iter = task::spawn_blocking(move || store.prefix(key_bytes)).await?;
+        let result = maybe_bytes
+            .filter_map(|pair| pair.value().ok())
+            .filter_map(|bytes| {
+                let entry: postcard::Result<StoredEntry<T>> = postcard::from_bytes(&bytes);
+                if entry.is_err() {
+                    return None;
+                }
+                let entry = entry.unwrap();
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+
+                if now < entry.expires_at {
+                    tracing::debug!("Key found and still fresh");
+                    // Fresh
+                    Some(entry.value)
+                } else {
+                    return None;
+                }
+            })
+            .collect::<Vec<T>>();
+        Ok(result)
+    }
+
     /// Manually removes a key from the cache.
     pub async fn remove(&self, key: &str) -> Result<()> {
         let key = key.as_bytes().to_vec();
@@ -122,6 +155,12 @@ pub async fn put<T: Serialize + Send + Debug + 'static>(
 
 pub async fn get<T: DeserializeOwned + Send + 'static>(key: &str) -> Result<Option<T>> {
     get_cache().get(key).await
+}
+
+pub async fn get_all_starting_with<T: DeserializeOwned + Send + 'static>(
+    key: &str,
+) -> Result<Vec<T>> {
+    get_cache().get_all_starting_with(key).await
 }
 
 pub async fn remove(key: &str) -> Result<()> {
