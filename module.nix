@@ -1,16 +1,17 @@
-{ config, lib, pkgs, ... }:
-
-let
+{self}: {
+  config,
+  lib,
+  pkgs,
+  ...
+}: let
   cfg = config.services.travelai;
-in
-{
+in {
   options.services.travelai = {
     enable = lib.mkEnableOption "travelai - Intelligent paragliding and outdoor adventure travel planning";
 
     package = lib.mkOption {
       type = lib.types.package;
       description = "The travelai package to use.";
-      default = pkgs.travelai;
     };
 
     port = lib.mkOption {
@@ -21,74 +22,44 @@ in
 
     enableTLS = lib.mkOption {
       type = lib.types.bool;
-      default = true;
+      default = false;
       description = "Enable TLS support. Requires tlsCertPath and tlsKeyPath.";
     };
+    logLevel = lib.mkOption {
+      type = lib.types.str;
+      default = "info";
+      description = "Log level that the program should use";
+    };
 
-    tlsCertPath = lib.mkOption {
+    secretsFilePath = lib.mkOption {
       type = lib.types.path;
-      default = "/etc/travelai/cert.pem";
-      description = "Path to TLS certificate file.";
-    };
-
-    tlsKeyPath = lib.mkOption {
-      type = lib.types.path;
-      default = "/etc/travelai/key.pem";
-      description = "Path to TLS private key file.";
-    };
-
-    googleClientId = lib.mkOption {
-      type = lib.types.str;
-      description = "Google OAuth client ID.";
-    };
-
-    googleClientSecret = lib.mkOption {
-      type = lib.types.str;
-      description = "Google OAuth client secret.";
-    };
-
-    gmailAddress = lib.mkOption {
-      type = lib.types.str;
-      description = "Gmail address for sending notifications.";
-    };
-
-    gmailAppPassword = lib.mkOption {
-      type = lib.types.str;
-      description = "Gmail app password for sending notifications.";
-    };
-
-    notificationEmail = lib.mkOption {
-      type = lib.types.str;
-      description = "Email address to send notifications to.";
+      description = "Path to the secrets of paragliding calendar.";
     };
   };
 
   config = lib.mkIf cfg.enable {
+    services.travelai.package = lib.mkDefault (
+      if cfg.enableTLS
+      then self.packages.${pkgs.system}.travelai-tls
+      else self.packages.${pkgs.system}.travelai-http
+    );
+
     systemd.services.travelai = {
       description = "TravelAI - Paragliding and outdoor adventure planning";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ];
+      wantedBy = ["multi-user.target"];
+      after = ["network.target"];
 
       serviceConfig = {
         Type = "simple";
         User = "travelai";
         Group = "travelai";
-        WorkingDirectory = "${cfg.package}/share/travelai";
-
+        WorkingDirectory = "${cfg.package}/bin";
+        EnvironmentFile = "${cfg.secretsFilePath}";
         Environment = [
           "PORT=${toString cfg.port}"
-          "GOOGLE_CLIENT_ID=${cfg.googleClientId}"
-          "GOOGLE_CLIENT_SECRET=${cfg.googleClientSecret}"
-          "GMAIL_ADDRESS=${cfg.gmailAddress}"
-          "GMAIL_APP_PASSWORD=${cfg.gmailAppPassword}"
-          "NOTIFICATION_EMAIL=${cfg.notificationEmail}"
+          "RUST_LOG=${cfg.logLevel}"
         ];
-
-        EnvironmentFile = lib.optionals cfg.enableTLS [
-          "TLS_CERT_PATH=${cfg.tlsCertPath}"
-          "TLS_KEY_PATH=${cfg.tlsKeyPath}"
-        ];
-
+        CacheDirectory = "travelai";
         Restart = "on-failure";
         RestartSec = "10s";
       };
@@ -96,13 +67,12 @@ in
       script = "${cfg.package}/bin/travelai";
     };
 
-    users.users.travelai = lib.mkIf (config.users.users.travelai == {}) {
+    users.users.travelai = lib.mkIf cfg.enable {
       isSystemUser = true;
       group = "travelai";
     };
+    users.groups.travelai = lib.mkIf cfg.enable {};
 
-    users.groups.travelai = lib.mkIf (config.users.groups.travelai == {}) {};
-
-    networking.firewall.allowedTCPPorts = [ cfg.port ] ++ lib.optionals cfg.enableTLS [ 443 ];
+    networking.firewall.allowedTCPPorts = [cfg.port] ++ lib.optionals cfg.enableTLS [443];
   };
 }

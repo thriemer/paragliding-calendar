@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use google_calendar3::api::{Event, EventDateTime};
 
 pub mod google;
+pub mod web_flow_authenticator;
 
 pub trait CalendarProvider {
     async fn is_busy(

@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use axum::{
     Router,
@@ -11,9 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    cache,
-    paragliding::{ParaglidingSite, ParaglidingSiteProvider, SiteType, dhv},
-    weather::open_meteo,
+    cache, calender::web_flow_authenticator::WebFlowAuthenticator, paragliding::{ParaglidingSite, ParaglidingSiteProvider, SiteType, dhv}, weather::open_meteo
 };
 
 const CACHE_KEY: &str = "decision_graph";

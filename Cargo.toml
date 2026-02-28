@@ -62,7 +62,7 @@ rstest = "0.26"
 # web
 axum = "0.8"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
-rustls-pemfile = "2"
+rustls-pemfile = { version =  "2", optional = true}
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 

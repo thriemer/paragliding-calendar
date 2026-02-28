@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::{env, sync::LazyLock};
 
 use anyhow::Result;
 use chrono::Duration;
@@ -19,9 +19,9 @@ use crate::{
 };
 
 mod api;
-mod auth;
 mod cache;
 mod calender;
+mod config;
 mod email;
 mod location;
 mod paragliding;
@@ -197,10 +197,15 @@ async fn main() -> Result<()> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    cache::init("./cache")?;
+    cache::init(
+        env::var("XDG_CACHE_HOME")
+            .ok()
+            .or(env::var("CACHE_DIRECTOY").ok())
+            .expect("Cache environment variable not set."),
+    )?;
 
-    tokio::join!(async { web::run(0).await }, async {
-        let mut interval = time::interval(time::Duration::from_secs(86400));
+    tokio::join!(async { web::run().await }, async {
+        let mut interval = time::interval(time::Duration::from_hours(24));
         loop {
             interval.tick().await;
             if let Err(e) = create_calender_entries().await {

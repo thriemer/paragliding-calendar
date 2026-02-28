@@ -1,10 +1,14 @@
-use std::{env, time::Duration};
+use std::{
+    env,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Datelike, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, Datelike, NaiveTime, Utc};
 use google_calendar3::{
     CalendarHub,
-    api::{CalendarList, Event, Events, FreeBusyRequest, FreeBusyRequestItem, Scope},
+    api::{CalendarList, FreeBusyRequest, FreeBusyRequestItem, Scope},
 };
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
@@ -12,10 +16,20 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::instrument;
 
 use crate::{
-    auth::{StoredToken, WebFlowAuthenticator, get_redirect_uri},
     cache,
-    calender::{CalendarEvent, CalendarProvider},
+    calender::{CalendarEvent, CalendarProvider, web_flow_authenticator::WebFlowAuthenticator},
 };
+
+pub static AUTH: LazyLock<WebFlowAuthenticator> = LazyLock::new(|| {
+    let client_id = env::var("GOOGLE_CLIENT_ID").expect("Missing GOOGLE_CLIENT_ID");
+    let client_secret = env::var("GOOGLE_CLIENT_SECRET").expect("Missing GOOGLE_CLIENT_SECRET");
+    let redirect_uri = env::var("OAUTH_REDIRECT_URL").unwrap_or_else(|_| {
+        "https://linus-x1.bangus-firefighter.ts.net/oauth/callback".to_string()
+    });
+
+    let auth = WebFlowAuthenticator::new(client_id, client_secret, redirect_uri);
+    auth
+});
 
 pub type CalendarHubType =
     CalendarHub<HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>>;
@@ -26,9 +40,6 @@ pub struct GoogleCalendar {
 
 impl GoogleCalendar {
     pub async fn new() -> Result<Self> {
-        // Wait for authentication if needed
-        Self::wait_for_authentication().await?;
-
         // Build HTTP client
         let connector = HttpsConnectorBuilder::new()
             .with_native_roots()
@@ -38,59 +49,9 @@ impl GoogleCalendar {
             .build();
 
         let hyper_client = Client::builder(TokioExecutor::new()).build(connector);
-
-        // Get stored token from cache
-        let stored_token = cache::get::<StoredToken>("calendar_token")
-            .await
-            .context("Failed to get token from cache")?
-            .context("No token found after authentication")?;
-
-        // Create WebFlowAuthenticator and set the stored token
-        let client_id = env::var("GOOGLE_CLIENT_ID")
-            .or_else(|_| env::var("GOOGLE_CALENDAR_CLIENT_ID"))
-            .context("Missing GOOGLE_CLIENT_ID")?;
-        let client_secret = env::var("GOOGLE_CLIENT_SECRET")
-            .or_else(|_| env::var("GOOGLE_CALENDAR_CLIENT_SECRET"))
-            .context("Missing GOOGLE_CLIENT_SECRET")?;
-        let redirect_uri = get_redirect_uri();
-
-        let auth = WebFlowAuthenticator::new(client_id, client_secret, redirect_uri);
-        auth.set_stored_token(stored_token);
-
+        let auth = (*AUTH).clone();
         let hub = CalendarHub::new(hyper_client, auth);
         Ok(GoogleCalendar { hub })
-    }
-
-    async fn wait_for_authentication() -> Result<()> {
-        // Check if valid token exists in cache
-        let token: Option<crate::auth::web_flow_authenticator::StoredToken> =
-            match cache::get("calendar_token").await {
-                Ok(Some(token)) => Some(token),
-                _ => None,
-            };
-
-        if let Some(token) = token {
-            if token.expiry > chrono::Utc::now().timestamp() {
-                tracing::info!("Found valid token in cache");
-                return Ok(());
-            }
-        }
-
-        // Need to authenticate - use WebFlowAuthenticator
-        let client_id = env::var("GOOGLE_CLIENT_ID")
-            .or_else(|_| env::var("GOOGLE_CALENDAR_CLIENT_ID"))
-            .context("Missing GOOGLE_CLIENT_ID")?;
-        let client_secret = env::var("GOOGLE_CLIENT_SECRET")
-            .or_else(|_| env::var("GOOGLE_CALENDAR_CLIENT_SECRET"))
-            .context("Missing GOOGLE_CLIENT_SECRET")?;
-        let redirect_uri = get_redirect_uri();
-
-        let auth = crate::auth::WebFlowAuthenticator::new(client_id, client_secret, redirect_uri);
-
-        // This will loop: send email every 2 days until authenticated
-        auth.wait_for_authentication().await?;
-
-        Ok(())
     }
 
     async fn get_id_for_name(&self, name: &str) -> Result<String> {
