@@ -5,7 +5,7 @@ const DEFAULT_GRAPH = {
   edges: [],
 };
 
-const API_URL = "/api/decision-graph";
+const API_URL = "api/decision-graph";
 
 export function useDecisionGraph() {
   const [graph, setGraph] = useState(DEFAULT_GRAPH);

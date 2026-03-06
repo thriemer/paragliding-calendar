@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-const API_URL = "/api/sites/import";
+const API_URL = "api/sites/import";
 
 export interface ImportResponse {
   imported: number;

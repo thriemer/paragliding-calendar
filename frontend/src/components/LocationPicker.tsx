@@ -40,7 +40,7 @@ export function LocationPicker({ location, elevation, onChange }: LocationPicker
   const fetchElevation = async (lat: number, lng: number) => {
     setLoadingElevation(true);
     try {
-      const response = await fetch(`/api/elevation?latitude=${lat}&longitude=${lng}`);
+      const response = await fetch(`api/elevation?latitude=${lat}&longitude=${lng}`);
       if (response.ok) {
         const data = await response.json();
         setPickElev(data.elevation);

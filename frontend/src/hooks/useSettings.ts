@@ -9,7 +9,7 @@ export interface UserSettings {
   minimum_flyable_hours: number;
 }
 
-const API_URL = "/api/settings";
+const API_URL = "api/settings";
 
 export function useSettings() {
   const [settings, setSettings] = useState<UserSettings | null>(null);

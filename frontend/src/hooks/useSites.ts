@@ -28,7 +28,7 @@ export interface ApiSite {
   data_source: string;
 }
 
-const API_URL = "/api/sites";
+const API_URL = "api/sites";
 
 export function useSites() {
   const [sites, setSites] = useState<ApiSite[]>([]);

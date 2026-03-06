@@ -7,7 +7,7 @@ export function useUpdateSite() {
   const updateSite = async (site: ApiSite) => {
     setSaving(true);
     try {
-      const response = await fetch("/api/sites", {
+      const response = await fetch("api/sites", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(site),
