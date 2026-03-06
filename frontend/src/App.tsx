@@ -5,7 +5,7 @@ import styles from "./styles/App.module.css";
 import { JdmConfigProvider, DecisionGraph } from "@gorules/jdm-editor";
 import { useDecisionGraph } from "./hooks/useDecisionGraph";
 import { useSites, ApiSite } from "./hooks/useSites";
-import { useUpdateSite } from "./hooks/useUpdateSite";
+import { useUpdateSite, deleteSite } from "./hooks/useUpdateSite";
 import { useSettings, UserSettings } from "./hooks/useSettings";
 import { SitesMap } from "./components/SitesMap";
 import { Header } from "./components/Header";
@@ -43,8 +43,27 @@ function App() {
     setSelectedSite(site);
   };
 
+  const handleCreateSite = () => {
+    const emptySite: ApiSite = {
+      name: "",
+      country: null,
+      launches: [],
+      landings: [],
+      data_source: "API",
+    };
+    setSelectedSite(emptySite);
+  };
+
   const handleSaveSite = async (updatedSite: ApiSite) => {
     const success = await updateSite(updatedSite);
+    if (success) {
+      await refresh();
+      setSelectedSite(null);
+    }
+  };
+
+  const handleDeleteSite = async (siteName: string) => {
+    const success = await deleteSite(siteName);
     if (success) {
       await refresh();
       setSelectedSite(null);
@@ -80,6 +99,9 @@ function App() {
       <div className={styles.mainScreen}>
         <aside className={styles.sidePanel}>
           <h2>Menu</h2>
+          <button className="btn" onClick={handleCreateSite}>
+            Create New Site
+          </button>
           <button className="btn" onClick={() => setScreen("edit")}>
             Edit Flyable Decision Rule
           </button>
@@ -118,6 +140,7 @@ function App() {
           <SiteEditor
             site={selectedSite}
             onSave={handleSaveSite}
+            onDelete={selectedSite.name ? handleDeleteSite : undefined}
             onCancel={() => setSelectedSite(null)}
           />
         </div>

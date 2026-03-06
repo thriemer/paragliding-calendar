@@ -7,6 +7,7 @@ import styles from "./SiteEditor.module.css";
 interface SiteEditorProps {
   site: ApiSite;
   onSave: (updatedSite: ApiSite) => void;
+  onDelete?: (siteName: string) => void;
   onCancel: () => void;
 }
 
@@ -23,7 +24,7 @@ interface Landing {
   elevation: number;
 }
 
-export function SiteEditor({ site, onSave, onCancel }: SiteEditorProps) {
+export function SiteEditor({ site, onSave, onDelete, onCancel }: SiteEditorProps) {
   const [name, setName] = useState(site.name);
   const [country, setCountry] = useState(site.country || "");
   const [launches, setLaunches] = useState<Launch[]>(site.launches);
@@ -55,7 +56,7 @@ export function SiteEditor({ site, onSave, onCancel }: SiteEditorProps) {
     setLaunches([
       ...launches,
       {
-        location: { latitude: defaultLat, longitude: defaultLng, name: "", country: site.country },
+        location: { latitude: defaultLat, longitude: defaultLng, name: "", country: country || "" },
         direction_degrees_start: 0,
         direction_degrees_stop: 360,
         elevation: 0,
@@ -70,7 +71,7 @@ export function SiteEditor({ site, onSave, onCancel }: SiteEditorProps) {
     setLandings([
       ...landings,
       {
-        location: { latitude: defaultLat, longitude: defaultLng, name: "", country: site.country },
+        location: { latitude: defaultLat, longitude: defaultLng, name: "", country: country || "" },
         elevation: 0,
       },
     ]);
@@ -86,9 +87,15 @@ export function SiteEditor({ site, onSave, onCancel }: SiteEditorProps) {
     });
   };
 
+  const handleDelete = () => {
+    if (onDelete && confirm(`Are you sure you want to delete "${site.name}"?`)) {
+      onDelete(site.name);
+    }
+  };
+
   return (
     <div className={styles.siteEditor}>
-      <h3>Edit Site</h3>
+      <h3>{site.name ? "Edit Site" : "Create Site"}</h3>
       
       <div className={styles.formGroup}>
         <label>Site Name:</label>
@@ -141,6 +148,11 @@ export function SiteEditor({ site, onSave, onCancel }: SiteEditorProps) {
       </div>
 
       <div className={styles.actions}>
+        {onDelete && (
+          <button className="btn btn-danger" onClick={handleDelete}>
+            Delete
+          </button>
+        )}
         <button className="btn" onClick={handleSave}>Save</button>
         <button className="btn btn-cancel" onClick={onCancel}>Cancel</button>
       </div>

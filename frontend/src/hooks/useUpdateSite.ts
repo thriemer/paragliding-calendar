@@ -27,3 +27,19 @@ export function useUpdateSite() {
 
   return { updateSite, saving };
 }
+
+export async function deleteSite(siteName: string): Promise<boolean> {
+  try {
+    const response = await fetch(`api/sites/${encodeURIComponent(siteName)}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      console.error("useUpdateSite: Failed to delete site:", text);
+    }
+    return response.ok;
+  } catch (error) {
+    console.error("useUpdateSite: Failed to delete site:", error);
+    return false;
+  }
+}

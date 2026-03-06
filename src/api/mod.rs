@@ -1,10 +1,10 @@
 use axum::{
     Router,
     body::Body,
-    extract::Query,
+    extract::{Path, Query},
     http::StatusCode,
     response::Json,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -82,6 +82,7 @@ pub fn router() -> Router {
     Router::new()
         .route("/sites", get(get_sites))
         .route("/sites", put(update_site))
+        .route("/sites/{site_name}", delete(delete_site))
         .route(
             "/sites/import",
             post(import_sites).layer(RequestBodyLimitLayer::new(50 * 1024 * 1024)),
@@ -104,6 +105,15 @@ async fn update_site(Json(site): Json<ParaglidingSite>) -> Result<StatusCode, St
     let provider = CachedParaglidingSiteProvider::new();
     provider
         .save_site(site)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::OK)
+}
+
+async fn delete_site(Path(site_name): Path<String>) -> Result<StatusCode, StatusCode> {
+    let provider = CachedParaglidingSiteProvider::new();
+    provider
+        .delete_site(&site_name)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
