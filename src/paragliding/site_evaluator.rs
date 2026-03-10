@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::Serialize;
-use zen_engine::{DecisionEngine, model::DecisionContent};
+use zen_engine::DecisionEngine;
+use zen_engine::model::DecisionContent;
 
 use crate::{
     paragliding::{ParaglidingLaunch, ParaglidingSite},
@@ -103,14 +104,24 @@ struct LaunchWeather {
     launch: ParaglidingLaunch,
 }
 
-async fn is_flyable_decision_evaluation(weather: &WeatherData, site: &ParaglidingLaunch) -> bool {
+async fn is_flyable_decision_evaluation(
+    weather: &WeatherData,
+    launch: &ParaglidingLaunch,
+    rule_overwrite: Option<&serde_json::Value>,
+) -> bool {
     let lw = LaunchWeather {
         weather: weather.clone(),
-        launch: site.clone(),
+        launch: launch.clone(),
     };
 
-    let decision_content: DecisionContent =
-        serde_json::from_str(include_str!("flyable_decision_graph.json")).unwrap();
+    let decision_content: DecisionContent = if let Some(rule) = rule_overwrite {
+        serde_json::from_value(rule.clone()).unwrap_or_else(|_| {
+            serde_json::from_str(include_str!("flyable_decision_graph.json")).unwrap()
+        })
+    } else {
+        serde_json::from_str(include_str!("flyable_decision_graph.json")).unwrap()
+    };
+
     let engine = DecisionEngine::default();
     let decision = engine.create_decision(decision_content.into());
 
@@ -140,8 +151,10 @@ pub async fn evaluate_site(
 
         for weather_data in &daily_forecast.forecast {
             let mut any_flyable = false;
+            let rule_overwrite = site.rule_overwrite.as_ref();
             for launch in site.launches.iter() {
-                let flyable = is_flyable_decision_evaluation(&weather_data, &launch).await;
+                let flyable =
+                    is_flyable_decision_evaluation(&weather_data, launch, rule_overwrite).await;
                 any_flyable = any_flyable | flyable;
                 if any_flyable {
                     break;

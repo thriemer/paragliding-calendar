@@ -18,7 +18,7 @@ use crate::{
         cache::{CachedParaglidingSiteProvider, UserSettings},
         dhv,
     },
-    weather::open_meteo,
+    weather::{self, WeatherModel, open_meteo},
 };
 
 const CACHE_KEY: &str = "decision_graph";
@@ -93,6 +93,7 @@ pub fn router() -> Router {
         .route("/settings", put(save_settings))
         .route("/decision-graph", get(get_decision_graph))
         .route("/decision-graph", post(save_decision_graph))
+        .route("/weather-models", get(get_weather_models))
 }
 
 async fn get_sites() -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
@@ -195,4 +196,15 @@ async fn save_decision_graph(Json(payload): Json<Value>) -> Result<StatusCode, S
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::OK)
+}
+
+#[derive(Serialize)]
+struct WeatherModelsResponse {
+    models: Vec<WeatherModel>,
+}
+
+async fn get_weather_models() -> Json<WeatherModelsResponse> {
+    Json(WeatherModelsResponse {
+        models: weather::get_available_weather_models(),
+    })
 }

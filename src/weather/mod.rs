@@ -119,3 +119,38 @@ impl WeatherData {
         format!("{:.1} hPa", self.pressure)
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeatherModel {
+    pub id: String,
+    pub name: String,
+}
+
+pub fn get_available_weather_models() -> Vec<WeatherModel> {
+    vec![
+        WeatherModel {
+            id: "ecmwf_ifs04".to_string(),
+            name: "ECMWF IFS ( deterministic)".to_string(),
+        },
+        WeatherModel {
+            id: "icon".to_string(),
+            name: "ICON (DWD)".to_string(),
+        },
+        WeatherModel {
+            id: "icon_eu".to_string(),
+            name: "ICON EU (DWD)".to_string(),
+        },
+        WeatherModel {
+            id: "gfs".to_string(),
+            name: "GFS (NOAA)".to_string(),
+        },
+        WeatherModel {
+            id: "gem".to_string(),
+            name: "GEM (CMC)".to_string(),
+        },
+        WeatherModel {
+            id: "arpege_world".to_string(),
+            name: "ARPEGE World (Météo-France)".to_string(),
+        },
+    ]
+}

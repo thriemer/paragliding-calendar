@@ -109,8 +109,19 @@ impl ParaglidingCalendarService {
         let mut result = vec![];
 
         for (site, _distance) in nearby_sites.iter() {
+            if site.mute_alerts == Some(true) {
+                tracing::info!("Skipping muted site: {}", site.name);
+                continue;
+            }
+
             if let Some(launch) = site.launches.first() {
-                match crate::weather::open_meteo::get_forecast(launch.location.clone()).await {
+                let weather_model = site.preferred_weather_model.as_deref();
+                match crate::weather::open_meteo::get_forecast(
+                    launch.location.clone(),
+                    weather_model,
+                )
+                .await
+                {
                     Ok(forecast) => {
                         let evaluation = site_evaluator::evaluate_site(site, &forecast).await;
                         result.push((evaluation, site.clone()));

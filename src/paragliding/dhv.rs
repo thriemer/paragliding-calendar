@@ -349,6 +349,11 @@ impl From<DHVFlyingSite> for ParaglidingSite {
             landings,
             country: value.site_country,
             data_source: "DHV".into(),
+            parking_location: None,
+            mute_alerts: None,
+            rating: None,
+            preferred_weather_model: None,
+            rule_overwrite: None,
         }
     }
 }

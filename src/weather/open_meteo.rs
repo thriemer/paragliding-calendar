@@ -7,30 +7,35 @@ use tracing::instrument;
 use crate::{cache, location::Location, weather::WeatherForecast};
 
 #[instrument(skip_all, fields(lat = %source.latitude, lon = %source.longitude))]
-pub async fn get_forecast(source: Location) -> Result<WeatherForecast> {
-    let key = format!("weather_for_{}", source.to_key());
+pub async fn get_forecast(source: Location, model: Option<&str>) -> Result<WeatherForecast> {
+    let model_suffix = model.map(|m| format!("_{}", m)).unwrap_or_default();
+    let key = format!("weather_for_{}{}", source.to_key(), model_suffix);
 
     if let Some(cached) = cache::get::<WeatherForecast>(&key).await? {
         return Ok(cached);
     }
 
-    let seconds = get_forecast_raw(source.clone()).await?;
+    let forecast = get_forecast_raw(source.clone(), model).await?;
     let jitter: f32 = rand::rng().random_range(0.9..1.1);
     cache::put(
         &key,
-        seconds.clone(),
+        forecast.clone(),
         Duration::from_hours((6f32 * jitter) as u64),
     )
     .await?;
     tracing::info!("Weather fetch for {} was successful.", source.to_key());
-    Ok(seconds)
+    Ok(forecast)
 }
 
-async fn get_forecast_raw(location: Location) -> Result<WeatherForecast> {
-    let url = format!(
+async fn get_forecast_raw(location: Location, model: Option<&str>) -> Result<WeatherForecast> {
+    let mut url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&hourly=temperature_2m,windspeed_10m,winddirection_10m,windgusts_10m,precipitation,cloudcover,surface_pressure,visibility,weathercode&timezone=auto&forecast_days=7&wind_speed_unit=ms",
         location.latitude, location.longitude
     );
+
+    if let Some(model) = model {
+        url.push_str(&format!("&models={}", model));
+    }
 
     let response = reqwest::get(url).await?;
 

@@ -26,13 +26,57 @@
   font-weight: 600;
 }
 
-.formGroup input {
+.formGroup input[type="text"],
+.formGroup select {
   width: 100%;
   padding: 8px;
   border: 1px solid #ccc;
   border-radius: 4px;
   font-size: 14px;
   box-sizing: border-box;
+}
+
+.formGroup input[type="checkbox"] {
+  margin-right: 8px;
+}
+
+.starRating {
+  display: flex;
+  gap: 4px;
+}
+
+.star {
+  font-size: 24px;
+  color: #ddd;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.starFilled {
+  color: #ffc107;
+}
+
+.miniMap {
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.parkingPicker {
+  margin-top: 8px;
+}
+
+.ruleEditor {
+  margin-top: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.ruleEditor > div:first-child {
+  height: 300px;
+  overflow: auto;
 }
 
 .section {

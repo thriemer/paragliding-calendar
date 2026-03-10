@@ -190,27 +190,44 @@ impl CalendarProvider for GoogleCalendar {
     #[instrument(skip(self), fields(calendar = %name))]
     async fn clear_calendar(&mut self, name: &str) -> anyhow::Result<()> {
         let calendar_id = self.get_id_for_name(name).await?;
-        let (_, list) = self
-            .hub
-            .events()
-            .list(&calendar_id)
-            .add_scope(Scope::AppCreated)
-            .doit()
-            .await?;
+        let mut page_token: Option<String> = None;
         let mut counter = 0;
-        if let Some(events) = list.items {
-            for e in events {
-                if let Some(event_id) = e.id {
-                    self.hub
-                        .events()
-                        .delete(&calendar_id, &event_id)
-                        .add_scope(Scope::AppCreated)
-                        .doit()
-                        .await?;
-                    counter += 1;
+
+        loop {
+            let mut request = self
+                .hub
+                .events()
+                .list(&calendar_id)
+                .add_scope(Scope::AppCreated);
+
+            if let Some(ref token) = page_token {
+                request = request.page_token(token);
+            }
+
+            let (_, list) = request.doit().await?;
+
+            if let Some(events) = list.items {
+                for e in events {
+                    if let Some(event_id) = e.id {
+                        self.hub
+                            .events()
+                            .delete(&calendar_id, &event_id)
+                            .add_scope(Scope::AppCreated)
+                            .doit()
+                            .await?;
+                        counter += 1;
+                    } else {
+                        tracing::warn!("Event {:#?} has no event_id", e);
+                    }
                 }
             }
+
+            page_token = list.next_page_token;
+            if page_token.is_none() {
+                break;
+            }
         }
+
         tracing::info!("Cleared {} events", counter);
         Ok(())
     }

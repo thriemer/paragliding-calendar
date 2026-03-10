@@ -26,6 +26,11 @@ export interface ApiSite {
   launches: ApiLaunch[];
   landings: ApiLanding[];
   data_source: string;
+  parking_location?: ApiLocation;
+  mute_alerts?: boolean;
+  rating?: number;
+  preferred_weather_model?: string;
+  rule_overwrite?: unknown;
 }
 
 const API_URL = "api/sites";

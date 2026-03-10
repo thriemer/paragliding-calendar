@@ -15,7 +15,6 @@ pub trait ParaglidingSiteProvider {
     ) -> Vec<(ParaglidingSite, f64)>;
 }
 
-/// Represents a paragliding site from any data source
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParaglidingSite {
     pub name: String,
@@ -23,8 +22,19 @@ pub struct ParaglidingSite {
     pub landings: Vec<ParaglidingLanding>,
     pub country: Option<String>,
     pub data_source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parking_location: Option<Location>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mute_alerts: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rating: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_weather_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_overwrite: Option<serde_json::Value>,
 }
 
+/// Represents a paragliding site from any data source
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParaglidingLaunch {
     pub site_type: SiteType,
