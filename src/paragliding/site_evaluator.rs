@@ -107,7 +107,7 @@ struct LaunchWeather {
 async fn is_flyable_decision_evaluation(
     weather: &WeatherData,
     launch: &ParaglidingLaunch,
-    rule_overwrite: Option<&serde_json::Value>,
+    rule_overwrite: Option<&String>,
 ) -> bool {
     let lw = LaunchWeather {
         weather: weather.clone(),
@@ -115,7 +115,7 @@ async fn is_flyable_decision_evaluation(
     };
 
     let decision_content: DecisionContent = if let Some(rule) = rule_overwrite {
-        serde_json::from_value(rule.clone()).unwrap_or_else(|_| {
+        serde_json::from_str(rule).unwrap_or_else(|_| {
             serde_json::from_str(include_str!("flyable_decision_graph.json")).unwrap()
         })
     } else {
