@@ -8,6 +8,7 @@ import { useWeatherModels, WeatherModel } from "../hooks/useWeatherModels";
 import { LaunchEditor } from "./LaunchEditor";
 import { LandingEditor } from "./LandingEditor";
 import styles from "./SiteEditor.module.css";
+import { API } from "../config/api";
 
 interface SiteEditorProps {
   site: ApiSite;
@@ -156,7 +157,7 @@ export function SiteEditor({ site, onSave, onDelete, onCancel }: SiteEditorProps
 
   const addRuleOverwrite = async () => {
     try {
-      const response = await fetch("api/decision-graph");
+      const response = await fetch(API.decisionGraph);
       if (response.ok) {
         const defaultGraph = await response.json();
         setRuleOverwrite(defaultGraph);

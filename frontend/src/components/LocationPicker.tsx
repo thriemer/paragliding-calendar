@@ -3,6 +3,7 @@ import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import styles from "./LocationPicker.module.css";
+import { API } from "../config/api";
 
 interface LocationPickerProps {
   location: { latitude: number; longitude: number; name: string; country: string | null };
@@ -40,7 +41,7 @@ export function LocationPicker({ location, elevation, onChange }: LocationPicker
   const fetchElevation = async (lat: number, lng: number) => {
     setLoadingElevation(true);
     try {
-      const response = await fetch(`api/elevation?latitude=${lat}&longitude=${lng}`);
+      const response = await fetch(API.elevation(lat, lng));
       if (response.ok) {
         const data = await response.json();
         setPickElev(data.elevation);
