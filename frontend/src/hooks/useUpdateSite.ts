@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ApiSite } from "../hooks/useSites";
+import { API } from "../config/api";
 
 export function useUpdateSite() {
   const [saving, setSaving] = useState(false);
@@ -7,7 +8,7 @@ export function useUpdateSite() {
   const updateSite = async (site: ApiSite) => {
     setSaving(true);
     try {
-      const response = await fetch("api/sites", {
+      const response = await fetch(API.sites, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(site),
@@ -30,7 +31,7 @@ export function useUpdateSite() {
 
 export async function deleteSite(siteName: string): Promise<boolean> {
   try {
-    const response = await fetch(`api/sites/${encodeURIComponent(siteName)}`, {
+    const response = await fetch(API.siteDelete(siteName), {
       method: "DELETE",
     });
     if (!response.ok) {

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { API } from "../config/api";
 
 export interface UserSettings {
   location_name: string;
@@ -9,15 +10,13 @@ export interface UserSettings {
   minimum_flyable_hours: number;
 }
 
-const API_URL = "api/settings";
-
 export function useSettings() {
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    fetch(API_URL)
+    fetch(API.settings)
       .then((res) => res.json())
       .then((data) => {
         setSettings(data);
@@ -29,7 +28,7 @@ export function useSettings() {
   const updateSettings = async (newSettings: UserSettings): Promise<boolean> => {
     setSaving(true);
     try {
-      const response = await fetch(API_URL, {
+      const response = await fetch(API.settings, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",

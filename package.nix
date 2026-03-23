@@ -46,7 +46,7 @@ rustPlatform.buildRustPackage rec {
     # Build frontend
     cd frontend
     bun install --frozen-lockfile
-    bun run build --public-path='${basePath}'
+    bun run build --public-path='${basePath}' --define __API_BASE_PATH__='"${basePath}"'
     cd ..
 
     # Build Rust binary

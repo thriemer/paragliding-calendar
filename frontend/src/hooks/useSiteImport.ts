@@ -1,6 +1,5 @@
 import { useState } from "react";
-
-const API_URL = "api/sites/import";
+import { API } from "../config/api";
 
 export interface ImportResponse {
   imported: number;
@@ -17,7 +16,7 @@ export function useSiteImport() {
     setResult(null);
 
     try {
-      const response = await fetch(API_URL, {
+      const response = await fetch(API.siteImport, {
         method: "POST",
         headers: {
           "Content-Type": "application/octet-stream",

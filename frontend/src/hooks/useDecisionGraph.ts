@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
+import { API } from "../config/api";
 
 const DEFAULT_GRAPH = {
   nodes: [],
   edges: [],
 };
-
-const API_URL = "api/decision-graph";
 
 export function useDecisionGraph() {
   const [graph, setGraph] = useState(DEFAULT_GRAPH);
@@ -15,7 +14,7 @@ export function useDecisionGraph() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch(API_URL);
+      const response = await fetch(API.decisionGraph);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -31,7 +30,7 @@ export function useDecisionGraph() {
   const save = useCallback(async () => {
     setSaving(true);
     try {
-      const response = await fetch(API_URL, {
+      const response = await fetch(API.decisionGraph, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(graph),

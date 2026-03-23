@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { API } from "../config/api";
 
 export interface ApiLocation {
   latitude: number;
@@ -33,15 +34,13 @@ export interface ApiSite {
   rule_overwrite?: unknown;
 }
 
-const API_URL = "api/sites";
-
 export function useSites() {
   const [sites, setSites] = useState<ApiSite[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    fetch(API_URL)
+    fetch(API.sites)
       .then((res) => res.json())
       .then((data) => {
         setSites(data);
@@ -52,7 +51,7 @@ export function useSites() {
 
   const refresh = () => {
     setRefreshing(true);
-    fetch(API_URL)
+    fetch(API.sites)
       .then((res) => res.json())
       .then((data) => {
         setSites(data);
