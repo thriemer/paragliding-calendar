@@ -7,11 +7,15 @@ use tracing::instrument;
 
 use crate::{API_CLIENT, cache, location::Location};
 
-#[instrument()]
-pub async fn get_travel_time(source: &Location, destination: &Location) -> Result<u64> {
+#[instrument(skip(cache))]
+pub async fn get_travel_time(
+    source: &Location,
+    destination: &Location,
+    cache: cache::Cache,
+) -> Result<u64> {
     let key = source.to_key() + "-" + &destination.to_key();
 
-    if let Some(cached) = cache::get::<u64>(&key).await? {
+    if let Some(cached) = cache::get::<u64>(&cache, &key).await? {
         return Ok(cached);
     }
 
@@ -19,6 +23,7 @@ pub async fn get_travel_time(source: &Location, destination: &Location) -> Resul
 
     let jitter: f32 = rand::rng().random_range(0.9..1.1);
     cache::put(
+        &cache,
         &key,
         seconds,
         Duration::from_hours((24f32 * 7f32 * jitter) as u64),

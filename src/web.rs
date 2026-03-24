@@ -1,4 +1,8 @@
-use axum::{Router, extract::Query, routing::get};
+use axum::{
+    Router,
+    extract::{Extension, Query},
+    routing::get,
+};
 #[cfg(feature = "tls")]
 use axum_server::tls_rustls::RustlsConfig;
 use std::collections::HashMap;
@@ -7,13 +11,25 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::ServeDir;
 use tower_http::timeout::TimeoutLayer;
 
-use crate::calendar::google;
-use crate::{api, config};
+use crate::api::ApiState;
+use crate::calendar::web_flow_authenticator::WebFlowAuthenticator;
+use crate::{api, cache::Cache, config};
 
-async fn oauth_callback(Query(params): Query<HashMap<String, String>>) -> Result<String, String> {
+async fn oauth_callback(
+    Query(params): Query<HashMap<String, String>>,
+    Extension(state): Extension<ApiState>,
+) -> Result<String, String> {
     let code = params.get("code").ok_or("Missing code parameter")?;
 
-    match google::AUTH.exchange_code(code).await {
+    let auth = WebFlowAuthenticator::new(
+        std::env::var("GOOGLE_CLIENT_ID").expect("Missing GOOGLE_CLIENT_ID"),
+        std::env::var("GOOGLE_CLIENT_SECRET").expect("Missing GOOGLE_CLIENT_SECRET"),
+        std::env::var("OAUTH_REDIRECT_URL").unwrap_or_else(|_| {
+            "https://linus-x1.bangus-firefighter.ts.net/oauth/callback".to_string()
+        }),
+        state.cache.clone(),
+    );
+    match auth.exchange_code(code).await {
         Ok(_token) => {
             tracing::info!("Successfully exchanged code for token and stored in cache");
             Ok("Authentication successful! You can close this window.".to_string())
@@ -25,16 +41,18 @@ async fn oauth_callback(Query(params): Query<HashMap<String, String>>) -> Result
     }
 }
 
-pub async fn run() {
+pub async fn run(cache: Cache) {
     let config = config::WebConfig::load().unwrap();
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
+    let api_state = ApiState { cache };
+    let api_router = api::router(api_state);
     let app = Router::new()
         .route("/oauth/callback", get(oauth_callback))
-        .nest("/api", api::router())
+        .merge(api_router)
         .fallback_service(ServeDir::new("frontend/dist"))
         .layer(cors)
         .layer(TimeoutLayer::with_status_code(

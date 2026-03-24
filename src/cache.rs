@@ -1,15 +1,14 @@
 use std::{
     fmt::Debug,
     path::Path,
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Result, anyhow};
 use fjall::{Iter, Keyspace};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::{sync::OnceCell, task};
-
-static GLOBAL_CACHE: OnceCell<PersistentCache> = OnceCell::const_new();
+use tokio::task;
 
 #[derive(Serialize, Deserialize)]
 struct StoredEntry<T> {
@@ -21,12 +20,20 @@ pub struct PersistentCache {
     store: Keyspace,
 }
 
+impl std::fmt::Debug for PersistentCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PersistentCache").finish()
+    }
+}
+
+pub type Cache = Arc<PersistentCache>;
+
 fn get_from_store(store: Keyspace, key: Vec<u8>) -> anyhow::Result<Option<Vec<u8>>> {
     Ok(store.get(key)?.map(|v| v.to_vec()))
 }
 
 impl PersistentCache {
-    fn new(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         let db = fjall::Database::builder(&path).open()?;
         let items = db.keyspace("cache", fjall::KeyspaceCreateOptions::default)?;
         Ok(PersistentCache { store: items })
@@ -126,43 +133,29 @@ impl PersistentCache {
     }
 }
 
-/// Initializes the global persistent cache. **Must be called once before use.**
-pub fn init(path: impl AsRef<Path>) -> Result<()> {
-    let cache = PersistentCache::new(path)?;
-    GLOBAL_CACHE
-        .set(cache)
-        .map_err(|_| anyhow!("Cache already initialized"))?;
-    Ok(())
-}
-
-/// Returns a reference to the globally initialized cache.
-/// # Panics
-/// Panics if the cache has not been initialized by calling `cache::init().await` first.
-fn get_cache() -> &'static PersistentCache {
-    GLOBAL_CACHE
-        .get()
-        .expect("Cache not initialized. Call cache::init().await first.")
-}
-
-// Public, ergonomic API endpoints that use the global cache.
 pub async fn put<T: Serialize + Send + Debug + 'static>(
+    cache: &Cache,
     key: &str,
     value: T,
     ttl: Duration,
 ) -> Result<()> {
-    get_cache().put(key, value, ttl).await
+    cache.put(key, value, ttl).await
 }
 
-pub async fn get<T: DeserializeOwned + Send + 'static>(key: &str) -> Result<Option<T>> {
-    get_cache().get(key).await
+pub async fn get<T: DeserializeOwned + Send + 'static>(
+    cache: &Cache,
+    key: &str,
+) -> Result<Option<T>> {
+    cache.get(key).await
 }
 
 pub async fn get_all_starting_with<T: DeserializeOwned + Send + 'static>(
+    cache: &Cache,
     key: &str,
 ) -> Result<Vec<T>> {
-    get_cache().get_all_starting_with(key).await
+    cache.get_all_starting_with(key).await
 }
 
-pub async fn remove(key: &str) -> Result<()> {
-    get_cache().remove(key).await
+pub async fn remove(cache: &Cache, key: &str) -> Result<()> {
+    cache.remove(key).await
 }

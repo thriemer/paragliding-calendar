@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cache,
+    cache::{self, Cache},
     location::Location,
     paragliding::{ParaglidingSite, ParaglidingSiteProvider},
 };
@@ -36,35 +36,43 @@ impl Default for UserSettings {
     }
 }
 
-pub struct CachedParaglidingSiteProvider;
+pub struct CachedParaglidingSiteProvider {
+    cache: Cache,
+}
 
 impl CachedParaglidingSiteProvider {
-    pub fn new() -> Self {
-        Self
+    pub fn new(cache: Cache) -> Self {
+        Self { cache }
     }
 
     pub async fn save_site(&self, site: ParaglidingSite) -> Result<()> {
         let key = format!("site_{}", site.name);
-        cache::put(&key, site, SITE_CACHE_TTL).await
+        cache::put(&self.cache, &key, site, SITE_CACHE_TTL).await
     }
 
     pub async fn delete_site(&self, name: &str) -> Result<()> {
         let key = format!("site_{}", name);
-        cache::remove(&key).await
+        cache::remove(&self.cache, &key).await
     }
 
-    pub async fn get_settings() -> Result<Option<UserSettings>> {
-        cache::get::<UserSettings>(SETTINGS_KEY).await
+    pub async fn get_settings(&self) -> Result<Option<UserSettings>> {
+        cache::get::<UserSettings>(&self.cache, SETTINGS_KEY).await
     }
 
-    pub async fn save_settings(settings: &UserSettings) -> Result<()> {
-        cache::put(SETTINGS_KEY, settings.clone(), SETTINGS_CACHE_TTL).await
+    pub async fn save_settings(&self, settings: &UserSettings) -> Result<()> {
+        cache::put(
+            &self.cache,
+            SETTINGS_KEY,
+            settings.clone(),
+            SETTINGS_CACHE_TTL,
+        )
+        .await
     }
 }
 
 impl Default for CachedParaglidingSiteProvider {
     fn default() -> Self {
-        Self::new()
+        panic!("CachedParaglidingSiteProvider requires a cache instance");
     }
 }
 
@@ -74,13 +82,14 @@ impl ParaglidingSiteProvider for CachedParaglidingSiteProvider {
         center: &Location,
         radius_km: f64,
     ) -> Vec<(ParaglidingSite, f64)> {
-        let cached_sites: Vec<ParaglidingSite> = match cache::get_all_starting_with("site_").await {
-            Ok(sites) => sites,
-            Err(e) => {
-                tracing::error!("Failed to fetch sites from cache: {}", e);
-                return vec![];
-            }
-        };
+        let cached_sites: Vec<ParaglidingSite> =
+            match cache::get_all_starting_with(&self.cache, "site_").await {
+                Ok(sites) => sites,
+                Err(e) => {
+                    tracing::error!("Failed to fetch sites from cache: {}", e);
+                    return vec![];
+                }
+            };
 
         if cached_sites.is_empty() {
             tracing::warn!("No sites found in cache");
@@ -109,7 +118,7 @@ impl ParaglidingSiteProvider for CachedParaglidingSiteProvider {
     }
 
     async fn fetch_all_sites(&self) -> Vec<ParaglidingSite> {
-        match cache::get_all_starting_with("site_").await {
+        match cache::get_all_starting_with(&self.cache, "site_").await {
             Ok(sites) => sites,
             Err(e) => {
                 tracing::error!("Failed to fetch all sites from cache: {}", e);

@@ -7,17 +7,22 @@ use tracing::instrument;
 use crate::{cache, location::Location, weather::WeatherForecast};
 
 #[instrument(skip_all, fields(lat = %source.latitude, lon = %source.longitude))]
-pub async fn get_forecast(source: Location, model: Option<&str>) -> Result<WeatherForecast> {
+pub async fn get_forecast(
+    source: Location,
+    model: Option<&str>,
+    cache: cache::Cache,
+) -> Result<WeatherForecast> {
     let model_suffix = model.map(|m| format!("_{}", m)).unwrap_or_default();
     let key = format!("weather_for_{}{}", source.to_key(), model_suffix);
 
-    if let Some(cached) = cache::get::<WeatherForecast>(&key).await? {
+    if let Some(cached) = cache::get::<WeatherForecast>(&cache, &key).await? {
         return Ok(cached);
     }
 
     let forecast = get_forecast_raw(source.clone(), model).await?;
     let jitter: f32 = rand::rng().random_range(0.9..1.1);
     cache::put(
+        &cache,
         &key,
         forecast.clone(),
         Duration::from_hours((6f32 * jitter) as u64),
@@ -79,13 +84,13 @@ pub async fn geocode(location_name: &str) -> Result<Vec<Location>> {
     Ok(geocoding_results)
 }
 
-#[instrument()]
-pub async fn fetch_elevation(latitude: f64, longitude: f64) -> Result<f64> {
+#[instrument(skip(cache))]
+pub async fn fetch_elevation(latitude: f64, longitude: f64, cache: &cache::Cache) -> Result<f64> {
     let rounded_lat = (latitude * 1000.0).round() / 1000.0;
     let rounded_lon = (longitude * 1000.0).round() / 1000.0;
     let cache_key = format!("elevation_{}_{}", rounded_lat, rounded_lon);
 
-    if let Some(cached) = cache::get::<f64>(&cache_key).await? {
+    if let Some(cached) = cache::get::<f64>(cache, &cache_key).await? {
         return Ok(cached);
     }
 
@@ -105,6 +110,7 @@ pub async fn fetch_elevation(latitude: f64, longitude: f64) -> Result<f64> {
         .ok_or(anyhow!("No elevation provided in response"))?;
 
     let _ = cache::put(
+        cache,
         &cache_key,
         elevation,
         std::time::Duration::from_secs(365 * 24 * 60 * 60),

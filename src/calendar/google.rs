@@ -1,8 +1,4 @@
-use std::{
-    env,
-    sync::{Arc, LazyLock},
-    time::Duration,
-};
+use std::{env, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Datelike, NaiveTime, Utc};
@@ -20,26 +16,16 @@ use crate::{
     calendar::{CalendarEvent, CalendarProvider, web_flow_authenticator::WebFlowAuthenticator},
 };
 
-pub static AUTH: LazyLock<WebFlowAuthenticator> = LazyLock::new(|| {
-    let client_id = env::var("GOOGLE_CLIENT_ID").expect("Missing GOOGLE_CLIENT_ID");
-    let client_secret = env::var("GOOGLE_CLIENT_SECRET").expect("Missing GOOGLE_CLIENT_SECRET");
-    let redirect_uri = env::var("OAUTH_REDIRECT_URL").unwrap_or_else(|_| {
-        "https://linus-x1.bangus-firefighter.ts.net/oauth/callback".to_string()
-    });
-
-    let auth = WebFlowAuthenticator::new(client_id, client_secret, redirect_uri);
-    auth
-});
-
 pub type CalendarHubType =
     CalendarHub<HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>>;
 
 pub struct GoogleCalendar {
     hub: CalendarHubType,
+    cache: cache::Cache,
 }
 
 impl GoogleCalendar {
-    pub async fn new() -> Result<Self> {
+    pub async fn new(cache: cache::Cache) -> Result<Self> {
         // Build HTTP client
         let connector = HttpsConnectorBuilder::new()
             .with_native_roots()
@@ -49,15 +35,22 @@ impl GoogleCalendar {
             .build();
 
         let hyper_client = Client::builder(TokioExecutor::new()).build(connector);
-        let auth = (*AUTH).clone();
+        let auth = WebFlowAuthenticator::new(
+            env::var("GOOGLE_CLIENT_ID").expect("Missing GOOGLE_CLIENT_ID"),
+            env::var("GOOGLE_CLIENT_SECRET").expect("Missing GOOGLE_CLIENT_SECRET"),
+            env::var("OAUTH_REDIRECT_URL").unwrap_or_else(|_| {
+                "https://linus-x1.bangus-firefighter.ts.net/oauth/callback".to_string()
+            }),
+            cache.clone(),
+        );
         let hub = CalendarHub::new(hyper_client, auth);
-        Ok(GoogleCalendar { hub })
+        Ok(GoogleCalendar { hub, cache })
     }
 
     async fn get_id_for_name(&self, name: &str) -> Result<String> {
         let key = format!("calendar_name_id_map_{}", name);
 
-        if let Some(id) = cache::get(&key).await? {
+        if let Some(id) = cache::get(&self.cache, &key).await? {
             return Ok(id);
         }
 
@@ -78,7 +71,7 @@ impl GoogleCalendar {
             .cloned();
 
         if let Some(id) = result {
-            cache::put(&key, id.clone(), Duration::from_hours(72)).await?;
+            cache::put(&self.cache, &key, id.clone(), Duration::from_hours(72)).await?;
             Ok(id.to_owned())
         } else {
             Err(anyhow!("Calendar id not found for name {}", name))
@@ -140,10 +133,10 @@ impl CalendarProvider for GoogleCalendar {
         let cache_key = format!("Calendar_free_busy_hash_{}", hasher.finish());
 
         let busy = {
-            if let Some(busy) = cache::get(&cache_key).await? {
+            if let Some(busy) = cache::get(&self.cache, &cache_key).await? {
                 busy
             } else {
-                let (_, busy) = self
+                let response: google_calendar3::api::FreeBusyResponse = self
                     .hub
                     .freebusy()
                     .query(FreeBusyRequest {
@@ -156,10 +149,17 @@ impl CalendarProvider for GoogleCalendar {
                     })
                     .add_scope(Scope::Freebusy)
                     .doit()
-                    .await?;
+                    .await?
+                    .1;
 
-                cache::put(&cache_key, busy.clone(), Duration::from_hours(8)).await?;
-                busy
+                cache::put(
+                    &self.cache,
+                    &cache_key,
+                    response.clone(),
+                    Duration::from_hours(8),
+                )
+                .await?;
+                response
             }
         };
 
@@ -276,7 +276,7 @@ impl CalendarProvider for GoogleCalendar {
 
         if let Some(id) = cal.id {
             let key = format!("calendar_name_id_map_{}", name);
-            cache::put(&key, id, Duration::from_hours(24)).await?;
+            cache::put(&self.cache, &key, id, Duration::from_hours(24)).await?;
         }
         Ok(())
     }

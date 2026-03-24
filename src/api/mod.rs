@@ -1,6 +1,7 @@
 use axum::{
     Router,
     body::Body,
+    extract::Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::Json,
@@ -11,7 +12,7 @@ use serde_json::Value;
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
-    cache,
+    cache::{self, Cache},
     location::Location,
     paragliding::{
         ParaglidingSite, ParaglidingSiteProvider,
@@ -45,9 +46,10 @@ pub struct GeocodeResponse {
 }
 
 async fn get_elevation(
+    Extension(state): Extension<ApiState>,
     Query(query): Query<ElevationQuery>,
 ) -> Result<Json<ElevationResponse>, StatusCode> {
-    let elevation = open_meteo::fetch_elevation(query.latitude, query.longitude)
+    let elevation = open_meteo::fetch_elevation(query.latitude, query.longitude, &state.cache)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(ElevationResponse { elevation }))
@@ -60,8 +62,12 @@ async fn geocode(Query(query): Query<GeocodeQuery>) -> Result<Json<GeocodeRespon
     Ok(Json(GeocodeResponse { results: locations }))
 }
 
-async fn get_settings() -> Result<Json<UserSettings>, StatusCode> {
-    let settings = CachedParaglidingSiteProvider::get_settings()
+async fn get_settings(
+    Extension(state): Extension<ApiState>,
+) -> Result<Json<UserSettings>, StatusCode> {
+    let provider = CachedParaglidingSiteProvider::new(state.cache);
+    let settings = provider
+        .get_settings()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -71,14 +77,24 @@ async fn get_settings() -> Result<Json<UserSettings>, StatusCode> {
     }
 }
 
-async fn save_settings(Json(settings): Json<UserSettings>) -> Result<StatusCode, StatusCode> {
-    CachedParaglidingSiteProvider::save_settings(&settings)
+async fn save_settings(
+    Extension(state): Extension<ApiState>,
+    Json(settings): Json<UserSettings>,
+) -> Result<StatusCode, StatusCode> {
+    let provider = CachedParaglidingSiteProvider::new(state.cache);
+    provider
+        .save_settings(&settings)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
 }
 
-pub fn router() -> Router {
+#[derive(Clone)]
+pub struct ApiState {
+    pub cache: Cache,
+}
+
+pub fn router(state: ApiState) -> Router {
     Router::new()
         .route("/sites", get(get_sites))
         .route("/sites", put(update_site))
@@ -94,16 +110,22 @@ pub fn router() -> Router {
         .route("/decision-graph", get(get_decision_graph))
         .route("/decision-graph", post(save_decision_graph))
         .route("/weather-models", get(get_weather_models))
+        .layer(Extension(state))
 }
 
-async fn get_sites() -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
-    let provider = CachedParaglidingSiteProvider::new();
+async fn get_sites(
+    Extension(state): Extension<ApiState>,
+) -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
+    let provider = CachedParaglidingSiteProvider::new(state.cache);
     let sites = provider.fetch_all_sites().await;
     Ok(Json(sites))
 }
 
-async fn update_site(Json(site): Json<ParaglidingSite>) -> Result<StatusCode, StatusCode> {
-    let provider = CachedParaglidingSiteProvider::new();
+async fn update_site(
+    Extension(state): Extension<ApiState>,
+    Json(site): Json<ParaglidingSite>,
+) -> Result<StatusCode, StatusCode> {
+    let provider = CachedParaglidingSiteProvider::new(state.cache);
     provider
         .save_site(site)
         .await
@@ -111,8 +133,11 @@ async fn update_site(Json(site): Json<ParaglidingSite>) -> Result<StatusCode, St
     Ok(StatusCode::OK)
 }
 
-async fn delete_site(Path(site_name): Path<String>) -> Result<StatusCode, StatusCode> {
-    let provider = CachedParaglidingSiteProvider::new();
+async fn delete_site(
+    Extension(state): Extension<ApiState>,
+    Path(site_name): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let provider = CachedParaglidingSiteProvider::new(state.cache);
     provider
         .delete_site(&site_name)
         .await
@@ -125,7 +150,10 @@ pub struct ImportResponse {
     pub imported: usize,
 }
 
-async fn import_sites(body: Body) -> Result<Json<ImportResponse>, StatusCode> {
+async fn import_sites(
+    Extension(state): Extension<ApiState>,
+    body: Body,
+) -> Result<Json<ImportResponse>, StatusCode> {
     tracing::info!("Starting DHV file import");
 
     let bytes = axum::body::to_bytes(body, 50 * 1024 * 1024)
@@ -147,7 +175,7 @@ async fn import_sites(body: Body) -> Result<Json<ImportResponse>, StatusCode> {
     match dhv::parse_sites_from_xml(&xml_content) {
         Ok(sites) => {
             tracing::info!("Parsed {} sites from XML", sites.len());
-            let provider = CachedParaglidingSiteProvider::new();
+            let provider = CachedParaglidingSiteProvider::new(state.cache);
             for site in sites {
                 if let Err(e) = provider.save_site(site).await {
                     tracing::warn!("Failed to save site: {}", e);
@@ -167,8 +195,10 @@ async fn import_sites(body: Body) -> Result<Json<ImportResponse>, StatusCode> {
     }))
 }
 
-async fn get_decision_graph() -> Result<Json<Value>, StatusCode> {
-    let cached: Option<String> = cache::get(CACHE_KEY)
+async fn get_decision_graph(
+    Extension(state): Extension<ApiState>,
+) -> Result<Json<Value>, StatusCode> {
+    let cached: Option<String> = cache::get(&state.cache, CACHE_KEY)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -184,10 +214,14 @@ async fn get_decision_graph() -> Result<Json<Value>, StatusCode> {
     Ok(Json(value))
 }
 
-async fn save_decision_graph(Json(payload): Json<Value>) -> Result<StatusCode, StatusCode> {
+async fn save_decision_graph(
+    Extension(state): Extension<ApiState>,
+    Json(payload): Json<Value>,
+) -> Result<StatusCode, StatusCode> {
     let graph = serde_json::to_string(&payload).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    cache::put::<String>(
+    cache::put(
+        &state.cache,
         CACHE_KEY,
         graph,
         std::time::Duration::from_secs(365 * 24 * 60 * 60),

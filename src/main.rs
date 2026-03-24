@@ -10,6 +10,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
     application::ParaglidingCalendarService,
+    cache::{Cache, PersistentCache},
     calendar::{CalendarProvider, google::GoogleCalendar},
     location::Location,
     paragliding::{
@@ -46,8 +47,11 @@ static API_CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
 });
 
 // Create calendar entries for paragliding based on settings from cache
-async fn create_calender_entries() -> Result<()> {
-    let settings = match CachedParaglidingSiteProvider::get_settings().await? {
+async fn create_calender_entries(cache: Cache) -> Result<()> {
+    let settings = match CachedParaglidingSiteProvider::new(cache.clone())
+        .get_settings()
+        .await?
+    {
         Some(s) => s,
         None => {
             tracing::warn!("No settings found in cache, using defaults");
@@ -62,7 +66,7 @@ async fn create_calender_entries() -> Result<()> {
         "".to_string(),
     );
 
-    let mut cal = match GoogleCalendar::new().await {
+    let mut cal = match GoogleCalendar::new(cache.clone()).await {
         Ok(cal) => cal,
         Err(e) => {
             tracing::error!("Failed to create Google Calendar: {}", e);
@@ -70,8 +74,8 @@ async fn create_calender_entries() -> Result<()> {
         }
     };
 
-    let provider = CachedParaglidingSiteProvider::new();
-    let service = ParaglidingCalendarService::new();
+    let provider = CachedParaglidingSiteProvider::new(cache.clone());
+    let service = ParaglidingCalendarService::new(cache.clone());
     let config = crate::application::CalendarConfig {
         search_radius_km: settings.search_radius_km,
         minimum_flyable_duration: chrono::Duration::hours(settings.minimum_flyable_hours as i64),
@@ -124,18 +128,19 @@ async fn main() -> Result<()> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    cache::init(
+    let cache = std::sync::Arc::new(PersistentCache::new(
         env::var("XDG_CACHE_HOME")
             .ok()
             .or(env::var("CACHE_DIRECTORY").ok())
             .expect("Cache environment variable not set."),
-    )?;
+    )?);
 
-    tokio::join!(async { web::run().await }, async {
+    tokio::join!(async { web::run(cache.clone()).await }, async {
+        let cache = cache.clone();
         let mut interval = time::interval(time::Duration::from_hours(24));
         loop {
             interval.tick().await;
-            if let Err(e) = create_calender_entries().await {
+            if let Err(e) = create_calender_entries(cache.clone()).await {
                 tracing::error!("Failed to create calendar entries: {}", e);
             }
         }

@@ -8,8 +8,7 @@ use oauth2::{
     TokenResponse, TokenUrl, basic::BasicClient,
 };
 
-use crate::cache;
-use crate::email;
+use crate::{cache, email};
 
 const TOKEN_CACHE_KEY: &str = "calendar_token";
 
@@ -22,6 +21,7 @@ const SCOPES: [&str; 3] = [
 pub struct WebFlowAuthenticator {
     client: BasicClient,
     redirect_uri: String,
+    cache: cache::Cache,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -32,7 +32,12 @@ pub struct StoredToken {
 }
 
 impl WebFlowAuthenticator {
-    pub fn new(client_id: String, client_secret: String, redirect_uri: String) -> Self {
+    pub fn new(
+        client_id: String,
+        client_secret: String,
+        redirect_uri: String,
+        cache: cache::Cache,
+    ) -> Self {
         let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/auth".to_string())
             .expect("Invalid auth URL");
         let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string())
@@ -49,6 +54,7 @@ impl WebFlowAuthenticator {
         Self {
             client,
             redirect_uri,
+            cache,
         }
     }
 
@@ -84,7 +90,9 @@ impl WebFlowAuthenticator {
             for _ in 0..max_attempts {
                 tokio::time::sleep(Duration::from_secs(check_interval_secs)).await;
 
-                if let Ok(Some(token)) = cache::get::<StoredToken>(TOKEN_CACHE_KEY).await {
+                if let Ok(Some(token)) =
+                    cache::get::<StoredToken>(&self.cache, TOKEN_CACHE_KEY).await
+                {
                     if token.expiry > Utc::now().timestamp() {
                         tracing::info!("User authenticated successfully");
                         return Ok(token.access_token);
@@ -125,6 +133,7 @@ impl WebFlowAuthenticator {
         };
 
         cache::put(
+            &self.cache,
             TOKEN_CACHE_KEY,
             stored_token.clone(),
             Duration::from_secs(365 * 24 * 60 * 60),
@@ -164,6 +173,7 @@ impl WebFlowAuthenticator {
         };
 
         cache::put(
+            &self.cache,
             TOKEN_CACHE_KEY,
             stored_token.clone(),
             Duration::from_secs(365 * 24 * 60 * 60),
@@ -175,7 +185,7 @@ impl WebFlowAuthenticator {
     }
 
     async fn get_token_internal(&self) -> Result<Option<String>> {
-        let token = cache::get::<StoredToken>(TOKEN_CACHE_KEY)
+        let token = cache::get::<StoredToken>(&self.cache, TOKEN_CACHE_KEY)
             .await
             .ok()
             .flatten();
@@ -189,8 +199,13 @@ impl WebFlowAuthenticator {
                 match self.refresh_token(&refresh_token).await {
                     Ok(new_token) => {
                         let access_token = new_token.access_token.clone();
-                        cache::put(TOKEN_CACHE_KEY, new_token, Duration::from_hours(24 * 30))
-                            .await?;
+                        cache::put(
+                            &self.cache,
+                            TOKEN_CACHE_KEY,
+                            new_token,
+                            Duration::from_hours(24 * 30),
+                        )
+                        .await?;
                         return Ok(Some(access_token));
                     }
                     Err(e) => {
@@ -235,6 +250,7 @@ impl Clone for WebFlowAuthenticator {
         Self {
             client: self.client.clone(),
             redirect_uri: self.redirect_uri.clone(),
+            cache: self.cache.clone(),
         }
     }
 }
