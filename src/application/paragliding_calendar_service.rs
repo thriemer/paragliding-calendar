@@ -7,8 +7,8 @@ use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 
 use crate::{
-    cache::Cache,
     calendar::{CalendarEvent, CalendarProvider},
+    database::Db,
     location::Location,
     paragliding::{ParaglidingSite, ParaglidingSiteProvider, site_evaluator},
     weather::open_meteo,
@@ -38,12 +38,12 @@ impl Default for CalendarConfig {
 }
 
 pub struct ParaglidingCalendarService {
-    cache: Cache,
+    db: Db,
 }
 
 impl ParaglidingCalendarService {
-    pub fn new(cache: Cache) -> Self {
-        Self { cache }
+    pub fn new(db: Db) -> Self {
+        Self { db }
     }
 
     /// Create calendar events for paragliding based on location and configuration
@@ -120,13 +120,7 @@ impl ParaglidingCalendarService {
 
             if let Some(launch) = site.launches.first() {
                 let weather_model = site.preferred_weather_model.as_deref();
-                match open_meteo::get_forecast(
-                    launch.location.clone(),
-                    weather_model,
-                    self.cache.clone(),
-                )
-                .await
-                {
+                match open_meteo::get_forecast(launch.location.clone(), weather_model).await {
                     Ok(forecast) => {
                         let evaluation = site_evaluator::evaluate_site(site, &forecast).await;
                         result.push((evaluation, site.clone()));
@@ -162,12 +156,7 @@ impl ParaglidingCalendarService {
 
         for (eval, site) in sites_with_weather {
             let drive_to_site = Duration::seconds(
-                crate::routing::get_travel_time(
-                    location,
-                    &site.launches[0].location,
-                    self.cache.clone(),
-                )
-                .await? as i64,
+                crate::routing::get_travel_time(location, &site.launches[0].location).await? as i64,
             );
 
             for mut daily_summary in eval.daily_summaries.clone() {

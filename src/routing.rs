@@ -1,38 +1,19 @@
-use std::{env, time::Duration};
+use std::env;
 
-use anyhow::{Context, Ok, Result, anyhow};
-use rand::RngExt;
+use anyhow::{Context, Result, anyhow};
+use cached::proc_macro::cached;
 use serde::Deserialize;
 use tracing::instrument;
 
-use crate::{API_CLIENT, cache, location::Location};
+use crate::{API_CLIENT, location::Location};
 
-#[instrument(skip(cache))]
-pub async fn get_travel_time(
-    source: &Location,
-    destination: &Location,
-    cache: cache::Cache,
-) -> Result<u64> {
-    let key = source.to_key() + "-" + &destination.to_key();
-
-    if let Some(cached) = cache::get::<u64>(&cache, &key).await? {
-        return Ok(cached);
-    }
-
-    let seconds = get_travel_time_call(source, destination).await?;
-
-    let jitter: f32 = rand::rng().random_range(0.9..1.1);
-    cache::put(
-        &cache,
-        &key,
-        seconds,
-        Duration::from_hours((24f32 * 7f32 * jitter) as u64),
-    )
-    .await?;
-    Ok(seconds)
-}
-
-async fn get_travel_time_call(source: &Location, destination: &Location) -> Result<u64> {
+#[cached(
+    time = 604800,
+    result,
+    key = "String",
+    convert = r#"{ format!("{}-{}", source.to_key(), destination.to_key()) }"#
+)]
+async fn get_travel_time_cached(source: Location, destination: Location) -> Result<u64> {
     tracing::debug!("Calling the API");
     let url = format!(
         "https://graphhopper.com/api/1/route?point={},{}&point={},{}&profile=car&points_encoded=false&calc_points=false&key={}",
@@ -50,6 +31,11 @@ async fn get_travel_time_call(source: &Location, destination: &Location) -> Resu
         .get(0)
         .map(|path| path.time / 1000)
         .ok_or(anyhow!("No paths in response"))
+}
+
+#[instrument]
+pub async fn get_travel_time(source: &Location, destination: &Location) -> Result<u64> {
+    get_travel_time_cached(source.clone(), destination.clone()).await
 }
 
 #[derive(Debug, Deserialize)]

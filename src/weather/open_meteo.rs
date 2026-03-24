@@ -1,35 +1,24 @@
-use std::time::Duration;
-
 use anyhow::{Context, Result, anyhow};
-use rand::RngExt;
+use cached::proc_macro::cached;
 use tracing::instrument;
 
-use crate::{cache, location::Location, weather::WeatherForecast};
+use crate::{location::Location, weather::WeatherForecast};
 
-#[instrument(skip_all, fields(lat = %source.latitude, lon = %source.longitude))]
-pub async fn get_forecast(
-    source: Location,
-    model: Option<&str>,
-    cache: cache::Cache,
-) -> Result<WeatherForecast> {
-    let model_suffix = model.map(|m| format!("_{}", m)).unwrap_or_default();
-    let key = format!("weather_for_{}{}", source.to_key(), model_suffix);
-
-    if let Some(cached) = cache::get::<WeatherForecast>(&cache, &key).await? {
-        return Ok(cached);
-    }
-
-    let forecast = get_forecast_raw(source.clone(), model).await?;
-    let jitter: f32 = rand::rng().random_range(0.9..1.1);
-    cache::put(
-        &cache,
-        &key,
-        forecast.clone(),
-        Duration::from_hours((6f32 * jitter) as u64),
-    )
-    .await?;
+#[cached(
+    time = 21600,
+    result,
+    key = "String",
+    convert = r#"{ format!("weather_{}{}", source.to_key(), model.clone().unwrap_or_default()) }"#
+)]
+async fn get_forecast_cached(source: Location, model: Option<String>) -> Result<WeatherForecast> {
+    let forecast = get_forecast_raw(source.clone(), model.as_deref()).await?;
     tracing::info!("Weather fetch for {} was successful.", source.to_key());
     Ok(forecast)
+}
+
+#[instrument(skip_all, fields(lat = %source.latitude, lon = %source.longitude))]
+pub async fn get_forecast(source: Location, model: Option<&str>) -> Result<WeatherForecast> {
+    get_forecast_cached(source, model.map(String::from)).await
 }
 
 async fn get_forecast_raw(location: Location, model: Option<&str>) -> Result<WeatherForecast> {
@@ -53,12 +42,17 @@ async fn get_forecast_raw(location: Location, model: Option<&str>) -> Result<Wea
     Ok(forecast)
 }
 
+#[cached(
+    time = 604800,
+    result,
+    key = "String",
+    convert = r#"{ location_name.clone() }"#
+)]
 #[instrument(skip_all, fields(location_name = %location_name))]
-pub async fn geocode(location_name: &str) -> Result<Vec<Location>> {
-    // OpenMeteo geocoding API (no API key required)
+pub async fn geocode(location_name: String) -> Result<Vec<Location>> {
     let url = format!(
         "https://geocoding-api.open-meteo.com/v1/search?name={}&count=5&language=en&format=json",
-        urlencoding::encode(location_name)
+        urlencoding::encode(&location_name)
     );
 
     let response = reqwest::get(url).await?;
@@ -68,7 +62,6 @@ pub async fn geocode(location_name: &str) -> Result<Vec<Location>> {
         .await
         .with_context(|| "Failed to parse OpenMeteo geocoding response")?;
 
-    // Convert OpenMeteo results to our existing GeocodingResult format
     let geocoding_results: Vec<Location> = openmeteo_response
         .results
         .unwrap_or_default()
@@ -84,16 +77,13 @@ pub async fn geocode(location_name: &str) -> Result<Vec<Location>> {
     Ok(geocoding_results)
 }
 
-#[instrument(skip(cache))]
-pub async fn fetch_elevation(latitude: f64, longitude: f64, cache: &cache::Cache) -> Result<f64> {
-    let rounded_lat = (latitude * 1000.0).round() / 1000.0;
-    let rounded_lon = (longitude * 1000.0).round() / 1000.0;
-    let cache_key = format!("elevation_{}_{}", rounded_lat, rounded_lon);
-
-    if let Some(cached) = cache::get::<f64>(cache, &cache_key).await? {
-        return Ok(cached);
-    }
-
+#[cached(
+    time = 31536000,
+    result,
+    key = "String",
+    convert = r#"{ format!("{}_{}", (latitude * 1000.0).round() / 1000.0, (longitude * 1000.0).round() / 1000.0) }"#
+)]
+pub async fn fetch_elevation(latitude: f64, longitude: f64) -> Result<f64> {
     let url = format!(
         "https://api.open-meteo.com/v1/elevation?latitude={}&longitude={}",
         latitude, longitude
@@ -109,14 +99,6 @@ pub async fn fetch_elevation(latitude: f64, longitude: f64, cache: &cache::Cache
         .and_then(|v| v.as_f64())
         .ok_or(anyhow!("No elevation provided in response"))?;
 
-    let _ = cache::put(
-        cache,
-        &cache_key,
-        elevation,
-        std::time::Duration::from_secs(365 * 24 * 60 * 60),
-    )
-    .await;
-
     Ok(elevation)
 }
 
@@ -128,7 +110,6 @@ mod openmeteo {
     use super::{Location, WeatherForecast};
     use crate::weather::WeatherData;
 
-    /// Current weather and forecast response from `OpenMeteo` API
     #[derive(Debug, Deserialize)]
     pub struct ForecastResponse {
         pub latitude: f64,
@@ -140,7 +121,6 @@ mod openmeteo {
         pub current: Option<CurrentData>,
     }
 
-    /// Hourly weather data from `OpenMeteo`
     #[derive(Debug, Deserialize)]
     pub struct HourlyData {
         pub time: Vec<String>,
@@ -162,7 +142,6 @@ mod openmeteo {
         pub weather_code: Option<Vec<u8>>,
     }
 
-    /// Daily weather data from `OpenMeteo`
     #[derive(Debug, Deserialize)]
     pub struct DailyData {
         pub time: Vec<String>,
@@ -180,7 +159,6 @@ mod openmeteo {
         pub weather_code: Option<Vec<Option<u8>>>,
     }
 
-    /// Current weather data from `OpenMeteo` (when available)
     #[derive(Debug, Deserialize)]
     pub struct CurrentData {
         #[serde(rename = "temperature_2m")]
@@ -201,7 +179,6 @@ mod openmeteo {
         pub weather_code: u8,
     }
 
-    /// Geocoding response from `OpenMeteo`
     #[derive(Debug, Deserialize)]
     pub struct GeocodingResponse {
         pub results: Option<Vec<GeocodingResult>>,
@@ -229,7 +206,6 @@ mod openmeteo {
         }
     }
 
-    /// Convert `OpenMeteo` weather code to human-readable description
     #[must_use]
     pub fn weather_code_to_description(code: u8) -> &'static str {
         match code {
@@ -265,24 +241,19 @@ mod openmeteo {
         }
     }
 
-    // Convert OpenMeteo API responses to internal models
     impl WeatherForecast {
-        /// Create forecast from `OpenMeteo` API response
         #[must_use]
         pub fn from_openmeteo(response: &ForecastResponse, location: Location) -> Self {
             let mut forecasts = Vec::new();
 
-            // Process hourly data if available
             if let Some(hourly) = &response.hourly {
                 let len = hourly.time.len();
 
                 for i in 0..len {
-                    // Parse timestamp
                     let timestamp =
                         chrono::NaiveDateTime::parse_from_str(&hourly.time[i], "%Y-%m-%dT%H:%M")
                             .map_or_else(|_| Utc::now(), |dt| dt.and_utc());
 
-                    // Extract data with safe indexing and default values
                     let temperature = *hourly
                         .temperature
                         .as_ref()

@@ -1,19 +1,19 @@
 use std::{env, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
+use cached::proc_macro::cached;
 use chrono::{DateTime, Datelike, NaiveTime, Utc};
 use google_calendar3::{
     CalendarHub,
-    api::{CalendarList, FreeBusyRequest, FreeBusyRequestItem, Scope},
+    api::{CalendarList, FreeBusyRequestItem, Scope},
 };
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::instrument;
 
-use crate::{
-    cache,
-    calendar::{CalendarEvent, CalendarProvider, web_flow_authenticator::WebFlowAuthenticator},
+use crate::calendar::{
+    CalendarEvent, CalendarProvider, web_flow_authenticator::WebFlowAuthenticator,
 };
 
 pub type CalendarHubType =
@@ -21,12 +21,99 @@ pub type CalendarHubType =
 
 pub struct GoogleCalendar {
     hub: CalendarHubType,
-    cache: cache::Cache,
+}
+
+#[cached(time = 259200, result, key = "String", convert = r#"{ name.clone() }"#)]
+async fn get_calendar_id_for_name(hub: CalendarHubType, name: String) -> Result<String> {
+    let (_, lists) = hub
+        .calendar_list()
+        .list()
+        .add_scope(Scope::CalendarlistReadonly)
+        .doit()
+        .await?;
+
+    let lists = lists.items.ok_or(anyhow!("Empty calendar list"))?;
+    let result = lists
+        .iter()
+        .filter(|l| {
+            if let Some(desc) = &l.summary {
+                desc == &name
+            } else {
+                false
+            }
+        })
+        .map(|l| l.id.clone().unwrap())
+        .collect::<Vec<String>>()
+        .first()
+        .cloned();
+
+    result.ok_or_else(|| anyhow!("Calendar id not found for name {}", name))
+}
+
+#[cached(
+    time = 28800,
+    result,
+    key = "String",
+    convert = r#"{ cache_key.clone() }"#
+)]
+async fn get_free_busy_by_key(
+    _hub: CalendarHubType,
+    _calendars: Vec<String>,
+    _week_start: DateTime<Utc>,
+    _week_end: DateTime<Utc>,
+    cache_key: String,
+) -> Result<google_calendar3::api::FreeBusyResponse> {
+    Err(anyhow!("Should not be called directly"))
+}
+
+async fn do_get_free_busy(
+    hub: &CalendarHubType,
+    calendars: &[String],
+    week_start: DateTime<Utc>,
+    week_end: DateTime<Utc>,
+) -> Result<google_calendar3::api::FreeBusyResponse> {
+    let calendars_vec = calendars.to_vec();
+
+    let items: Vec<FreeBusyRequestItem> = futures::future::join_all(
+        calendars_vec
+            .iter()
+            .map(|n| {
+                let name = n.clone();
+                async move {
+                    let id = match get_calendar_id_for_name(hub.clone(), name).await {
+                        Ok(id) => Some(id),
+                        Err(err) => {
+                            tracing::warn!("Cant get id for name {}. Error {:?}", n, err);
+                            None
+                        }
+                    };
+                    FreeBusyRequestItem { id }
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+    .await;
+
+    let response = hub
+        .freebusy()
+        .query(google_calendar3::api::FreeBusyRequest {
+            items: Some(items),
+            time_min: Some(week_start),
+            time_max: Some(week_end),
+            group_expansion_max: None,
+            calendar_expansion_max: None,
+            time_zone: None,
+        })
+        .add_scope(Scope::Freebusy)
+        .doit()
+        .await?
+        .1;
+
+    Ok(response)
 }
 
 impl GoogleCalendar {
-    pub async fn new(cache: cache::Cache) -> Result<Self> {
-        // Build HTTP client
+    pub async fn new(db: crate::database::Db) -> Result<Self> {
         let connector = HttpsConnectorBuilder::new()
             .with_native_roots()
             .context("Failed to build HTTPS connector")?
@@ -41,41 +128,14 @@ impl GoogleCalendar {
             env::var("OAUTH_REDIRECT_URL").unwrap_or_else(|_| {
                 "https://linus-x1.bangus-firefighter.ts.net/oauth/callback".to_string()
             }),
-            cache.clone(),
+            db.clone(),
         );
         let hub = CalendarHub::new(hyper_client, auth);
-        Ok(GoogleCalendar { hub, cache })
+        Ok(GoogleCalendar { hub })
     }
 
     async fn get_id_for_name(&self, name: &str) -> Result<String> {
-        let key = format!("calendar_name_id_map_{}", name);
-
-        if let Some(id) = cache::get(&self.cache, &key).await? {
-            return Ok(id);
-        }
-
-        let list = self.get_calendar_list().await?;
-        let lists = list.items.ok_or(anyhow!("Empty calendar list"))?;
-        let result = lists
-            .iter()
-            .filter(|l| {
-                if let Some(desc) = &l.summary {
-                    desc == name
-                } else {
-                    false
-                }
-            })
-            .map(|l| l.id.clone().unwrap())
-            .collect::<Vec<String>>()
-            .first()
-            .cloned();
-
-        if let Some(id) = result {
-            cache::put(&self.cache, &key, id.clone(), Duration::from_hours(72)).await?;
-            Ok(id.to_owned())
-        } else {
-            Err(anyhow!("Calendar id not found for name {}", name))
-        }
+        get_calendar_id_for_name(self.hub.clone(), name.to_string()).await
     }
 
     async fn get_calendar_list(&self) -> Result<CalendarList> {
@@ -98,24 +158,6 @@ impl CalendarProvider for GoogleCalendar {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<bool> {
-        let items = futures::future::join_all(
-            calendars
-                .iter()
-                .map(async |n| {
-                    let id = match self.get_id_for_name(n).await {
-                        Ok(id) => Some(id),
-                        Err(err) => {
-                            tracing::warn!("Cant get id for name {}. Error {:?}", n, err);
-                            None
-                        }
-                    };
-                    FreeBusyRequestItem { id }
-                })
-                .collect::<Vec<_>>(),
-        )
-        .await;
-
-        // snap start and finish to start/end of the week to reduce requests
         let start_weekday = start.weekday().num_days_from_monday() as u64;
         let end_weekday = end.weekday().num_days_from_monday() as u64;
         let week_start_datetime = start.date_naive().and_time(NaiveTime::MIN).and_utc()
@@ -130,38 +172,44 @@ impl CalendarProvider for GoogleCalendar {
         calendars.hash(&mut hasher);
         week_start_datetime.hash(&mut hasher);
         week_end_datetime.hash(&mut hasher);
-        let cache_key = format!("Calendar_free_busy_hash_{}", hasher.finish());
+        let cache_key = format!("freebusy_{}", hasher.finish());
 
-        let busy = {
-            if let Some(busy) = cache::get(&self.cache, &cache_key).await? {
-                busy
-            } else {
-                let response: google_calendar3::api::FreeBusyResponse = self
-                    .hub
-                    .freebusy()
-                    .query(FreeBusyRequest {
-                        items: Some(items.clone()),
-                        time_min: Some(week_start_datetime),
-                        time_max: Some(week_end_datetime),
-                        group_expansion_max: None,
-                        calendar_expansion_max: None,
-                        time_zone: None,
-                    })
-                    .add_scope(Scope::Freebusy)
-                    .doit()
+        let busy = get_free_busy_by_key(
+            self.hub.clone(),
+            calendars.clone(),
+            week_start_datetime,
+            week_end_datetime,
+            cache_key,
+        )
+        .await;
+
+        let busy = match busy {
+            Ok(b) => b,
+            Err(_) => {
+                do_get_free_busy(&self.hub, calendars, week_start_datetime, week_end_datetime)
                     .await?
-                    .1;
-
-                cache::put(
-                    &self.cache,
-                    &cache_key,
-                    response.clone(),
-                    Duration::from_hours(8),
-                )
-                .await?;
-                response
             }
         };
+
+        let items: Vec<FreeBusyRequestItem> = futures::future::join_all(
+            calendars
+                .iter()
+                .map(|n| {
+                    let name = n.clone();
+                    async move {
+                        let id = match self.get_id_for_name(&name).await {
+                            Ok(id) => Some(id),
+                            Err(err) => {
+                                tracing::warn!("Cant get id for name {}. Error {:?}", n, err);
+                                None
+                            }
+                        };
+                        FreeBusyRequestItem { id }
+                    }
+                })
+                .collect::<Vec<_>>(),
+        )
+        .await;
 
         let mut b: bool = false;
 
@@ -266,18 +314,13 @@ impl CalendarProvider for GoogleCalendar {
         }
         let mut cal = google_calendar3::api::Calendar::default();
         cal.summary = Some(name.into());
-        let (_, cal) = self
+        let (_, _) = self
             .hub
             .calendars()
             .insert(cal)
             .add_scope(Scope::AppCreated)
             .doit()
             .await?;
-
-        if let Some(id) = cal.id {
-            let key = format!("calendar_name_id_map_{}", name);
-            cache::put(&self.cache, &key, id, Duration::from_hours(24)).await?;
-        }
         Ok(())
     }
 }

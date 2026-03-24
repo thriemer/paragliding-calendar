@@ -34,6 +34,7 @@ zen-engine = "0.53"
 # cache
 postcard = {version="1.1", features = ["use-std"]}
 fjall = "3.0"
+cached = { version = "0.54", features = ["proc_macro", "async"] }
 
 # integrations
 google-calendar3 = "7.0"
