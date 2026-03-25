@@ -7,6 +7,10 @@ use crate::location::Location;
 
 pub mod open_meteo;
 
+pub trait WeatherProvider: Send + Sync {
+    async fn get_forecast(&self, source: Location, model: Option<&str>) -> Result<WeatherForecast>;
+}
+
 pub fn get_sunrise_sunset(
     location: &Location,
     date: NaiveDate,

@@ -13,13 +13,14 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
     database::{self, Db},
-    location::Location,
+    email::{EmailProvider, GmailEmailProvider},
+    location::{Location, LocationProvider, open_meteo::OpenMeteoLocationProvider},
     paragliding::{
         ParaglidingSite, ParaglidingSiteProvider,
         database::{CachedParaglidingSiteProvider, UserSettings},
         dhv,
     },
-    weather::{self, WeatherModel, open_meteo},
+    weather::{self, WeatherModel},
 };
 
 const CACHE_KEY: &str = "decision_graph";
@@ -49,14 +50,21 @@ async fn get_elevation(
     Extension(state): Extension<ApiState>,
     Query(query): Query<ElevationQuery>,
 ) -> Result<Json<ElevationResponse>, StatusCode> {
-    let elevation = open_meteo::fetch_elevation(query.latitude, query.longitude)
+    let elevation = state
+        .location_provider
+        .fetch_elevation(query.latitude, query.longitude)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(ElevationResponse { elevation }))
 }
 
-async fn geocode(Query(query): Query<GeocodeQuery>) -> Result<Json<GeocodeResponse>, StatusCode> {
-    let locations = open_meteo::geocode(query.name)
+async fn geocode(
+    Extension(state): Extension<ApiState>,
+    Query(query): Query<GeocodeQuery>,
+) -> Result<Json<GeocodeResponse>, StatusCode> {
+    let locations = state
+        .location_provider
+        .geocode(query.name)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(GeocodeResponse { results: locations }))
@@ -92,6 +100,8 @@ async fn save_settings(
 #[derive(Clone)]
 pub struct ApiState {
     pub db: Db,
+    pub location_provider: OpenMeteoLocationProvider,
+    pub email_provider: GmailEmailProvider,
 }
 
 pub fn router(state: ApiState) -> Router {

@@ -8,7 +8,10 @@ use oauth2::{
     TokenResponse, TokenUrl, basic::BasicClient,
 };
 
-use crate::{database, email};
+use crate::{
+    database,
+    email::{EmailProvider, GmailEmailProvider},
+};
 
 const TOKEN_CACHE_KEY: &str = "calendar_token";
 
@@ -22,6 +25,7 @@ pub struct WebFlowAuthenticator {
     client: BasicClient,
     redirect_uri: String,
     db: database::Db,
+    email_provider: GmailEmailProvider,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -37,6 +41,7 @@ impl WebFlowAuthenticator {
         client_secret: String,
         redirect_uri: String,
         db: database::Db,
+        email_provider: GmailEmailProvider,
     ) -> Self {
         let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/auth".to_string())
             .expect("Invalid auth URL");
@@ -55,6 +60,7 @@ impl WebFlowAuthenticator {
             client,
             redirect_uri,
             db,
+            email_provider,
         }
     }
 
@@ -81,7 +87,13 @@ impl WebFlowAuthenticator {
             let (auth_url, csrf_state) = self.build_authorization_url();
 
             tracing::info!("Sending authentication URL via email");
-            email::send_auth_link(&auth_url)
+            let subject = "Google Calendar Authentication Link";
+            let body = format!(
+                "Click the following link to authenticate with Google Calendar:\n\n{}\n\nAfter clicking, grant permissions and you'll be redirected back.",
+                auth_url
+            );
+            self.email_provider
+                .send_mail("notification@example.com", subject, &body)
                 .await
                 .context("Failed to send auth email")?;
 
@@ -235,6 +247,7 @@ impl Clone for WebFlowAuthenticator {
             client: self.client.clone(),
             redirect_uri: self.redirect_uri.clone(),
             db: self.db.clone(),
+            email_provider: self.email_provider.clone(),
         }
     }
 }

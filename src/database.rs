@@ -5,6 +5,16 @@ use fjall::{Iter, Keyspace};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::task;
 
+pub trait DbProvider: Send + Sync {
+    async fn save<T: Serialize + Send + Debug + 'static>(&self, key: &str, value: T) -> Result<()>;
+    async fn get<T: DeserializeOwned + Send + 'static>(&self, key: &str) -> Result<Option<T>>;
+    async fn find_by_prefix<T: DeserializeOwned + Send + 'static>(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<T>>;
+    async fn delete(&self, key: &str) -> Result<()>;
+}
+
 pub struct Database {
     store: Keyspace,
 }
@@ -77,6 +87,27 @@ impl Database {
         let store = self.store.clone();
         let _ = task::spawn_blocking(move || store.remove(key)).await?;
         Ok(())
+    }
+}
+
+impl DbProvider for Database {
+    async fn save<T: Serialize + Send + Debug + 'static>(&self, key: &str, value: T) -> Result<()> {
+        Database::save(self, key, value).await
+    }
+
+    async fn get<T: DeserializeOwned + Send + 'static>(&self, key: &str) -> Result<Option<T>> {
+        Database::get(self, key).await
+    }
+
+    async fn find_by_prefix<T: DeserializeOwned + Send + 'static>(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<T>> {
+        Database::find_by_prefix(self, prefix).await
+    }
+
+    async fn delete(&self, key: &str) -> Result<()> {
+        Database::delete(self, key).await
     }
 }
 

@@ -1,7 +1,15 @@
 //! Location model for geographic coordinates and metadata
 
+use anyhow::Result;
 use haversine::{Location as HaversineLocation, Units, distance};
 use serde::{Deserialize, Serialize};
+
+pub mod open_meteo;
+
+pub trait LocationProvider: Send + Sync {
+    async fn geocode(&self, location_name: String) -> Result<Vec<Location>>;
+    async fn fetch_elevation(&self, latitude: f64, longitude: f64) -> Result<f64>;
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Location {

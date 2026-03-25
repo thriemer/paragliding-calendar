@@ -12,12 +12,15 @@ use crate::{
     application::ParaglidingCalendarService,
     calendar::{CalendarProvider, google::GoogleCalendar},
     database::{Database, Db},
+    email::GmailEmailProvider,
     location::Location,
     paragliding::{
         ParaglidingSite, ParaglidingSiteProvider,
         database::{CachedParaglidingSiteProvider, UserSettings},
         site_evaluator::SiteEvaluationResult,
     },
+    routing::GraphHopperRoutingProvider,
+    weather::open_meteo::OpenMeteoWeatherProvider,
 };
 
 mod api;
@@ -66,7 +69,8 @@ async fn create_calender_entries(db: Db) -> Result<()> {
         "".to_string(),
     );
 
-    let mut cal = match GoogleCalendar::new(db.clone()).await {
+    let email_provider = GmailEmailProvider::new().expect("Failed to create email provider");
+    let mut cal = match GoogleCalendar::new(db.clone(), email_provider).await {
         Ok(cal) => cal,
         Err(e) => {
             tracing::error!("Failed to create Google Calendar: {}", e);
@@ -75,6 +79,8 @@ async fn create_calender_entries(db: Db) -> Result<()> {
     };
 
     let provider = CachedParaglidingSiteProvider::new(db.clone());
+    let weather_provider = OpenMeteoWeatherProvider::new();
+    let routing_provider = GraphHopperRoutingProvider::new();
     let service = ParaglidingCalendarService::new(db.clone());
     let config = crate::application::CalendarConfig {
         search_radius_km: settings.search_radius_km,
@@ -84,6 +90,8 @@ async fn create_calender_entries(db: Db) -> Result<()> {
     let events = service
         .create_events_for_location(
             &provider,
+            &weather_provider,
+            &routing_provider,
             &location,
             &mut cal,
             &settings.calendar_name,

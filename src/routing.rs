@@ -7,6 +7,10 @@ use tracing::instrument;
 
 use crate::{API_CLIENT, location::Location};
 
+pub trait RoutingProvider: Send + Sync {
+    async fn get_travel_time(&self, source: &Location, destination: &Location) -> Result<u64>;
+}
+
 #[cached(
     time = 604800,
     result,
@@ -46,4 +50,19 @@ struct PathResponse {
 #[derive(Debug, Deserialize)]
 struct ApiResponse {
     paths: Vec<PathResponse>,
+}
+
+#[derive(Clone, Default)]
+pub struct GraphHopperRoutingProvider;
+
+impl GraphHopperRoutingProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl RoutingProvider for GraphHopperRoutingProvider {
+    async fn get_travel_time(&self, source: &Location, destination: &Location) -> Result<u64> {
+        get_travel_time(source, destination).await
+    }
 }

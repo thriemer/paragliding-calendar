@@ -2,7 +2,25 @@ use anyhow::{Context, Result, anyhow};
 use cached::proc_macro::cached;
 use tracing::instrument;
 
-use crate::{location::Location, weather::WeatherForecast};
+use crate::{
+    location::Location,
+    weather::{WeatherForecast, WeatherProvider},
+};
+
+#[derive(Clone, Default)]
+pub struct OpenMeteoWeatherProvider;
+
+impl OpenMeteoWeatherProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl WeatherProvider for OpenMeteoWeatherProvider {
+    async fn get_forecast(&self, source: Location, model: Option<&str>) -> Result<WeatherForecast> {
+        get_forecast(source, model).await
+    }
+}
 
 #[cached(
     time = 21600,

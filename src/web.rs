@@ -13,6 +13,8 @@ use tower_http::timeout::TimeoutLayer;
 
 use crate::api::ApiState;
 use crate::calendar::web_flow_authenticator::WebFlowAuthenticator;
+use crate::email::GmailEmailProvider;
+use crate::location::open_meteo::OpenMeteoLocationProvider;
 use crate::{api, config, database::Db};
 
 async fn oauth_callback(
@@ -28,6 +30,7 @@ async fn oauth_callback(
             "https://linus-x1.bangus-firefighter.ts.net/oauth/callback".to_string()
         }),
         state.db.clone(),
+        state.email_provider.clone(),
     );
     match auth.exchange_code(code).await {
         Ok(_token) => {
@@ -48,7 +51,11 @@ pub async fn run(db: Db) {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let api_state = ApiState { db };
+    let api_state = ApiState {
+        db,
+        location_provider: OpenMeteoLocationProvider::new(),
+        email_provider: GmailEmailProvider::new().expect("Failed to create email provider"),
+    };
     let api_router = api::router(api_state);
     let app = Router::new()
         .route("/oauth/callback", get(oauth_callback))

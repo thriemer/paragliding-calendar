@@ -11,7 +11,8 @@ use crate::{
     database::Db,
     location::Location,
     paragliding::{ParaglidingSite, ParaglidingSiteProvider, site_evaluator},
-    weather::open_meteo,
+    routing::RoutingProvider,
+    weather::WeatherProvider,
 };
 
 /// Represents a time window when paragliding is feasible
@@ -47,9 +48,11 @@ impl ParaglidingCalendarService {
     }
 
     /// Create calendar events for paragliding based on location and configuration
-    pub async fn create_events_for_location<P, C>(
+    pub async fn create_events_for_location<P, W, R, C>(
         &self,
         provider: &P,
+        weather_provider: &W,
+        routing_provider: &R,
         location: &Location,
         calendar_provider: &mut C,
         calendar_name: &str,
@@ -57,6 +60,8 @@ impl ParaglidingCalendarService {
     ) -> Result<Vec<CalendarEvent>>
     where
         P: ParaglidingSiteProvider,
+        W: WeatherProvider,
+        R: RoutingProvider,
         C: CalendarProvider,
     {
         // Prepare the calendar
@@ -67,7 +72,12 @@ impl ParaglidingCalendarService {
 
         // Find nearby sites with weather
         let sites_with_weather = self
-            .find_sites_with_weather(provider, location, config.search_radius_km)
+            .find_sites_with_weather(
+                provider,
+                weather_provider,
+                location,
+                config.search_radius_km,
+            )
             .await;
 
         // Find flyable windows
@@ -75,6 +85,7 @@ impl ParaglidingCalendarService {
             .find_flyable_windows(
                 location,
                 &sites_with_weather,
+                routing_provider,
                 calendar_provider,
                 &other_calendar_names,
                 config.minimum_flyable_duration,
@@ -97,14 +108,16 @@ impl ParaglidingCalendarService {
     }
 
     /// Find nearby paragliding sites with weather forecasts
-    async fn find_sites_with_weather<P>(
+    async fn find_sites_with_weather<P, W>(
         &self,
         provider: &P,
+        weather_provider: &W,
         location: &Location,
         radius_km: f64,
     ) -> Vec<(site_evaluator::SiteEvaluationResult, ParaglidingSite)>
     where
         P: ParaglidingSiteProvider,
+        W: WeatherProvider,
     {
         let nearby_sites = provider
             .fetch_launches_within_radius(location, radius_km)
@@ -120,7 +133,10 @@ impl ParaglidingCalendarService {
 
             if let Some(launch) = site.launches.first() {
                 let weather_model = site.preferred_weather_model.as_deref();
-                match open_meteo::get_forecast(launch.location.clone(), weather_model).await {
+                match weather_provider
+                    .get_forecast(launch.location.clone(), weather_model)
+                    .await
+                {
                     Ok(forecast) => {
                         let evaluation = site_evaluator::evaluate_site(site, &forecast).await;
                         result.push((evaluation, site.clone()));
@@ -141,22 +157,26 @@ impl ParaglidingCalendarService {
     }
 
     /// Find flyable windows considering weather and calendar availability
-    async fn find_flyable_windows<C>(
+    async fn find_flyable_windows<R, C>(
         &self,
         location: &Location,
         sites_with_weather: &[(site_evaluator::SiteEvaluationResult, ParaglidingSite)],
+        routing_provider: &R,
         calendar_provider: &C,
         other_calendars: &[String],
         minimum_duration: Duration,
     ) -> Result<Vec<FlyableWindow>>
     where
+        R: RoutingProvider,
         C: CalendarProvider,
     {
         let mut windows = Vec::new();
 
         for (eval, site) in sites_with_weather {
             let drive_to_site = Duration::seconds(
-                crate::routing::get_travel_time(location, &site.launches[0].location).await? as i64,
+                routing_provider
+                    .get_travel_time(location, &site.launches[0].location)
+                    .await? as i64,
             );
 
             for mut daily_summary in eval.daily_summaries.clone() {

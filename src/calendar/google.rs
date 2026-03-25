@@ -113,7 +113,10 @@ async fn do_get_free_busy(
 }
 
 impl GoogleCalendar {
-    pub async fn new(db: crate::database::Db) -> Result<Self> {
+    pub async fn new(
+        db: crate::database::Db,
+        email_provider: crate::email::GmailEmailProvider,
+    ) -> Result<Self> {
         let connector = HttpsConnectorBuilder::new()
             .with_native_roots()
             .context("Failed to build HTTPS connector")?
@@ -129,6 +132,7 @@ impl GoogleCalendar {
                 "https://linus-x1.bangus-firefighter.ts.net/oauth/callback".to_string()
             }),
             db.clone(),
+            email_provider,
         );
         let hub = CalendarHub::new(hyper_client, auth);
         Ok(GoogleCalendar { hub })
