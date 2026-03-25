@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    database::{self, Db},
+    database::Db,
     location::Location,
     paragliding::{ParaglidingSite, ParaglidingSiteProvider},
 };
@@ -32,6 +32,7 @@ impl Default for UserSettings {
     }
 }
 
+#[derive(Clone)]
 pub struct CachedParaglidingSiteProvider {
     db: Db,
 }
@@ -43,20 +44,20 @@ impl CachedParaglidingSiteProvider {
 
     pub async fn save_site(&self, site: ParaglidingSite) -> Result<()> {
         let key = format!("site_{}", site.name);
-        database::save(&self.db, &key, site).await
+        self.db.save(&key, site).await
     }
 
     pub async fn delete_site(&self, name: &str) -> Result<()> {
         let key = format!("site_{}", name);
-        database::delete(&self.db, &key).await
+        self.db.delete(&key).await
     }
 
     pub async fn get_settings(&self) -> Result<Option<UserSettings>> {
-        database::get::<UserSettings>(&self.db, SETTINGS_KEY).await
+        self.db.get::<UserSettings>(SETTINGS_KEY).await
     }
 
     pub async fn save_settings(&self, settings: &UserSettings) -> Result<()> {
-        database::save(&self.db, SETTINGS_KEY, settings.clone()).await
+        self.db.save(SETTINGS_KEY, settings.clone()).await
     }
 }
 
@@ -73,7 +74,7 @@ impl ParaglidingSiteProvider for CachedParaglidingSiteProvider {
         radius_km: f64,
     ) -> Vec<(ParaglidingSite, f64)> {
         let sites: Vec<ParaglidingSite> =
-            match database::find_by_prefix::<ParaglidingSite>(&self.db, "site_").await {
+            match self.db.find_by_prefix::<ParaglidingSite>("site_").await {
                 Ok(sites) => sites,
                 Err(e) => {
                     tracing::error!("Failed to fetch sites from database: {}", e);
@@ -108,7 +109,7 @@ impl ParaglidingSiteProvider for CachedParaglidingSiteProvider {
     }
 
     async fn fetch_all_sites(&self) -> Vec<ParaglidingSite> {
-        match database::find_by_prefix::<ParaglidingSite>(&self.db, "site_").await {
+        match self.db.find_by_prefix::<ParaglidingSite>("site_").await {
             Ok(sites) => sites,
             Err(e) => {
                 tracing::error!("Failed to fetch all sites from database: {}", e);

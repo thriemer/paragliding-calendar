@@ -3,7 +3,6 @@ use std::env;
 use anyhow::{Context, Result, anyhow};
 use cached::proc_macro::cached;
 use serde::Deserialize;
-use tracing::instrument;
 
 use crate::{API_CLIENT, location::Location};
 
@@ -37,11 +36,6 @@ async fn get_travel_time_cached(source: Location, destination: Location) -> Resu
         .ok_or(anyhow!("No paths in response"))
 }
 
-#[instrument]
-pub async fn get_travel_time(source: &Location, destination: &Location) -> Result<u64> {
-    get_travel_time_cached(source.clone(), destination.clone()).await
-}
-
 #[derive(Debug, Deserialize)]
 struct PathResponse {
     time: u64,
@@ -63,6 +57,6 @@ impl GraphHopperRoutingProvider {
 
 impl RoutingProvider for GraphHopperRoutingProvider {
     async fn get_travel_time(&self, source: &Location, destination: &Location) -> Result<u64> {
-        get_travel_time(source, destination).await
+        get_travel_time_cached(source.clone(), destination.clone()).await
     }
 }

@@ -15,6 +15,7 @@ use crate::api::ApiState;
 use crate::calendar::web_flow_authenticator::WebFlowAuthenticator;
 use crate::email::GmailEmailProvider;
 use crate::location::open_meteo::OpenMeteoLocationProvider;
+use crate::paragliding::database::CachedParaglidingSiteProvider;
 use crate::{api, config, database::Db};
 
 async fn oauth_callback(
@@ -52,9 +53,10 @@ pub async fn run(db: Db) {
         .allow_headers(Any);
 
     let api_state = ApiState {
-        db,
+        db: db.clone(),
         location_provider: OpenMeteoLocationProvider::new(),
         email_provider: GmailEmailProvider::new().expect("Failed to create email provider"),
+        site_provider: CachedParaglidingSiteProvider::new(db),
     };
     let api_router = api::router(api_state);
     let app = Router::new()

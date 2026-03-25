@@ -2,9 +2,10 @@ use std::{fmt::Debug, path::Path, sync::Arc};
 
 use anyhow::Result;
 use fjall::{Iter, Keyspace};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use tokio::task;
 
+#[allow(dead_code)]
 pub trait DbProvider: Send + Sync {
     async fn save<T: Serialize + Send + Debug + 'static>(&self, key: &str, value: T) -> Result<()>;
     async fn get<T: DeserializeOwned + Send + 'static>(&self, key: &str) -> Result<Option<T>>;
@@ -109,27 +110,4 @@ impl DbProvider for Database {
     async fn delete(&self, key: &str) -> Result<()> {
         Database::delete(self, key).await
     }
-}
-
-pub async fn save<T: Serialize + Send + Debug + 'static>(
-    db: &Db,
-    key: &str,
-    value: T,
-) -> Result<()> {
-    db.save(key, value).await
-}
-
-pub async fn get<T: DeserializeOwned + Send + 'static>(db: &Db, key: &str) -> Result<Option<T>> {
-    db.get(key).await
-}
-
-pub async fn find_by_prefix<T: DeserializeOwned + Send + 'static>(
-    db: &Db,
-    prefix: &str,
-) -> Result<Vec<T>> {
-    db.find_by_prefix(prefix).await
-}
-
-pub async fn delete(db: &Db, key: &str) -> Result<()> {
-    db.delete(key).await
 }

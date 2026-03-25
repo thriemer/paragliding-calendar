@@ -1,11 +1,9 @@
 use std::{env, sync::LazyLock};
 
 use anyhow::Result;
-use futures::StreamExt;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use tokio::time;
-use tracing::instrument;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
@@ -14,11 +12,7 @@ use crate::{
     database::{Database, Db},
     email::GmailEmailProvider,
     location::Location,
-    paragliding::{
-        ParaglidingSite, ParaglidingSiteProvider,
-        database::{CachedParaglidingSiteProvider, UserSettings},
-        site_evaluator::SiteEvaluationResult,
-    },
+    paragliding::database::{CachedParaglidingSiteProvider, UserSettings},
     routing::GraphHopperRoutingProvider,
     weather::open_meteo::OpenMeteoWeatherProvider,
 };
@@ -50,11 +44,12 @@ static API_CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
 });
 
 // Create calendar entries for paragliding based on settings from database
-async fn create_calender_entries(db: Db) -> Result<()> {
-    let settings = match CachedParaglidingSiteProvider::new(db.clone())
-        .get_settings()
-        .await?
-    {
+async fn create_calender_entries(
+    db: Db,
+    email_provider: GmailEmailProvider,
+    site_provider: CachedParaglidingSiteProvider,
+) -> Result<()> {
+    let settings = match site_provider.get_settings().await? {
         Some(s) => s,
         None => {
             tracing::warn!("No settings found in database, using defaults");
@@ -69,7 +64,6 @@ async fn create_calender_entries(db: Db) -> Result<()> {
         "".to_string(),
     );
 
-    let email_provider = GmailEmailProvider::new().expect("Failed to create email provider");
     let mut cal = match GoogleCalendar::new(db.clone(), email_provider).await {
         Ok(cal) => cal,
         Err(e) => {
@@ -78,7 +72,6 @@ async fn create_calender_entries(db: Db) -> Result<()> {
         }
     };
 
-    let provider = CachedParaglidingSiteProvider::new(db.clone());
     let weather_provider = OpenMeteoWeatherProvider::new();
     let routing_provider = GraphHopperRoutingProvider::new();
     let service = ParaglidingCalendarService::new(db.clone());
@@ -89,7 +82,7 @@ async fn create_calender_entries(db: Db) -> Result<()> {
 
     let events = service
         .create_events_for_location(
-            &provider,
+            &site_provider,
             &weather_provider,
             &routing_provider,
             &location,
@@ -143,12 +136,20 @@ async fn main() -> Result<()> {
             .expect("Data environment variable not set."),
     )?);
 
+    let email_provider = GmailEmailProvider::new().expect("Failed to create email provider");
+    let site_provider = CachedParaglidingSiteProvider::new(db.clone());
+
     tokio::join!(async { web::run(db.clone()).await }, async {
         let db = db.clone();
+        let email_provider = email_provider.clone();
+        let site_provider = site_provider.clone();
         let mut interval = time::interval(time::Duration::from_hours(24));
         loop {
             interval.tick().await;
-            if let Err(e) = create_calender_entries(db.clone()).await {
+            if let Err(e) =
+                create_calender_entries(db.clone(), email_provider.clone(), site_provider.clone())
+                    .await
+            {
                 tracing::error!("Failed to create calendar entries: {}", e);
             }
         }

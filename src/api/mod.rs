@@ -12,8 +12,8 @@ use serde_json::Value;
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
-    database::{self, Db},
-    email::{EmailProvider, GmailEmailProvider},
+    database::Db,
+    email::GmailEmailProvider,
     location::{Location, LocationProvider, open_meteo::OpenMeteoLocationProvider},
     paragliding::{
         ParaglidingSite, ParaglidingSiteProvider,
@@ -73,8 +73,8 @@ async fn geocode(
 async fn get_settings(
     Extension(state): Extension<ApiState>,
 ) -> Result<Json<UserSettings>, StatusCode> {
-    let provider = CachedParaglidingSiteProvider::new(state.db);
-    let settings = provider
+    let settings = state
+        .site_provider
         .get_settings()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -89,8 +89,8 @@ async fn save_settings(
     Extension(state): Extension<ApiState>,
     Json(settings): Json<UserSettings>,
 ) -> Result<StatusCode, StatusCode> {
-    let provider = CachedParaglidingSiteProvider::new(state.db);
-    provider
+    state
+        .site_provider
         .save_settings(&settings)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -102,6 +102,7 @@ pub struct ApiState {
     pub db: Db,
     pub location_provider: OpenMeteoLocationProvider,
     pub email_provider: GmailEmailProvider,
+    pub site_provider: CachedParaglidingSiteProvider,
 }
 
 pub fn router(state: ApiState) -> Router {
@@ -126,8 +127,7 @@ pub fn router(state: ApiState) -> Router {
 async fn get_sites(
     Extension(state): Extension<ApiState>,
 ) -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
-    let provider = CachedParaglidingSiteProvider::new(state.db);
-    let sites = provider.fetch_all_sites().await;
+    let sites = state.site_provider.fetch_all_sites().await;
     Ok(Json(sites))
 }
 
@@ -135,8 +135,8 @@ async fn update_site(
     Extension(state): Extension<ApiState>,
     Json(site): Json<ParaglidingSite>,
 ) -> Result<StatusCode, StatusCode> {
-    let provider = CachedParaglidingSiteProvider::new(state.db);
-    provider
+    state
+        .site_provider
         .save_site(site)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -147,8 +147,8 @@ async fn delete_site(
     Extension(state): Extension<ApiState>,
     Path(site_name): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
-    let provider = CachedParaglidingSiteProvider::new(state.db);
-    provider
+    state
+        .site_provider
         .delete_site(&site_name)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -185,9 +185,8 @@ async fn import_sites(
     match dhv::parse_sites_from_xml(&xml_content) {
         Ok(sites) => {
             tracing::info!("Parsed {} sites from XML", sites.len());
-            let provider = CachedParaglidingSiteProvider::new(state.db);
             for site in sites {
-                if let Err(e) = provider.save_site(site).await {
+                if let Err(e) = state.site_provider.save_site(site).await {
                     tracing::warn!("Failed to save site: {}", e);
                 } else {
                     imported_count += 1;
@@ -195,7 +194,7 @@ async fn import_sites(
             }
         }
         Err(e) => {
-            tracing::error!("Failed to parse XML: {:?}", e);
+            tracing::error!("Failed to parse XML: {}", e);
         }
     }
 
@@ -208,7 +207,9 @@ async fn import_sites(
 async fn get_decision_graph(
     Extension(state): Extension<ApiState>,
 ) -> Result<Json<Value>, StatusCode> {
-    let cached: Option<String> = database::get(&state.db, CACHE_KEY)
+    let cached: Option<String> = state
+        .db
+        .get(CACHE_KEY)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -230,7 +231,9 @@ async fn save_decision_graph(
 ) -> Result<StatusCode, StatusCode> {
     let graph = serde_json::to_string(&payload).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    database::save(&state.db, CACHE_KEY, graph)
+    state
+        .db
+        .save(CACHE_KEY, graph)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
