@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     Router,
     extract::{Extension, Query},
@@ -11,12 +13,12 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::ServeDir;
 use tower_http::timeout::TimeoutLayer;
 
-use crate::api::ApiState;
 use crate::calendar::web_flow_authenticator::WebFlowAuthenticator;
 use crate::email::GmailEmailProvider;
 use crate::location::open_meteo::OpenMeteoLocationProvider;
 use crate::paragliding::database::CachedParaglidingSiteProvider;
-use crate::{api, config, database::Db};
+use crate::{api, config};
+use crate::{api::ApiState, database::DbProvider};
 
 async fn oauth_callback(
     Query(params): Query<HashMap<String, String>>,
@@ -45,7 +47,7 @@ async fn oauth_callback(
     }
 }
 
-pub async fn run(db: Db) {
+pub async fn run(db: Arc<dyn DbProvider>) {
     let config = config::WebConfig::load().unwrap();
     let cors = CorsLayer::new()
         .allow_origin(Any)

@@ -1,5 +1,3 @@
-use std::env;
-
 use anyhow::{Context, Result, anyhow};
 use cached::proc_macro::cached;
 use serde::Deserialize;
@@ -10,21 +8,31 @@ pub trait RoutingProvider: Send + Sync {
     async fn get_travel_time(&self, source: &Location, destination: &Location) -> Result<u64>;
 }
 
+#[derive(Debug, Deserialize)]
+struct PathResponse {
+    time: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiResponse {
+    paths: Vec<PathResponse>,
+}
+
 #[cached(
     time = 604800,
     result,
     key = "String",
     convert = r#"{ format!("{}-{}", source.to_key(), destination.to_key()) }"#
 )]
-async fn get_travel_time_cached(source: Location, destination: Location) -> Result<u64> {
-    tracing::debug!("Calling the API");
+async fn fetch_travel_time(source: Location, destination: Location) -> Result<u64> {
+    tracing::debug!("Calling the GraphHopper API");
     let url = format!(
         "https://graphhopper.com/api/1/route?point={},{}&point={},{}&profile=car&points_encoded=false&calc_points=false&key={}",
         source.latitude,
         source.longitude,
         destination.latitude,
         destination.longitude,
-        env::var("GRAPHHOPPER_API_KEY").context("Missing GRAPHHOPPER_API_KEY env var")?
+        std::env::var("GRAPHHOPPER_API_KEY").context("Missing GRAPHHOPPER_API_KEY env var")?
     );
     let response = API_CLIENT.get(url).send().await?;
     let response: ApiResponse = response.json().await?;
@@ -34,16 +42,6 @@ async fn get_travel_time_cached(source: Location, destination: Location) -> Resu
         .get(0)
         .map(|path| path.time / 1000)
         .ok_or(anyhow!("No paths in response"))
-}
-
-#[derive(Debug, Deserialize)]
-struct PathResponse {
-    time: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiResponse {
-    paths: Vec<PathResponse>,
 }
 
 #[derive(Clone, Default)]
@@ -57,6 +55,6 @@ impl GraphHopperRoutingProvider {
 
 impl RoutingProvider for GraphHopperRoutingProvider {
     async fn get_travel_time(&self, source: &Location, destination: &Location) -> Result<u64> {
-        get_travel_time_cached(source.clone(), destination.clone()).await
+        fetch_travel_time(source.clone(), destination.clone()).await
     }
 }

@@ -1,4 +1,4 @@
-use std::{env, sync::LazyLock};
+use std::{env, sync::Arc, sync::LazyLock};
 
 use anyhow::Result;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -9,7 +9,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 use crate::{
     application::ParaglidingCalendarService,
     calendar::{CalendarProvider, google::GoogleCalendar},
-    database::{Database, Db},
+    database::{Database, DbProvider},
     email::GmailEmailProvider,
     location::Location,
     paragliding::database::{CachedParaglidingSiteProvider, UserSettings},
@@ -45,7 +45,7 @@ static API_CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
 
 // Create calendar entries for paragliding based on settings from database
 async fn create_calender_entries(
-    db: Db,
+    db: Arc<dyn DbProvider>,
     email_provider: GmailEmailProvider,
     site_provider: CachedParaglidingSiteProvider,
 ) -> Result<()> {
@@ -74,7 +74,7 @@ async fn create_calender_entries(
 
     let weather_provider = OpenMeteoWeatherProvider::new();
     let routing_provider = GraphHopperRoutingProvider::new();
-    let service = ParaglidingCalendarService::new(db.clone());
+    let service = ParaglidingCalendarService::new(db);
     let config = crate::application::CalendarConfig {
         search_radius_km: settings.search_radius_km,
         minimum_flyable_duration: chrono::Duration::hours(settings.minimum_flyable_hours as i64),

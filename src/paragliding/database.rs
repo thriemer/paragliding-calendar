@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    database::Db,
+    database::DbProvider,
     location::Location,
     paragliding::{ParaglidingSite, ParaglidingSiteProvider},
 };
@@ -34,17 +36,18 @@ impl Default for UserSettings {
 
 #[derive(Clone)]
 pub struct CachedParaglidingSiteProvider {
-    db: Db,
+    db: Arc<dyn DbProvider>,
 }
 
 impl CachedParaglidingSiteProvider {
-    pub fn new(db: Db) -> Self {
+    pub fn new(db: Arc<dyn DbProvider>) -> Self {
         Self { db }
     }
 
     pub async fn save_site(&self, site: ParaglidingSite) -> Result<()> {
         let key = format!("site_{}", site.name);
-        self.db.save(&key, site).await
+        let bytes = postcard::to_stdvec(&site)?;
+        self.db.save(&key, bytes).await
     }
 
     pub async fn delete_site(&self, name: &str) -> Result<()> {
@@ -53,11 +56,16 @@ impl CachedParaglidingSiteProvider {
     }
 
     pub async fn get_settings(&self) -> Result<Option<UserSettings>> {
-        self.db.get::<UserSettings>(SETTINGS_KEY).await
+        let bytes = self.db.get(SETTINGS_KEY).await?;
+        match bytes {
+            Some(b) => Ok(Some(postcard::from_bytes(&b)?)),
+            None => Ok(None),
+        }
     }
 
     pub async fn save_settings(&self, settings: &UserSettings) -> Result<()> {
-        self.db.save(SETTINGS_KEY, settings.clone()).await
+        let bytes = postcard::to_stdvec(settings)?;
+        self.db.save(SETTINGS_KEY, bytes).await
     }
 }
 
@@ -73,14 +81,18 @@ impl ParaglidingSiteProvider for CachedParaglidingSiteProvider {
         center: &Location,
         radius_km: f64,
     ) -> Vec<(ParaglidingSite, f64)> {
-        let sites: Vec<ParaglidingSite> =
-            match self.db.find_by_prefix::<ParaglidingSite>("site_").await {
-                Ok(sites) => sites,
-                Err(e) => {
-                    tracing::error!("Failed to fetch sites from database: {}", e);
-                    return vec![];
-                }
-            };
+        let bytes_list = match self.db.find_by_prefix("site_").await {
+            Ok(list) => list,
+            Err(e) => {
+                tracing::error!("Failed to fetch sites from database: {}", e);
+                return vec![];
+            }
+        };
+
+        let sites: Vec<ParaglidingSite> = bytes_list
+            .iter()
+            .filter_map(|b| postcard::from_bytes(b).ok())
+            .collect();
 
         if sites.is_empty() {
             tracing::warn!("No sites found in database");
@@ -109,8 +121,11 @@ impl ParaglidingSiteProvider for CachedParaglidingSiteProvider {
     }
 
     async fn fetch_all_sites(&self) -> Vec<ParaglidingSite> {
-        match self.db.find_by_prefix::<ParaglidingSite>("site_").await {
-            Ok(sites) => sites,
+        match self.db.find_by_prefix("site_").await {
+            Ok(bytes_list) => bytes_list
+                .iter()
+                .filter_map(|b| postcard::from_bytes(b).ok())
+                .collect(),
             Err(e) => {
                 tracing::error!("Failed to fetch all sites from database: {}", e);
                 vec![]

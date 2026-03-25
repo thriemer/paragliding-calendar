@@ -1,4 +1,4 @@
-use std::{env, time::Duration};
+use std::{env, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use cached::proc_macro::cached;
@@ -12,8 +12,9 @@ use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::instrument;
 
-use crate::calendar::{
-    CalendarEvent, CalendarProvider, web_flow_authenticator::WebFlowAuthenticator,
+use crate::{
+    calendar::{CalendarEvent, CalendarProvider, web_flow_authenticator::WebFlowAuthenticator},
+    database::DbProvider,
 };
 
 pub type CalendarHubType =
@@ -114,7 +115,7 @@ async fn do_get_free_busy(
 
 impl GoogleCalendar {
     pub async fn new(
-        db: crate::database::Db,
+        db: Arc<dyn DbProvider>,
         email_provider: crate::email::GmailEmailProvider,
     ) -> Result<Self> {
         let connector = HttpsConnectorBuilder::new()

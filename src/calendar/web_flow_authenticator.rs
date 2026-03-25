@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -9,7 +10,7 @@ use oauth2::{
 };
 
 use crate::{
-    database::Db,
+    database::DbProvider,
     email::{EmailProvider, GmailEmailProvider},
 };
 
@@ -24,7 +25,7 @@ const SCOPES: [&str; 3] = [
 pub struct WebFlowAuthenticator {
     client: BasicClient,
     redirect_uri: String,
-    db: Db,
+    db: Arc<dyn DbProvider>,
     email_provider: GmailEmailProvider,
 }
 
@@ -40,7 +41,7 @@ impl WebFlowAuthenticator {
         client_id: String,
         client_secret: String,
         redirect_uri: String,
-        db: Db,
+        db: Arc<dyn DbProvider>,
         email_provider: GmailEmailProvider,
     ) -> Self {
         let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/auth".to_string())
@@ -102,10 +103,12 @@ impl WebFlowAuthenticator {
             for _ in 0..max_attempts {
                 tokio::time::sleep(Duration::from_secs(check_interval_secs)).await;
 
-                if let Ok(Some(token)) = self.db.get::<StoredToken>(TOKEN_CACHE_KEY).await {
-                    if token.expiry > Utc::now().timestamp() {
-                        tracing::info!("User authenticated successfully");
-                        return Ok(token.access_token);
+                if let Ok(Some(token_bytes)) = self.db.get(TOKEN_CACHE_KEY).await {
+                    if let Ok(token) = postcard::from_bytes::<StoredToken>(&token_bytes) {
+                        if token.expiry > Utc::now().timestamp() {
+                            tracing::info!("User authenticated successfully");
+                            return Ok(token.access_token);
+                        }
                     }
                 }
             }
@@ -142,8 +145,9 @@ impl WebFlowAuthenticator {
             expiry,
         };
 
+        let token_bytes = postcard::to_stdvec(&stored_token)?;
         self.db
-            .save(TOKEN_CACHE_KEY, stored_token.clone())
+            .save(TOKEN_CACHE_KEY, token_bytes)
             .await
             .context("Failed to store token in database")?;
 
@@ -178,8 +182,9 @@ impl WebFlowAuthenticator {
             expiry,
         };
 
+        let token_bytes = postcard::to_stdvec(&stored_token)?;
         self.db
-            .save(TOKEN_CACHE_KEY, stored_token.clone())
+            .save(TOKEN_CACHE_KEY, token_bytes)
             .await
             .context("Failed to store refreshed token in database")?;
 
@@ -187,30 +192,28 @@ impl WebFlowAuthenticator {
     }
 
     async fn get_token_internal(&self) -> Result<Option<String>> {
-        let token = self
-            .db
-            .get::<StoredToken>(TOKEN_CACHE_KEY)
-            .await
-            .ok()
-            .flatten();
+        if let Ok(Some(token_bytes)) = self.db.get(TOKEN_CACHE_KEY).await {
+            if let Ok(token) = postcard::from_bytes::<StoredToken>(&token_bytes) {
+                if token.expiry > Utc::now().timestamp() + 300 {
+                    return Ok(Some(token.access_token.clone()));
+                }
 
-        if let Some(ref token) = token {
-            if token.expiry > Utc::now().timestamp() + 300 {
-                return Ok(Some(token.access_token.clone()));
-            }
-
-            if let Some(ref refresh_token) = token.refresh_token {
-                match self.refresh_token(&refresh_token).await {
-                    Ok(new_token) => {
-                        let access_token = new_token.access_token.clone();
-                        self.db.save(TOKEN_CACHE_KEY, new_token).await?;
-                        return Ok(Some(access_token));
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to refresh token: {}", e);
+                if let Some(ref refresh_token) = token.refresh_token {
+                    match self.refresh_token(&refresh_token).await {
+                        Ok(new_token) => {
+                            let access_token = new_token.access_token.clone();
+                            let token_bytes = postcard::to_stdvec(&new_token)?;
+                            self.db.save(TOKEN_CACHE_KEY, token_bytes).await?;
+                            return Ok(Some(access_token));
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to refresh token: {}", e);
+                        }
                     }
                 }
             }
+        } else {
+            return Ok(Some(self.wait_for_authentication().await?));
         }
 
         Ok(Some(self.wait_for_authentication().await?))

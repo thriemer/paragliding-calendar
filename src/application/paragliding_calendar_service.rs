@@ -1,21 +1,17 @@
-//! Paragliding Calendar Service
-//!
-//! This service orchestrates the creation of paragliding events in a calendar
-//! based on weather conditions, site evaluations, and user availability.
+use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 
 use crate::{
     calendar::{CalendarEvent, CalendarProvider},
-    database::Db,
+    database::DbProvider,
     location::Location,
     paragliding::{ParaglidingSite, ParaglidingSiteProvider, site_evaluator},
     routing::RoutingProvider,
     weather::WeatherProvider,
 };
 
-/// Represents a time window when paragliding is feasible
 #[derive(Debug, Clone)]
 pub struct FlyableWindow {
     pub site: ParaglidingSite,
@@ -23,7 +19,6 @@ pub struct FlyableWindow {
     pub end: DateTime<Utc>,
 }
 
-/// Configuration for paragliding calendar creation
 pub struct CalendarConfig {
     pub search_radius_km: f64,
     pub minimum_flyable_duration: Duration,
@@ -39,11 +34,11 @@ impl Default for CalendarConfig {
 }
 
 pub struct ParaglidingCalendarService {
-    db: Db,
+    db: Arc<dyn DbProvider>,
 }
 
 impl ParaglidingCalendarService {
-    pub fn new(db: Db) -> Self {
+    pub fn new(db: Arc<dyn DbProvider>) -> Self {
         Self { db }
     }
 

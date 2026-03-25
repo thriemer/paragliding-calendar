@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use axum::{
     Router,
     body::Body,
-    extract::Extension,
+    extract::State,
     extract::{Path, Query},
     http::StatusCode,
     response::Json,
@@ -12,7 +14,7 @@ use serde_json::Value;
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
-    database::Db,
+    database::DbProvider,
     email::GmailEmailProvider,
     location::{Location, LocationProvider, open_meteo::OpenMeteoLocationProvider},
     paragliding::{
@@ -47,7 +49,7 @@ pub struct GeocodeResponse {
 }
 
 async fn get_elevation(
-    Extension(state): Extension<ApiState>,
+    State(state): State<ApiState>,
     Query(query): Query<ElevationQuery>,
 ) -> Result<Json<ElevationResponse>, StatusCode> {
     let elevation = state
@@ -59,7 +61,7 @@ async fn get_elevation(
 }
 
 async fn geocode(
-    Extension(state): Extension<ApiState>,
+    State(state): State<ApiState>,
     Query(query): Query<GeocodeQuery>,
 ) -> Result<Json<GeocodeResponse>, StatusCode> {
     let locations = state
@@ -70,9 +72,7 @@ async fn geocode(
     Ok(Json(GeocodeResponse { results: locations }))
 }
 
-async fn get_settings(
-    Extension(state): Extension<ApiState>,
-) -> Result<Json<UserSettings>, StatusCode> {
+async fn get_settings(State(state): State<ApiState>) -> Result<Json<UserSettings>, StatusCode> {
     let settings = state
         .site_provider
         .get_settings()
@@ -86,7 +86,7 @@ async fn get_settings(
 }
 
 async fn save_settings(
-    Extension(state): Extension<ApiState>,
+    State(state): State<ApiState>,
     Json(settings): Json<UserSettings>,
 ) -> Result<StatusCode, StatusCode> {
     state
@@ -99,7 +99,7 @@ async fn save_settings(
 
 #[derive(Clone)]
 pub struct ApiState {
-    pub db: Db,
+    pub db: Arc<dyn DbProvider>,
     pub location_provider: OpenMeteoLocationProvider,
     pub email_provider: GmailEmailProvider,
     pub site_provider: CachedParaglidingSiteProvider,
@@ -121,18 +121,18 @@ pub fn router(state: ApiState) -> Router {
         .route("/decision-graph", get(get_decision_graph))
         .route("/decision-graph", post(save_decision_graph))
         .route("/weather-models", get(get_weather_models))
-        .layer(Extension(state))
+        .with_state(state)
 }
 
 async fn get_sites(
-    Extension(state): Extension<ApiState>,
+    State(state): State<ApiState>,
 ) -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
     let sites = state.site_provider.fetch_all_sites().await;
     Ok(Json(sites))
 }
 
 async fn update_site(
-    Extension(state): Extension<ApiState>,
+    State(state): State<ApiState>,
     Json(site): Json<ParaglidingSite>,
 ) -> Result<StatusCode, StatusCode> {
     state
@@ -144,7 +144,7 @@ async fn update_site(
 }
 
 async fn delete_site(
-    Extension(state): Extension<ApiState>,
+    State(state): State<ApiState>,
     Path(site_name): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     state
@@ -161,7 +161,7 @@ pub struct ImportResponse {
 }
 
 async fn import_sites(
-    Extension(state): Extension<ApiState>,
+    State(state): State<ApiState>,
     body: Body,
 ) -> Result<Json<ImportResponse>, StatusCode> {
     tracing::info!("Starting DHV file import");
@@ -204,10 +204,8 @@ async fn import_sites(
     }))
 }
 
-async fn get_decision_graph(
-    Extension(state): Extension<ApiState>,
-) -> Result<Json<Value>, StatusCode> {
-    let cached: Option<String> = state
+async fn get_decision_graph(State(state): State<ApiState>) -> Result<Json<Value>, StatusCode> {
+    let cached = state
         .db
         .get(CACHE_KEY)
         .await
@@ -215,7 +213,7 @@ async fn get_decision_graph(
 
     if let Some(graph) = cached {
         let value: Value =
-            serde_json::from_str(&graph).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            serde_json::from_slice(&graph).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         return Ok(Json(value));
     }
 
@@ -226,10 +224,10 @@ async fn get_decision_graph(
 }
 
 async fn save_decision_graph(
-    Extension(state): Extension<ApiState>,
+    State(state): State<ApiState>,
     Json(payload): Json<Value>,
 ) -> Result<StatusCode, StatusCode> {
-    let graph = serde_json::to_string(&payload).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let graph = serde_json::to_vec(&payload).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     state
         .db
