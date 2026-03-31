@@ -47,6 +47,12 @@ in {
       default = "/";
       description = "Base URL path where the app is mounted (used to build frontend assets).";
     };
+
+    otelEndpoint = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = "OpenTelemetry collector endpoint (e.g., http://alloy:4318). Leave empty to disable OTLP export.";
+    };
   };
 
   config = lib.mkIf cfg.enable (let
@@ -72,6 +78,9 @@ in {
           "PORT=${toString cfg.port}"
           "RUST_LOG=${cfg.logLevel}"
           "OAUTH_REDIRECT_URL=${cfg.redirectUrl}"
+        ] ++ lib.optionals (cfg.otelEndpoint != "") [
+          "OTEL_EXPORTER_OTLP_ENDPOINT=${cfg.otelEndpoint}"
+          "OTEL_SERVICE_NAME=travelai"
         ];
         CacheDirectory = "travelai";
         Restart = "on-failure";

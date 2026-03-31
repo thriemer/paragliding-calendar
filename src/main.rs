@@ -6,7 +6,6 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use tokio::time;
 use tracing::instrument;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
     application::ParaglidingCalendarService,
@@ -28,6 +27,7 @@ mod email;
 mod location;
 mod paragliding;
 mod routing;
+mod telemetry;
 mod weather;
 mod web;
 
@@ -113,10 +113,8 @@ async fn create_calender_entries() -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    // Initialize telemetry (OTLP to Alloy in production, stdout in development)
+    telemetry::init_telemetry()?;
 
     tracing::info!("Starting travelai application");
 
