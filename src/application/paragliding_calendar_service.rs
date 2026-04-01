@@ -85,7 +85,8 @@ impl ParaglidingCalendarService {
                 start_time: window.start,
                 end_time: window.end,
                 is_all_day: false,
-                location: None,
+                location: Some(window.site.name),
+                body: Some(format!("Last updated (Utc): {}", Utc::now())),
             })
             .collect();
 

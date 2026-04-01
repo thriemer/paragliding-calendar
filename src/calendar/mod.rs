@@ -27,6 +27,7 @@ pub struct CalendarEvent {
     pub end_time: DateTime<Utc>,
     pub is_all_day: bool,
     pub location: Option<String>,
+    pub body: Option<String>,
 }
 
 impl CalendarEvent {
@@ -41,6 +42,7 @@ impl From<CalendarEvent> for Event {
         event.start = Some(to_event_time(value.start_time));
         event.end = Some(to_event_time(value.end_time));
         event.location = value.location;
+        event.description = value.body;
         event
     }
 }
