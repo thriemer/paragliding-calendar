@@ -31,9 +31,10 @@ tracing-opentelemetry = "0.32"
 
 # OpenTelemetry
 opentelemetry = "0.31"
-opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "metrics", "trace"] }
-opentelemetry-otlp = "0.31"
-opentelemetry-semantic-conventions = "0.28"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "metrics", "trace", "logs"] }
+opentelemetry-otlp = { version = "0.31", features = ["http-proto"] }
+opentelemetry-appender-tracing = "0.31"
+opentelemetry-semantic-conventions = "0.31"
 
 # rule engine
 zen-engine = "0.53"
