@@ -22,7 +22,7 @@ pub trait CalendarProvider {
 
 #[derive(Debug)]
 pub struct CalendarEvent {
-    pub summary: String,
+    pub title: String,
     pub start_time: DateTime<Utc>,
     pub end_time: DateTime<Utc>,
     pub is_all_day: bool,
@@ -38,7 +38,7 @@ impl CalendarEvent {
 impl From<CalendarEvent> for Event {
     fn from(value: CalendarEvent) -> Self {
         let mut event = Event::default();
-        event.summary = Some(value.summary);
+        event.summary = Some(value.title);
         event.start = Some(to_event_time(value.start_time));
         event.end = Some(to_event_time(value.end_time));
         event.location = value.location;
@@ -49,7 +49,7 @@ impl From<CalendarEvent> for Event {
 
 impl Display for CalendarEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{}", self.summary)?;
+        writeln!(f, "{}", self.title)?;
 
         if self.is_all_day {
             writeln!(f, "   📅 All-day event")?;

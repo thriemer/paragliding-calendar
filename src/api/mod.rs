@@ -12,6 +12,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
     cache,
+    calendar::{CalendarProvider, google::GoogleCalendar},
     location::Location,
     paragliding::{
         ParaglidingSite, ParaglidingSiteProvider,
@@ -44,6 +45,33 @@ pub struct GeocodeResponse {
     results: Vec<Location>,
 }
 
+#[derive(Serialize)]
+struct UserSettingsResponse {
+    pub location_name: String,
+    pub location_latitude: f64,
+    pub location_longitude: f64,
+    pub search_radius_km: f64,
+    pub calendar_name: String,
+    pub minimum_flyable_hours: u32,
+    pub excluded_calendar_names: Vec<String>,
+    pub all_calendar_names: Vec<String>,
+}
+
+impl From<UserSettings> for UserSettingsResponse {
+    fn from(value: UserSettings) -> Self {
+        UserSettingsResponse {
+            location_name: value.location_name,
+            location_latitude: value.location_latitude,
+            location_longitude: value.location_longitude,
+            search_radius_km: value.search_radius_km,
+            calendar_name: value.calendar_name,
+            minimum_flyable_hours: value.minimum_flyable_hours,
+            excluded_calendar_names: value.excluded_calendar_names,
+            all_calendar_names: vec![],
+        }
+    }
+}
+
 async fn get_elevation(
     Query(query): Query<ElevationQuery>,
 ) -> Result<Json<ElevationResponse>, StatusCode> {
@@ -60,15 +88,26 @@ async fn geocode(Query(query): Query<GeocodeQuery>) -> Result<Json<GeocodeRespon
     Ok(Json(GeocodeResponse { results: locations }))
 }
 
-async fn get_settings() -> Result<Json<UserSettings>, StatusCode> {
-    let settings = CachedParaglidingSiteProvider::get_settings()
+async fn get_settings() -> Result<Json<UserSettingsResponse>, StatusCode> {
+    //TODO: replace with generic calendar
+    let cal = GoogleCalendar::new()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    match settings {
-        Some(s) => Ok(Json(s)),
-        None => Ok(Json(UserSettings::default())),
-    }
+    let calendars = cal
+        .get_calendar_names()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut settings: UserSettingsResponse = match CachedParaglidingSiteProvider::get_settings()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        Some(s) => s.into(),
+        None => UserSettings::default().into(),
+    };
+    settings.all_calendar_names = calendars;
+    Ok(Json(settings))
 }
 
 async fn save_settings(Json(settings): Json<UserSettings>) -> Result<StatusCode, StatusCode> {

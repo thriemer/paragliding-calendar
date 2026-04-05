@@ -9,7 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 use crate::{
     calendar::{CalendarEvent, CalendarProvider},
     location::Location,
-    paragliding::{ParaglidingSite, ParaglidingSiteProvider, site_evaluator},
+    paragliding::{ParaglidingSite, ParaglidingSiteProvider, cache::UserSettings, site_evaluator},
 };
 
 /// Represents a time window when paragliding is feasible
@@ -18,21 +18,6 @@ pub struct FlyableWindow {
     pub site: ParaglidingSite,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
-}
-
-/// Configuration for paragliding calendar creation
-pub struct CalendarConfig {
-    pub search_radius_km: f64,
-    pub minimum_flyable_duration: Duration,
-}
-
-impl Default for CalendarConfig {
-    fn default() -> Self {
-        Self {
-            search_radius_km: 150.0,
-            minimum_flyable_duration: Duration::hours(2),
-        }
-    }
 }
 
 pub struct ParaglidingCalendarService;
@@ -48,22 +33,23 @@ impl ParaglidingCalendarService {
         provider: &P,
         location: &Location,
         calendar_provider: &mut C,
-        calendar_name: &str,
-        config: CalendarConfig,
+        settings: &UserSettings,
     ) -> Result<Vec<CalendarEvent>>
     where
         P: ParaglidingSiteProvider,
         C: CalendarProvider,
     {
         // Prepare the calendar
-        calendar_provider.create_calendar(calendar_name).await?;
+        calendar_provider
+            .create_calendar(&settings.calendar_name)
+            .await?;
 
         let mut other_calendar_names = calendar_provider.get_calendar_names().await?;
-        other_calendar_names.retain(|n| n != calendar_name);
+        other_calendar_names.retain(|n| !settings.excluded_calendar_names.contains(n));
 
         // Find nearby sites with weather
         let sites_with_weather = self
-            .find_sites_with_weather(provider, location, config.search_radius_km)
+            .find_sites_with_weather(provider, location, settings.search_radius_km)
             .await;
 
         // Find flyable windows
@@ -73,7 +59,7 @@ impl ParaglidingCalendarService {
                 &sites_with_weather,
                 calendar_provider,
                 &other_calendar_names,
-                config.minimum_flyable_duration,
+                Duration::hours(settings.minimum_flyable_hours.into()),
             )
             .await?;
 
@@ -81,7 +67,7 @@ impl ParaglidingCalendarService {
         let events = flyable_windows
             .into_iter()
             .map(|window| CalendarEvent {
-                summary: window.site.name.clone(),
+                title: window.site.name.clone(),
                 start_time: window.start,
                 end_time: window.end,
                 is_all_day: false,
@@ -180,7 +166,7 @@ impl ParaglidingCalendarService {
                     range.start += drive_to_site;
                     range.end -= drive_to_site;
 
-                    if range.is_longer_than(minimum_duration + minimum_duration) {
+                    if range.is_longer_than(minimum_duration) {
                         windows.push(FlyableWindow {
                             site: site.clone(),
                             start: range.start,

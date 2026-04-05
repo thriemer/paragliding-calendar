@@ -5,4 +5,4 @@
 
 pub mod paragliding_calendar_service;
 
-pub use paragliding_calendar_service::{CalendarConfig, ParaglidingCalendarService};
+pub use paragliding_calendar_service::ParaglidingCalendarService;

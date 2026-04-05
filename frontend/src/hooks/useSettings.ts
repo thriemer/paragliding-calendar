@@ -8,6 +8,8 @@ export interface UserSettings {
   search_radius_km: number;
   calendar_name: string;
   minimum_flyable_hours: number;
+  excluded_calendar_names: Set<string>;
+  all_calendar_names: string[];
 }
 
 export function useSettings() {
@@ -19,7 +21,12 @@ export function useSettings() {
     fetch(API.settings)
       .then((res) => res.json())
       .then((data) => {
-        setSettings(data);
+	      console.log(data);
+      const settingsWithSet: UserSettings = {
+        ...data,
+        excluded_calendar_names: new Set(data.excluded_calendar_names)
+      };
+      setSettings(settingsWithSet);
         setLoading(false);
       })
       .catch(console.error);
@@ -36,7 +43,12 @@ export function useSettings() {
         body: JSON.stringify(newSettings),
       });
       if (response.ok) {
-        setSettings(newSettings);
+      const settingsWithSet: UserSettings = {
+        ...newSettings,
+        excluded_calendar_names: new Set(newSettings.excluded_calendar_names)
+      };
+ 
+        setSettings(settingsWithSet);
         return true;
       }
       return false;

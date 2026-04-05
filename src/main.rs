@@ -72,18 +72,13 @@ async fn create_calender_entries() -> Result<()> {
 
     let provider = CachedParaglidingSiteProvider::new();
     let service = ParaglidingCalendarService::new();
-    let config = crate::application::CalendarConfig {
-        search_radius_km: settings.search_radius_km,
-        minimum_flyable_duration: chrono::Duration::hours(settings.minimum_flyable_hours as i64),
-    };
 
     let events = service
         .create_events_for_location(
             &provider,
             &location,
             &mut cal,
-            &settings.calendar_name,
-            config,
+            &settings,
         )
         .await?;
 
@@ -134,7 +129,7 @@ async fn main() -> Result<()> {
         loop {
             interval.tick().await;
             if let Err(e) = create_calender_entries().await {
-                tracing::error!("Failed to create calendar entries: {}", e);
+                tracing::error!("Failed to create calendar entries: {:?}", e);
             }
         }
     });

@@ -15,7 +15,8 @@ function fixLeafletIcon() {
   // @ts-ignore
   delete L.Icon.Default.prototype._getIconUrl;
   L.Icon.Default.mergeOptions({
-    iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+    iconRetinaUrl:
+      "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
     iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
     shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
   });
@@ -23,7 +24,11 @@ function fixLeafletIcon() {
 
 fixLeafletIcon();
 
-function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => void }) {
+function MapClickHandler({
+  onClick,
+}: {
+  onClick: (lat: number, lng: number) => void;
+}) {
   useMapEvents({
     click: (e) => {
       onClick(e.latlng.lat, e.latlng.lng);
@@ -32,13 +37,22 @@ function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => v
   return null;
 }
 
-export function SettingsModal({ settings, onSave, onCancel }: SettingsModalProps) {
+export function SettingsModal({
+  settings,
+  onSave,
+  onCancel,
+}: SettingsModalProps) {
   const [locationName, setLocationName] = useState(settings.location_name);
   const [locationLat, setLocationLat] = useState(settings.location_latitude);
   const [locationLng, setLocationLng] = useState(settings.location_longitude);
   const [radius, setRadius] = useState(settings.search_radius_km);
   const [calendarName, setCalendarName] = useState(settings.calendar_name);
-  const [minFlyableHours, setMinFlyableHours] = useState(settings.minimum_flyable_hours);
+  const [minFlyableHours, setMinFlyableHours] = useState(
+    settings.minimum_flyable_hours,
+  );
+  const [excludedCalendarNames, setExcludedCalendarNames] = useState(
+    settings.excluded_calendar_names,
+  );
 
   const handleMapClick = (lat: number, lng: number) => {
     setLocationLat(lat);
@@ -53,6 +67,8 @@ export function SettingsModal({ settings, onSave, onCancel }: SettingsModalProps
       search_radius_km: radius,
       calendar_name: calendarName,
       minimum_flyable_hours: minFlyableHours,
+      excluded_calendar_names: [...excludedCalendarNames],
+      all_calendar_names: settings.all_calendar_names,
     });
   };
 
@@ -60,7 +76,7 @@ export function SettingsModal({ settings, onSave, onCancel }: SettingsModalProps
     <div className={styles.modalOverlay}>
       <div className={styles.modal}>
         <h2>Settings</h2>
-        
+
         <div className={styles.field}>
           <label>Location Name</label>
           <input
@@ -122,6 +138,33 @@ export function SettingsModal({ settings, onSave, onCancel }: SettingsModalProps
             value={minFlyableHours}
             onChange={(e) => setMinFlyableHours(Number(e.target.value))}
           />
+        </div>
+
+        <div className={styles.field}>
+          <label>Exclude calendars from free/busy check:</label>
+          {settings.all_calendar_names.map((name) => {
+            return (
+              <label>
+                <input
+                  type="checkbox"
+                  name="ExcludedCalendars"
+                  checked={excludedCalendarNames.has(name)}
+                  value={name}
+                  onChange={(e) =>
+                    setExcludedCalendarNames((excluded) => {
+                      if (e.target.checked) {
+                        excluded.add(e.target.value);
+                      } else {
+                        excluded.delete(e.target.value);
+                      }
+                      return new Set(excluded);
+                    })
+                  }
+                />
+                {name}
+              </label>
+            );
+          })}
         </div>
 
         <div className={styles.buttons}>

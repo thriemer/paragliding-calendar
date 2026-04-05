@@ -115,8 +115,11 @@ fn init_production_telemetry(otel_endpoint: String, service_name: String) -> Res
 }
 
 fn init_development_logging() {
-    Registry::default()
-        .with(fmt::layer())
-        .with(EnvFilter::from_default_env())
+    tracing_subscriber::fmt()
+        .event_format(
+            tracing_subscriber::fmt::format()
+                .with_file(true)
+                .with_line_number(true),
+        )
         .init();
 }
