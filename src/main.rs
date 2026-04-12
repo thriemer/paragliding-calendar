@@ -125,7 +125,7 @@ async fn main() -> Result<()> {
     )?;
 
     tokio::join!(async { web::run().await }, async {
-        let mut interval = time::interval(time::Duration::from_hours(24));
+        let mut interval = time::interval(time::Duration::from_hours(8));
         loop {
             interval.tick().await;
             if let Err(e) = create_calender_entries().await {
