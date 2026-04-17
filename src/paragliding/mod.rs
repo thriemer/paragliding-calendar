@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod dhv;
 pub mod site_evaluator;
+pub mod flight;
 
 use serde::{Deserialize, Serialize};
 
