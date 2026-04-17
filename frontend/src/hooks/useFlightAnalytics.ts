@@ -1,12 +1,34 @@
 import { useState } from "react";
 import { API } from "../config/api";
 
+export interface TrackPoint {
+  latitude: number;
+  longitude: number;
+  height: number;
+  time: string;
+}
+
+export interface FlightAnalysis {
+  path: TrackPoint[];
+  duration: string;
+  distance: string;
+  max_altitude: string;
+  track_length: string;
+  max_climb: string;
+  max_sink: string;
+  min_speed: string;
+  max_speed: string;
+  min_glide: number;
+  avg_glide: number;
+  total_elevation_gain: string;
+}
+
 export function useFlightAnalytics() {
   const [analyzing, setAnalyzing] = useState(false);
-  const [analysis, setAnalysis] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<FlightAnalysis | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const analyzeFlight = async (file: File): Promise<string | null> => {
+  const analyzeFlight = async (file: File): Promise<FlightAnalysis | null> => {
     setAnalyzing(true);
     setError(null);
     setAnalysis(null);
@@ -32,7 +54,7 @@ export function useFlightAnalytics() {
         throw new Error(`Analysis failed: ${response.status} ${response.statusText} ${detail}`);
       }
 
-      const data: string = await response.text();
+      const data: FlightAnalysis = await response.json();
       setAnalysis(data);
       return data;
     } catch (err) {

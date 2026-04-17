@@ -1,14 +1,46 @@
 use chrono::{DateTime, Duration, Utc};
-use std::{
-    fmt::{Display, Pointer},
-    fs,
-};
+use serde::Serialize;
 
 use crate::paragliding::flight::{
-    AngularVelocity, BearingVelocity, Distance, ScalarVelocity, Track,
+    AngularVelocity, BearingVelocity, Distance, ScalarVelocity, Track, TrackPoint,
 };
 
-pub fn analyse_flight(track: &Track) -> String {
+#[derive(Serialize)]
+pub struct TrackPointDto {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub height: f64,
+    pub time: String,
+}
+
+impl From<&TrackPoint> for TrackPointDto {
+    fn from(point: &TrackPoint) -> Self {
+        TrackPointDto {
+            latitude: point.loc.latitude,
+            longitude: point.loc.longitude,
+            height: point.loc.height,
+            time: point.time.to_rfc3339(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct FlightAnalysis {
+    pub path: Vec<TrackPointDto>,
+    pub duration: String,
+    pub distance: String,
+    pub max_altitude: String,
+    pub track_length: String,
+    pub max_climb: String,
+    pub max_sink: String,
+    pub min_speed: String,
+    pub max_speed: String,
+    pub min_glide: f64,
+    pub avg_glide: f64,
+    pub total_elevation_gain: String,
+}
+
+pub fn analyse_flight(track: &Track) -> FlightAnalysis {
     let d = calculate_flight_duration(&track);
     let km = calculate_flight_distance(&track);
     let height = calculate_height_over_takeoff(&track);
@@ -38,24 +70,20 @@ pub fn analyse_flight(track: &Track) -> String {
         .unwrap();
     let total_height_gained = calculate_total_elevation_gained(&track);
 
-    format!(
-        r#"Flight took: {} and was {} long. Height above start: {}
-        Track log length: {}, Max Climb (60s): {}, Max Sink (60s): {}
-        Min Speed: {}, Max Speed: {}
-        Min Glide: {:.1}, Avg Glide: {:.1}
-        Total elevation gained: {}"#,
-        d.unwrap(),
-        km.unwrap(),
-        height.unwrap(),
-        tracklog_length.unwrap(),
-        max_climb,
-        max_sink,
-        min_speed,
-        max_speed,
+    FlightAnalysis {
+        path: track.points.iter().map(TrackPointDto::from).collect(),
+        duration: format!("{:?}", d.unwrap()),
+        distance: format!("{}", km.unwrap()),
+        max_altitude: format!("{}", height.unwrap()),
+        track_length: format!("{}", tracklog_length.unwrap()),
+        max_climb: format!("{}", max_climb),
+        max_sink: format!("{}", max_sink),
+        min_speed: format!("{}", min_speed),
+        max_speed: format!("{}", max_speed),
         min_glide,
-        sum_glide / count as f64,
-        total_height_gained
-    )
+        avg_glide: sum_glide / count as f64,
+        total_elevation_gain: format!("{}", total_height_gained),
+    }
 }
 
 fn calculate_flight_duration(track: &Track) -> Option<Duration> {

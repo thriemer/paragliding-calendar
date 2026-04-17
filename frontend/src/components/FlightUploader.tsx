@@ -1,5 +1,7 @@
 import { useState, useRef } from "react";
 import { useFlightAnalytics } from "../hooks/useFlightAnalytics";
+import { FlightMap } from "./FlightMap";
+import { FlightAnalysisCard } from "./FlightAnalysisCard";
 import styles from "./FlightUploader.module.css";
 
 export function FlightUploader() {
@@ -72,12 +74,13 @@ export function FlightUploader() {
       {analysis && (
         <div className={styles.results}>
           <div className={styles.resultsHeader}>
-            <h3>Flight Analysis</h3>
+            <h3>Flight Results</h3>
             <button className={styles.clearButton} onClick={clearAnalysis}>
               Clear
             </button>
           </div>
-          <pre className={styles.analysis}>{analysis}</pre>
+          <FlightMap path={analysis.path} />
+          <FlightAnalysisCard analysis={analysis} />
         </div>
       )}
     </div>

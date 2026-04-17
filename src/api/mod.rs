@@ -211,7 +211,7 @@ async fn import_sites(body: Body) -> Result<Json<ImportResponse>, StatusCode> {
     }))
 }
 
-async fn analyze_flight(body: Body) -> Result<String, StatusCode> {
+async fn analyze_flight(body: Body) -> Result<Json<analytics::FlightAnalysis>, StatusCode> {
     tracing::info!("Starting flight analysis");
 
     let bytes = axum::body::to_bytes(body, 50 * 1024 * 1024)
@@ -238,7 +238,7 @@ async fn analyze_flight(body: Body) -> Result<String, StatusCode> {
     let analysis = analytics::analyse_flight(&track);
     tracing::info!("Flight analysis complete");
 
-    Ok(analysis)
+    Ok(Json(analysis))
 }
 
 async fn get_decision_graph() -> Result<Json<Value>, StatusCode> {
