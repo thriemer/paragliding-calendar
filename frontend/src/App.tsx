@@ -12,9 +12,10 @@ import { Header } from "./components/Header";
 import { FilterPanel, Filters } from "./components/FilterPanel";
 import { SiteEditor } from "./components/SiteEditor";
 import { FileUploader } from "./components/FileUploader";
+import { FlightUploader } from "./components/FlightUploader";
 import { SettingsModal } from "./components/SettingsModal";
 
-type Screen = "main" | "edit";
+type Screen = "main" | "edit" | "flights";
 
 function App() {
   const [screen, setScreen] = useState<Screen>("main");
@@ -94,6 +95,24 @@ function App() {
     );
   }
 
+  if (screen === "flights") {
+    return (
+      <div className={styles.app}>
+        <div className={styles.mainScreen}>
+          <aside className={styles.sidePanel}>
+            <h2>Flight Analytics</h2>
+            <button className="btn btn-back" onClick={() => setScreen("main")}>
+              Back to Main
+            </button>
+          </aside>
+          <main className={styles.mainContent}>
+            <FlightUploader />
+          </main>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={styles.app}>
       <div className={styles.mainScreen}>
@@ -104,6 +123,9 @@ function App() {
           </button>
           <button className="btn" onClick={() => setScreen("edit")}>
             Edit Flyable Decision Rule
+          </button>
+          <button className="btn" onClick={() => setScreen("flights")}>
+            Flight Analytics
           </button>
           <button className="btn" onClick={() => setShowSettings(true)}>
             Settings

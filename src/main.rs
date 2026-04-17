@@ -74,12 +74,7 @@ async fn create_calender_entries() -> Result<()> {
     let service = ParaglidingCalendarService::new();
 
     let events = service
-        .create_events_for_location(
-            &provider,
-            &location,
-            &mut cal,
-            &settings,
-        )
+        .create_events_for_location(&provider, &location, &mut cal, &settings)
         .await?;
 
     // Clear and recreate all events

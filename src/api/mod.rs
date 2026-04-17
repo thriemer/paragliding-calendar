@@ -18,6 +18,7 @@ use crate::{
         ParaglidingSite, ParaglidingSiteProvider,
         cache::{CachedParaglidingSiteProvider, UserSettings},
         dhv,
+        flight::{Track, analytics},
     },
     weather::{self, WeatherModel, open_meteo},
 };
@@ -126,6 +127,10 @@ pub fn router() -> Router {
             "/sites/import",
             post(import_sites).layer(RequestBodyLimitLayer::new(50 * 1024 * 1024)),
         )
+        .route(
+            "/flights/analyze",
+            post(analyze_flight).layer(RequestBodyLimitLayer::new(50 * 1024 * 1024)),
+        )
         .route("/elevation", get(get_elevation))
         .route("/geocode", get(geocode))
         .route("/settings", get(get_settings))
@@ -204,6 +209,36 @@ async fn import_sites(body: Body) -> Result<Json<ImportResponse>, StatusCode> {
     Ok(Json(ImportResponse {
         imported: imported_count,
     }))
+}
+
+async fn analyze_flight(body: Body) -> Result<String, StatusCode> {
+    tracing::info!("Starting flight analysis");
+
+    let bytes = axum::body::to_bytes(body, 50 * 1024 * 1024)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to read request body: {:?}", e);
+            StatusCode::BAD_REQUEST
+        })?;
+
+    tracing::info!("Read {} bytes from request", bytes.len());
+
+    let kml_content = String::from_utf8(bytes.to_vec()).map_err(|e| {
+        tracing::error!("Request body is not valid UTF-8: {:?}", e);
+        StatusCode::BAD_REQUEST
+    })?;
+
+    let track = Track::from_kml(&kml_content).map_err(|e| {
+        tracing::error!("Failed to parse KML: {:?}", e);
+        StatusCode::BAD_REQUEST
+    })?;
+
+    tracing::info!("Parsed track with {} points", track.points.len());
+
+    let analysis = analytics::analyse_flight(&track);
+    tracing::info!("Flight analysis complete");
+
+    Ok(analysis)
 }
 
 async fn get_decision_graph() -> Result<Json<Value>, StatusCode> {
