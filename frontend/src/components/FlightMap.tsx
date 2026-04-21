@@ -1,124 +1,83 @@
-import { useEffect, useRef } from "react";
-import Map, { Source, Layer } from "react-map-gl/maplibre";
-import "maplibre-gl/dist/maplibre-gl.css";
-import type { LineLayer, RasterDEMSourceSpecification } from "maplibre-gl";
+import { Viewer, Entity, PolylineGraphics, Globe } from "resium";
+import * as Cesium from "cesium";
+import { useEffect, useState, useRef } from "react";
 import { TrackPoint } from "../hooks/useFlightAnalytics";
 
 interface FlightMapProps {
   path: TrackPoint[];
 }
 
-const flightLineLayer: LineLayer = {
-  id: "flight-path",
-  type: "line",
-  paint: {
-    "line-color": "#3b82f6",
-    "line-width": 3,
-    "line-opacity": 0.8,
-  },
-};
-
-const mapStyle = {
-  version: 8 as const,
-  sources: {
-    osm: {
-      type: "raster" as const,
-      tiles: ["https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"],
-      tileSize: 256,
-      attribution: "&copy; OpenStreetMap Contributors",
-      maxzoom: 19,
-    },
-    terrain: {
-      type: "raster-dem" as const,
-      url: "https://tiles.mapterhorn.com/tilejson.json",
-      tileSize: 256,
-    } as RasterDEMSourceSpecification,
-  },
-  layers: [
-    {
-      id: "osm",
-      type: "raster" as const,
-      source: "osm",
-    },
-    {
-      id: "hills",
-      type: "hillshade" as const,
-      source: "terrain",
-      layout: { visibility: "visible" as const },
-      paint: { "hillshade-shadow-color": "#473B24" },
-    },
-  ],
-  terrain: {
-    source: "terrain",
-    exaggeration: 1.5,
-  },
-  sky: {},
-};
+const ionAccessToken =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIwODQ1NjlhMy01OTZjLTQ5ZTgtYWZjMS05NTdjZTBhYjViMTciLCJpZCI6NDIxMjIxLCJpYXQiOjE3NzY3NjYxMzN9.jY86EZR37l3t4CZKNsjBFYFqqadwYSmQjfZmXpDMlok";
 
 export function FlightMap({ path }: FlightMapProps) {
-  const mapRef = useRef<any>(null);
+  const [terrainProvider, setTerrainProvider] =
+    useState<Cesium.TerrainProvider | null>(null);
+  const viewerRef = useRef<{ cesiumElement?: Cesium.Viewer } | null>(null);
 
+  // Load terrain (same as before)
   useEffect(() => {
-    const map = mapRef.current?.getMap?.();
-    if (!map || path.length === 0) return;
+    Cesium.Ion.defaultAccessToken = ionAccessToken;
+    async function loadTerrain() {
+      try {
+        const provider = await Cesium.createWorldTerrainAsync({
+          requestVertexNormals: true,
+          requestWaterMask: false,
+        });
+        setTerrainProvider(provider);
+      } catch (error) {
+        console.error("Failed to load terrain:", error);
+      }
+    }
+    loadTerrain();
+  }, []);
 
-    const bounds = path.reduce(
-      (bounds, point) => {
-        return bounds.extend([point.longitude, point.latitude]);
-      },
-      new (map as any).constructor.LngLatBounds(
-        [path[0].longitude, path[0].latitude],
-        [path[0].longitude, path[0].latitude]
-      )
-    );
+  // Convert TrackPoint array to Cesium.Cartesian3 array
+  const getPathPositions = (): Cesium.Cartesian3[] => {
+    return path.map((point) => {
+      console.log(point);
+      return Cesium.Cartesian3.fromDegrees(
+        point.longitude,
+        point.latitude,
+        point.height,
+      );
+    });
+  };
 
-    map.fitBounds(bounds, { padding: 50 });
-  }, [path]);
-
-  if (path.length === 0) {
-    return (
-      <div style={{ height: "400px", width: "100%", borderRadius: "8px", overflow: "hidden", background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <span style={{ color: "#666" }}>No path data available</span>
-      </div>
-    );
+  if (!terrainProvider) {
+    return <div>Loading terrain...</div>;
   }
 
-  const geojson: GeoJSON.FeatureCollection = {
-    type: "FeatureCollection",
-    features: [
-      {
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates: path.map((p) => [p.longitude, p.latitude]),
-        },
-        properties: {},
-      },
-    ],
-  };
-
-  const initialViewState = {
-    longitude: path[0]?.longitude ?? 0,
-    latitude: path[0]?.latitude ?? 0,
-    zoom: 12,
-    pitch: 60,
-    bearing: 0,
-  };
-
   return (
-    <div style={{ height: "400px", width: "100%", borderRadius: "8px", overflow: "hidden" }}>
-      <Map
-        ref={mapRef}
-        initialViewState={initialViewState}
-        style={{ width: "100%", height: "100%" }}
-        mapStyle={mapStyle as any}
-        attributionControl={false}
-        maxPitch={85}
-      >
-        <Source id="flight-data" type="geojson" data={geojson}>
-          <Layer {...flightLineLayer} />
-        </Source>
-      </Map>
-    </div>
+    <Viewer
+      ref={viewerRef}
+      animation={false}
+      baseLayerPicker={false}
+      fullscreenButton={false}
+      vrButton={false}
+      geocoder={false}
+      homeButton={false}
+      infoBox={false}
+      sceneModePicker={false}
+      selectionIndicator={false}
+      timeline={false}
+      navigationHelpButton={false}
+      navigationInstructionsInitiallyVisible={false}
+      projectionPicker={false}
+      terrainProvider={terrainProvider}
+    >
+      <Globe depthTestAgainstTerrain={true} enableLighting={false} />
+      {path.length > 0 && (
+        <Entity name="Flight Path">
+          <PolylineGraphics
+            positions={getPathPositions()}
+            width={4}
+            material={Cesium.Color.YELLOW}
+            clampToGround={false} // Keep altitude from TrackPoint
+            arcType={Cesium.ArcType.GEODESIC}
+          />
+        </Entity>
+      )}
+    </Viewer>
   );
 }
