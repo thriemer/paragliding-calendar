@@ -1,6 +1,5 @@
 use std::{
     fmt::Debug,
-    path::Path,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -26,10 +25,8 @@ fn get_from_store(store: Keyspace, key: Vec<u8>) -> anyhow::Result<Option<Vec<u8
 }
 
 impl PersistentCache {
-    fn new(path: impl AsRef<Path>) -> Result<Self> {
-        let db = fjall::Database::builder(&path).open()?;
-        let items = db.keyspace("cache", fjall::KeyspaceCreateOptions::default)?;
-        Ok(PersistentCache { store: items })
+    fn from_keyspace(keyspace: Keyspace) -> Self {
+        PersistentCache { store: keyspace }
     }
 
     /// Stores a serializable value with a time-to-live (TTL).
@@ -127,8 +124,8 @@ impl PersistentCache {
 }
 
 /// Initializes the global persistent cache. **Must be called once before use.**
-pub fn init(path: impl AsRef<Path>) -> Result<()> {
-    let cache = PersistentCache::new(path)?;
+pub fn init(keyspace: Keyspace) -> Result<()> {
+    let cache = PersistentCache::from_keyspace(keyspace);
     GLOBAL_CACHE
         .set(cache)
         .map_err(|_| anyhow!("Cache already initialized"))?;

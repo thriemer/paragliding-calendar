@@ -1,16 +1,12 @@
-use std::time::Duration;
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cache,
     location::Location,
     paragliding::{ParaglidingSite, ParaglidingSiteProvider},
+    store,
 };
 
-const SITE_CACHE_TTL: Duration = Duration::from_secs(365 * 24 * 60 * 60);
-const SETTINGS_CACHE_TTL: Duration = Duration::from_secs(365 * 24 * 60 * 60);
 const SETTINGS_KEY: &str = "user_settings";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,60 +36,60 @@ impl Default for UserSettings {
     }
 }
 
-pub struct CachedParaglidingSiteProvider;
+pub struct ParaglidingSiteRepository;
 
-impl CachedParaglidingSiteProvider {
+impl ParaglidingSiteRepository {
     pub fn new() -> Self {
         Self
     }
 
     pub async fn save_site(&self, site: ParaglidingSite) -> Result<()> {
         let key = format!("site_{}", site.name);
-        cache::put(&key, site, SITE_CACHE_TTL).await
+        store::put(&key, site).await
     }
 
     pub async fn delete_site(&self, name: &str) -> Result<()> {
         let key = format!("site_{}", name);
-        cache::remove(&key).await
+        store::remove(&key).await
     }
 
     pub async fn get_settings() -> Result<Option<UserSettings>> {
-        cache::get::<UserSettings>(SETTINGS_KEY).await
+        store::get::<UserSettings>(SETTINGS_KEY).await
     }
 
     pub async fn save_settings(settings: &UserSettings) -> Result<()> {
-        cache::put(SETTINGS_KEY, settings.clone(), SETTINGS_CACHE_TTL).await
+        store::put(SETTINGS_KEY, settings.clone()).await
     }
 }
 
-impl Default for CachedParaglidingSiteProvider {
+impl Default for ParaglidingSiteRepository {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ParaglidingSiteProvider for CachedParaglidingSiteProvider {
+impl ParaglidingSiteProvider for ParaglidingSiteRepository {
     async fn fetch_launches_within_radius(
         &self,
         center: &Location,
         radius_km: f64,
     ) -> Vec<(ParaglidingSite, f64)> {
-        let cached_sites: Vec<ParaglidingSite> = match cache::get_all_starting_with("site_").await {
+        let sites: Vec<ParaglidingSite> = match store::get_all_starting_with("site_").await {
             Ok(sites) => sites,
             Err(e) => {
-                tracing::error!("Failed to fetch sites from cache: {}", e);
+                tracing::error!("Failed to fetch sites from store: {}", e);
                 return vec![];
             }
         };
 
-        if cached_sites.is_empty() {
-            tracing::warn!("No sites found in cache");
+        if sites.is_empty() {
+            tracing::warn!("No sites found in store");
             return vec![];
         }
 
         let mut results = Vec::new();
 
-        for site in &cached_sites {
+        for site in &sites {
             let mut min_distance = f64::INFINITY;
 
             for launch in &site.launches {
@@ -113,10 +109,10 @@ impl ParaglidingSiteProvider for CachedParaglidingSiteProvider {
     }
 
     async fn fetch_all_sites(&self) -> Vec<ParaglidingSite> {
-        match cache::get_all_starting_with("site_").await {
+        match store::get_all_starting_with("site_").await {
             Ok(sites) => sites,
             Err(e) => {
-                tracing::error!("Failed to fetch all sites from cache: {}", e);
+                tracing::error!("Failed to fetch all sites from store: {}", e);
                 vec![]
             }
         }

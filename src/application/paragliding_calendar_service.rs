@@ -9,7 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 use crate::{
     calendar::{CalendarEvent, CalendarProvider},
     location::Location,
-    paragliding::{ParaglidingSite, ParaglidingSiteProvider, cache::UserSettings, site_evaluator},
+    paragliding::{ParaglidingSite, ParaglidingSiteProvider, repository::UserSettings, site_evaluator},
 };
 
 /// Represents a time window when paragliding is feasible

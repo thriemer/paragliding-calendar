@@ -13,7 +13,7 @@ use crate::{
     location::Location,
     paragliding::{
         ParaglidingSite, ParaglidingSiteProvider,
-        cache::{CachedParaglidingSiteProvider, UserSettings},
+        repository::{ParaglidingSiteRepository, UserSettings},
         site_evaluator::SiteEvaluationResult,
     },
 };
@@ -27,6 +27,7 @@ mod email;
 mod location;
 mod paragliding;
 mod routing;
+mod store;
 mod telemetry;
 mod weather;
 mod web;
@@ -47,7 +48,7 @@ static API_CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
 
 // Create calendar entries for paragliding based on settings from cache
 async fn create_calender_entries() -> Result<()> {
-    let settings = match CachedParaglidingSiteProvider::get_settings().await? {
+    let settings = match ParaglidingSiteRepository::get_settings().await? {
         Some(s) => s,
         None => {
             tracing::warn!("No settings found in cache, using defaults");
@@ -70,7 +71,7 @@ async fn create_calender_entries() -> Result<()> {
         }
     };
 
-    let provider = CachedParaglidingSiteProvider::new();
+    let provider = ParaglidingSiteRepository::new();
     let service = ParaglidingCalendarService::new();
 
     let events = service
@@ -112,12 +113,13 @@ async fn main() -> Result<()> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    cache::init(
-        env::var("XDG_CACHE_HOME")
-            .ok()
-            .or(env::var("CACHE_DIRECTORY").ok())
-            .expect("Cache environment variable not set."),
-    )?;
+    let db_path = env::var("XDG_CACHE_HOME")
+        .ok()
+        .or(env::var("CACHE_DIRECTORY").ok())
+        .expect("Cache environment variable not set.");
+    let db = fjall::Database::builder(&db_path).open()?;
+    cache::init(db.keyspace("cache", fjall::KeyspaceCreateOptions::default)?)?;
+    store::init(db.keyspace("store", fjall::KeyspaceCreateOptions::default)?)?;
     web::run().await;
     tokio::join!(async { web::run().await }, async {
         let mut interval = time::interval(time::Duration::from_hours(8));

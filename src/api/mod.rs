@@ -11,19 +11,19 @@ use serde_json::Value;
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
-    cache,
     calendar::{CalendarProvider, google::GoogleCalendar},
     location::Location,
     paragliding::{
         ParaglidingSite, ParaglidingSiteProvider,
-        cache::{CachedParaglidingSiteProvider, UserSettings},
+        repository::{ParaglidingSiteRepository, UserSettings},
         dhv,
         flight::{Track, analytics},
     },
+    store,
     weather::{self, WeatherModel, open_meteo},
 };
 
-const CACHE_KEY: &str = "decision_graph";
+const DECISION_GRAPH_KEY: &str = "decision_graph";
 
 #[derive(Serialize, Deserialize)]
 pub struct ElevationResponse {
@@ -100,7 +100,7 @@ async fn get_settings() -> Result<Json<UserSettingsResponse>, StatusCode> {
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let mut settings: UserSettingsResponse = match CachedParaglidingSiteProvider::get_settings()
+    let mut settings: UserSettingsResponse = match ParaglidingSiteRepository::get_settings()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     {
@@ -112,7 +112,7 @@ async fn get_settings() -> Result<Json<UserSettingsResponse>, StatusCode> {
 }
 
 async fn save_settings(Json(settings): Json<UserSettings>) -> Result<StatusCode, StatusCode> {
-    CachedParaglidingSiteProvider::save_settings(&settings)
+    ParaglidingSiteRepository::save_settings(&settings)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
@@ -141,13 +141,13 @@ pub fn router() -> Router {
 }
 
 async fn get_sites() -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
-    let provider = CachedParaglidingSiteProvider::new();
+    let provider = ParaglidingSiteRepository::new();
     let sites = provider.fetch_all_sites().await;
     Ok(Json(sites))
 }
 
 async fn update_site(Json(site): Json<ParaglidingSite>) -> Result<StatusCode, StatusCode> {
-    let provider = CachedParaglidingSiteProvider::new();
+    let provider = ParaglidingSiteRepository::new();
     provider
         .save_site(site)
         .await
@@ -156,7 +156,7 @@ async fn update_site(Json(site): Json<ParaglidingSite>) -> Result<StatusCode, St
 }
 
 async fn delete_site(Path(site_name): Path<String>) -> Result<StatusCode, StatusCode> {
-    let provider = CachedParaglidingSiteProvider::new();
+    let provider = ParaglidingSiteRepository::new();
     provider
         .delete_site(&site_name)
         .await
@@ -191,7 +191,7 @@ async fn import_sites(body: Body) -> Result<Json<ImportResponse>, StatusCode> {
     match dhv::parse_sites_from_xml(&xml_content) {
         Ok(sites) => {
             tracing::info!("Parsed {} sites from XML", sites.len());
-            let provider = CachedParaglidingSiteProvider::new();
+            let provider = ParaglidingSiteRepository::new();
             for site in sites {
                 if let Err(e) = provider.save_site(site).await {
                     tracing::warn!("Failed to save site: {}", e);
@@ -242,11 +242,11 @@ async fn analyze_flight(body: Body) -> Result<Json<analytics::FlightAnalysis>, S
 }
 
 async fn get_decision_graph() -> Result<Json<Value>, StatusCode> {
-    let cached: Option<String> = cache::get(CACHE_KEY)
+    let stored: Option<String> = store::get(DECISION_GRAPH_KEY)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if let Some(graph) = cached {
+    if let Some(graph) = stored {
         let value: Value =
             serde_json::from_str(&graph).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         return Ok(Json(value));
@@ -261,13 +261,9 @@ async fn get_decision_graph() -> Result<Json<Value>, StatusCode> {
 async fn save_decision_graph(Json(payload): Json<Value>) -> Result<StatusCode, StatusCode> {
     let graph = serde_json::to_string(&payload).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    cache::put::<String>(
-        CACHE_KEY,
-        graph,
-        std::time::Duration::from_secs(365 * 24 * 60 * 60),
-    )
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    store::put::<String>(DECISION_GRAPH_KEY, graph)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::OK)
 }
