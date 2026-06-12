@@ -1,4 +1,4 @@
-use axum::{Router, extract::Query, routing::get};
+use axum::{Router, extract::Query, extract::State, routing::get};
 #[cfg(feature = "tls")]
 use axum_server::tls_rustls::RustlsConfig;
 use std::collections::HashMap;
@@ -7,15 +7,17 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::ServeDir;
 use tower_http::timeout::TimeoutLayer;
 
-use crate::calendar::google;
-use crate::{api, config};
+use crate::{api, app_state::AppState, config};
 
-async fn oauth_callback(Query(params): Query<HashMap<String, String>>) -> Result<String, String> {
+async fn oauth_callback(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<String, String> {
     let code = params.get("code").ok_or("Missing code parameter")?;
 
-    match google::AUTH.exchange_code(code).await {
+    match state.auth.exchange_code(code).await {
         Ok(_token) => {
-            tracing::info!("Successfully exchanged code for token and stored in cache");
+            tracing::info!("Successfully exchanged code for token");
             Ok("Authentication successful! You can close this window.".to_string())
         }
         Err(e) => {
@@ -25,7 +27,7 @@ async fn oauth_callback(Query(params): Query<HashMap<String, String>>) -> Result
     }
 }
 
-pub async fn run() {
+pub async fn run(state: AppState) {
     let config = config::WebConfig::load().unwrap();
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -40,8 +42,9 @@ pub async fn run() {
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
             std::time::Duration::from_secs(300),
-        )) // 5 min timeout
-        .layer(RequestBodyLimitLayer::new(50 * 1024 * 1024)); // 50MB limit
+        ))
+        .layer(RequestBodyLimitLayer::new(50 * 1024 * 1024))
+        .with_state(state);
 
     let addr = format!("0.0.0.0:{}", config.port);
     tracing::info!("Starting HTTP server on {}", addr);

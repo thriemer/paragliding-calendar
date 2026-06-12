@@ -1,7 +1,7 @@
 use axum::{
     Router,
     body::Body,
-    extract::{Path, Query},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
     routing::{delete, get, post, put},
@@ -11,16 +11,17 @@ use serde_json::Value;
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
+    app_state::AppState,
     calendar::{CalendarProvider, google::GoogleCalendar},
     location::Location,
     paragliding::{
         ParaglidingSite, ParaglidingSiteProvider,
-        repository::{ParaglidingSiteRepository, UserSettings},
+        repository::UserSettings,
         dhv,
         flight::{Track, analytics},
     },
     store,
-    weather::{self, WeatherModel, open_meteo},
+    weather::{self, WeatherModel},
 };
 
 const DECISION_GRAPH_KEY: &str = "decision_graph";
@@ -74,24 +75,33 @@ impl From<UserSettings> for UserSettingsResponse {
 }
 
 async fn get_elevation(
+    State(state): State<AppState>,
     Query(query): Query<ElevationQuery>,
 ) -> Result<Json<ElevationResponse>, StatusCode> {
-    let elevation = open_meteo::fetch_elevation(query.latitude, query.longitude)
+    let elevation = state
+        .weather
+        .fetch_elevation(query.latitude, query.longitude)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(ElevationResponse { elevation }))
 }
 
-async fn geocode(Query(query): Query<GeocodeQuery>) -> Result<Json<GeocodeResponse>, StatusCode> {
-    let locations = open_meteo::geocode(&query.name)
+async fn geocode(
+    State(state): State<AppState>,
+    Query(query): Query<GeocodeQuery>,
+) -> Result<Json<GeocodeResponse>, StatusCode> {
+    let locations = state
+        .weather
+        .geocode(&query.name)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(GeocodeResponse { results: locations }))
 }
 
-async fn get_settings() -> Result<Json<UserSettingsResponse>, StatusCode> {
-    //TODO: replace with generic calendar
-    let cal = GoogleCalendar::new()
+async fn get_settings(
+    State(state): State<AppState>,
+) -> Result<Json<UserSettingsResponse>, StatusCode> {
+    let cal = GoogleCalendar::new(state.auth.clone(), state.cache.clone())
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -100,7 +110,9 @@ async fn get_settings() -> Result<Json<UserSettingsResponse>, StatusCode> {
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let mut settings: UserSettingsResponse = match ParaglidingSiteRepository::get_settings()
+    let mut settings: UserSettingsResponse = match state
+        .site_repo
+        .get_settings()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     {
@@ -111,14 +123,19 @@ async fn get_settings() -> Result<Json<UserSettingsResponse>, StatusCode> {
     Ok(Json(settings))
 }
 
-async fn save_settings(Json(settings): Json<UserSettings>) -> Result<StatusCode, StatusCode> {
-    ParaglidingSiteRepository::save_settings(&settings)
+async fn save_settings(
+    State(state): State<AppState>,
+    Json(settings): Json<UserSettings>,
+) -> Result<StatusCode, StatusCode> {
+    state
+        .site_repo
+        .save_settings(&settings)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
 }
 
-pub fn router() -> Router {
+pub fn router() -> Router<AppState> {
     Router::new()
         .route("/sites", get(get_sites))
         .route("/sites", put(update_site))
@@ -140,24 +157,29 @@ pub fn router() -> Router {
         .route("/weather-models", get(get_weather_models))
 }
 
-async fn get_sites() -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
-    let provider = ParaglidingSiteRepository::new();
-    let sites = provider.fetch_all_sites().await;
+async fn get_sites(State(state): State<AppState>) -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
+    let sites = state.site_repo.fetch_all_sites().await;
     Ok(Json(sites))
 }
 
-async fn update_site(Json(site): Json<ParaglidingSite>) -> Result<StatusCode, StatusCode> {
-    let provider = ParaglidingSiteRepository::new();
-    provider
+async fn update_site(
+    State(state): State<AppState>,
+    Json(site): Json<ParaglidingSite>,
+) -> Result<StatusCode, StatusCode> {
+    state
+        .site_repo
         .save_site(site)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
 }
 
-async fn delete_site(Path(site_name): Path<String>) -> Result<StatusCode, StatusCode> {
-    let provider = ParaglidingSiteRepository::new();
-    provider
+async fn delete_site(
+    State(state): State<AppState>,
+    Path(site_name): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    state
+        .site_repo
         .delete_site(&site_name)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -169,7 +191,10 @@ pub struct ImportResponse {
     pub imported: usize,
 }
 
-async fn import_sites(body: Body) -> Result<Json<ImportResponse>, StatusCode> {
+async fn import_sites(
+    State(state): State<AppState>,
+    body: Body,
+) -> Result<Json<ImportResponse>, StatusCode> {
     tracing::info!("Starting DHV file import");
 
     let bytes = axum::body::to_bytes(body, 50 * 1024 * 1024)
@@ -191,9 +216,8 @@ async fn import_sites(body: Body) -> Result<Json<ImportResponse>, StatusCode> {
     match dhv::parse_sites_from_xml(&xml_content) {
         Ok(sites) => {
             tracing::info!("Parsed {} sites from XML", sites.len());
-            let provider = ParaglidingSiteRepository::new();
             for site in sites {
-                if let Err(e) = provider.save_site(site).await {
+                if let Err(e) = state.site_repo.save_site(site).await {
                     tracing::warn!("Failed to save site: {}", e);
                 } else {
                     imported_count += 1;

@@ -1,24 +1,19 @@
 use std::{env, sync::LazyLock};
 
 use anyhow::Result;
-use futures::StreamExt;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use tokio::time;
-use tracing::instrument;
 
 use crate::{
-    application::ParaglidingCalendarService,
+    app_state::AppState,
     calendar::{CalendarProvider, google::GoogleCalendar},
     location::Location,
-    paragliding::{
-        ParaglidingSite, ParaglidingSiteProvider,
-        repository::{ParaglidingSiteRepository, UserSettings},
-        site_evaluator::SiteEvaluationResult,
-    },
+    paragliding::repository::UserSettings,
 };
 
 mod api;
+mod app_state;
 mod application;
 mod cache;
 mod calendar;
@@ -46,12 +41,11 @@ static API_CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
     client
 });
 
-// Create calendar entries for paragliding based on settings from cache
-async fn create_calender_entries() -> Result<()> {
-    let settings = match ParaglidingSiteRepository::get_settings().await? {
+async fn create_calender_entries(state: &AppState) -> Result<()> {
+    let settings = match state.site_repo.get_settings().await? {
         Some(s) => s,
         None => {
-            tracing::warn!("No settings found in cache, using defaults");
+            tracing::warn!("No settings found, using defaults");
             UserSettings::default()
         }
     };
@@ -63,7 +57,7 @@ async fn create_calender_entries() -> Result<()> {
         "".to_string(),
     );
 
-    let mut cal = match GoogleCalendar::new().await {
+    let mut cal = match GoogleCalendar::new(state.auth.clone(), state.cache.clone()).await {
         Ok(cal) => cal,
         Err(e) => {
             tracing::error!("Failed to create Google Calendar: {}", e);
@@ -71,14 +65,11 @@ async fn create_calender_entries() -> Result<()> {
         }
     };
 
-    let provider = ParaglidingSiteRepository::new();
-    let service = ParaglidingCalendarService::new();
-
-    let events = service
-        .create_events_for_location(&provider, &location, &mut cal, &settings)
+    let events = state
+        .service
+        .create_events_for_location(state.site_repo.as_ref(), &location, &mut cal, &settings)
         .await?;
 
-    // Clear and recreate all events
     if let Err(e) = cal.clear_calendar(&settings.calendar_name).await {
         tracing::error!("Failed to clear calendar {}: {}", settings.calendar_name, e);
         return Err(e);
@@ -104,7 +95,6 @@ async fn create_calender_entries() -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize telemetry (OTLP to Alloy in production, stdout in development)
     telemetry::init_telemetry()?;
 
     tracing::info!("Starting travelai application");
@@ -118,17 +108,21 @@ async fn main() -> Result<()> {
         .or(env::var("CACHE_DIRECTORY").ok())
         .expect("Cache environment variable not set.");
     let db = fjall::Database::builder(&db_path).open()?;
-    cache::init(db.keyspace("cache", fjall::KeyspaceCreateOptions::default)?)?;
     store::init(db.keyspace("store", fjall::KeyspaceCreateOptions::default)?)?;
-    web::run().await;
-    tokio::join!(async { web::run().await }, async {
-        let mut interval = time::interval(time::Duration::from_hours(8));
-        loop {
-            interval.tick().await;
-            if let Err(e) = create_calender_entries().await {
-                tracing::error!("Failed to create calendar entries: {:?}", e);
+    let state = AppState::new(&db)?;
+
+    let job_state = state.clone();
+    tokio::join!(
+        async { web::run(state).await },
+        async move {
+            let mut interval = time::interval(time::Duration::from_hours(8));
+            loop {
+                interval.tick().await;
+                if let Err(e) = create_calender_entries(&job_state).await {
+                    tracing::error!("Failed to create calendar entries: {:?}", e);
+                }
             }
         }
-    });
+    );
     Ok(())
 }

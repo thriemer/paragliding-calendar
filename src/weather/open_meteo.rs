@@ -1,24 +1,80 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
-use rand::RngExt;
 use tracing::instrument;
 
-use crate::{cache, location::Location, weather::WeatherForecast};
+use crate::{cache::PersistentCache, location::Location, weather::WeatherForecast};
 
-#[instrument(skip_all, fields(lat = %source.latitude, lon = %source.longitude))]
-pub async fn get_forecast(source: Location, model: Option<&str>) -> Result<WeatherForecast> {
-    let model_suffix = model.map(|m| format!("_{}", m)).unwrap_or_default();
-    let key = format!("weather_for_{}{}", source.to_key(), model_suffix);
+pub struct OpenMeteoClient {
+    cache: Arc<PersistentCache>,
+}
 
-    if let Some(cached) = cache::get::<WeatherForecast>(&key).await? {
-        return Ok(cached);
+impl OpenMeteoClient {
+    pub fn new(cache: Arc<PersistentCache>) -> Self {
+        Self { cache }
     }
 
-    let forecast = get_forecast_raw(source.clone(), model).await?;
-    cache::put(&key, forecast.clone(), Duration::from_hours(6u64)).await?;
-    tracing::info!("Weather fetch for {} was successful.", source.to_key());
-    Ok(forecast)
+    #[instrument(skip_all, fields(lat = %source.latitude, lon = %source.longitude))]
+    pub async fn get_forecast(
+        &self,
+        source: Location,
+        model: Option<&str>,
+    ) -> Result<WeatherForecast> {
+        let model_suffix = model.map(|m| format!("_{}", m)).unwrap_or_default();
+        let key = format!("weather_for_{}{}", source.to_key(), model_suffix);
+
+        if let Some(cached) = self.cache.get::<WeatherForecast>(&key).await? {
+            return Ok(cached);
+        }
+
+        let forecast = get_forecast_raw(source.clone(), model).await?;
+        self.cache
+            .put(&key, forecast.clone(), Duration::from_hours(6u64))
+            .await?;
+        tracing::info!("Weather fetch for {} was successful.", source.to_key());
+        Ok(forecast)
+    }
+
+    #[instrument(skip(self), fields(location_name = %location_name))]
+    pub async fn geocode(&self, location_name: &str) -> Result<Vec<Location>> {
+        geocode_raw(location_name).await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn fetch_elevation(&self, latitude: f64, longitude: f64) -> Result<f64> {
+        let rounded_lat = (latitude * 1000.0).round() / 1000.0;
+        let rounded_lon = (longitude * 1000.0).round() / 1000.0;
+        let cache_key = format!("elevation_{}_{}", rounded_lat, rounded_lon);
+
+        if let Some(cached) = self.cache.get::<f64>(&cache_key).await? {
+            return Ok(cached);
+        }
+
+        let url = format!(
+            "https://api.open-meteo.com/v1/elevation?latitude={}&longitude={}",
+            latitude, longitude
+        );
+
+        let response = reqwest::get(&url).await?;
+        let data: serde_json::Value = response.json().await?;
+
+        let elevation = data["elevation"]
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_f64())
+            .ok_or(anyhow!("No elevation provided in response"))?;
+
+        let _ = self
+            .cache
+            .put(
+                &cache_key,
+                elevation,
+                std::time::Duration::from_secs(365 * 24 * 60 * 60),
+            )
+            .await;
+
+        Ok(elevation)
+    }
 }
 
 async fn get_forecast_raw(location: Location, model: Option<&str>) -> Result<WeatherForecast> {
@@ -42,9 +98,7 @@ async fn get_forecast_raw(location: Location, model: Option<&str>) -> Result<Wea
     Ok(forecast)
 }
 
-#[instrument(skip_all, fields(location_name = %location_name))]
-pub async fn geocode(location_name: &str) -> Result<Vec<Location>> {
-    // OpenMeteo geocoding API (no API key required)
+async fn geocode_raw(location_name: &str) -> Result<Vec<Location>> {
     let url = format!(
         "https://geocoding-api.open-meteo.com/v1/search?name={}&count=5&language=en&format=json",
         urlencoding::encode(location_name)
@@ -57,7 +111,6 @@ pub async fn geocode(location_name: &str) -> Result<Vec<Location>> {
         .await
         .with_context(|| "Failed to parse OpenMeteo geocoding response")?;
 
-    // Convert OpenMeteo results to our existing GeocodingResult format
     let geocoding_results: Vec<Location> = openmeteo_response
         .results
         .unwrap_or_default()
@@ -71,41 +124,6 @@ pub async fn geocode(location_name: &str) -> Result<Vec<Location>> {
         location_name
     );
     Ok(geocoding_results)
-}
-
-#[instrument()]
-pub async fn fetch_elevation(latitude: f64, longitude: f64) -> Result<f64> {
-    let rounded_lat = (latitude * 1000.0).round() / 1000.0;
-    let rounded_lon = (longitude * 1000.0).round() / 1000.0;
-    let cache_key = format!("elevation_{}_{}", rounded_lat, rounded_lon);
-
-    if let Some(cached) = cache::get::<f64>(&cache_key).await? {
-        return Ok(cached);
-    }
-
-    let url = format!(
-        "https://api.open-meteo.com/v1/elevation?latitude={}&longitude={}",
-        latitude, longitude
-    );
-
-    let response = reqwest::get(&url).await?;
-
-    let data: serde_json::Value = response.json().await?;
-
-    let elevation = data["elevation"]
-        .as_array()
-        .and_then(|arr| arr.first())
-        .and_then(|v| v.as_f64())
-        .ok_or(anyhow!("No elevation provided in response"))?;
-
-    let _ = cache::put(
-        &cache_key,
-        elevation,
-        std::time::Duration::from_secs(365 * 24 * 60 * 60),
-    )
-    .await;
-
-    Ok(elevation)
 }
 
 /// `OpenMeteo` API response structures and conversion utilities

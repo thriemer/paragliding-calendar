@@ -53,18 +53,12 @@ impl ParaglidingSiteRepository {
         store::remove(&key).await
     }
 
-    pub async fn get_settings() -> Result<Option<UserSettings>> {
+    pub async fn get_settings(&self) -> Result<Option<UserSettings>> {
         store::get::<UserSettings>(SETTINGS_KEY).await
     }
 
-    pub async fn save_settings(settings: &UserSettings) -> Result<()> {
+    pub async fn save_settings(&self, settings: &UserSettings) -> Result<()> {
         store::put(SETTINGS_KEY, settings.clone()).await
-    }
-}
-
-impl Default for ParaglidingSiteRepository {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

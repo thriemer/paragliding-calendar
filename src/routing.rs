@@ -1,30 +1,45 @@
-use std::{env, time::Duration};
+use std::{env, sync::Arc, time::Duration};
 
 use anyhow::{Context, Ok, Result, anyhow};
 use rand::RngExt;
 use serde::Deserialize;
 use tracing::instrument;
 
-use crate::{API_CLIENT, cache, location::Location};
+use crate::{API_CLIENT, cache::PersistentCache, location::Location};
 
-#[instrument()]
-pub async fn get_travel_time(source: &Location, destination: &Location) -> Result<u64> {
-    let key = source.to_key() + "-" + &destination.to_key();
+pub struct Routing {
+    cache: Arc<PersistentCache>,
+}
 
-    if let Some(cached) = cache::get::<u64>(&key).await? {
-        return Ok(cached);
+impl Routing {
+    pub fn new(cache: Arc<PersistentCache>) -> Self {
+        Self { cache }
     }
 
-    let seconds = get_travel_time_call(source, destination).await?;
+    #[instrument(skip(self))]
+    pub async fn get_travel_time(
+        &self,
+        source: &Location,
+        destination: &Location,
+    ) -> Result<u64> {
+        let key = source.to_key() + "-" + &destination.to_key();
 
-    let jitter: f32 = rand::rng().random_range(0.9..1.1);
-    cache::put(
-        &key,
-        seconds,
-        Duration::from_hours((24f32 * 7f32 * jitter) as u64),
-    )
-    .await?;
-    Ok(seconds)
+        if let Some(cached) = self.cache.get::<u64>(&key).await? {
+            return Ok(cached);
+        }
+
+        let seconds = get_travel_time_call(source, destination).await?;
+
+        let jitter: f32 = rand::rng().random_range(0.9..1.1);
+        self.cache
+            .put(
+                &key,
+                seconds,
+                Duration::from_hours((24f32 * 7f32 * jitter) as u64),
+            )
+            .await?;
+        Ok(seconds)
+    }
 }
 
 async fn get_travel_time_call(source: &Location, destination: &Location) -> Result<u64> {

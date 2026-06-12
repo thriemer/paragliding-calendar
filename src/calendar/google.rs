@@ -1,8 +1,4 @@
-use std::{
-    env,
-    sync::{Arc, LazyLock},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Datelike, NaiveTime, Utc};
@@ -16,31 +12,23 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::instrument;
 
 use crate::{
-    cache,
+    cache::PersistentCache,
     calendar::{CalendarEvent, CalendarProvider, web_flow_authenticator::WebFlowAuthenticator},
 };
-
-pub static AUTH: LazyLock<WebFlowAuthenticator> = LazyLock::new(|| {
-    let client_id = env::var("GOOGLE_CLIENT_ID").expect("Missing GOOGLE_CLIENT_ID");
-    let client_secret = env::var("GOOGLE_CLIENT_SECRET").expect("Missing GOOGLE_CLIENT_SECRET");
-    let redirect_uri = env::var("OAUTH_REDIRECT_URL").unwrap_or_else(|_| {
-        "https://linus-x1.bangus-firefighter.ts.net/oauth/callback".to_string()
-    });
-
-    let auth = WebFlowAuthenticator::new(client_id, client_secret, redirect_uri);
-    auth
-});
 
 pub type CalendarHubType =
     CalendarHub<HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>>;
 
 pub struct GoogleCalendar {
     hub: CalendarHubType,
+    cache: Arc<PersistentCache>,
 }
 
 impl GoogleCalendar {
-    pub async fn new() -> Result<Self> {
-        // Build HTTP client
+    pub async fn new(
+        auth: Arc<WebFlowAuthenticator>,
+        cache: Arc<PersistentCache>,
+    ) -> Result<Self> {
         let connector = HttpsConnectorBuilder::new()
             .with_native_roots()
             .context("Failed to build HTTPS connector")?
@@ -49,15 +37,15 @@ impl GoogleCalendar {
             .build();
 
         let hyper_client = Client::builder(TokioExecutor::new()).build(connector);
-        let auth = (*AUTH).clone();
+        let auth = (*auth).clone();
         let hub = CalendarHub::new(hyper_client, auth);
-        Ok(GoogleCalendar { hub })
+        Ok(GoogleCalendar { hub, cache })
     }
 
     async fn get_id_for_name(&self, name: &str) -> Result<String> {
         let key = format!("calendar_name_id_map_{}", name);
 
-        if let Some(id) = cache::get(&key).await? {
+        if let Some(id) = self.cache.get(&key).await? {
             return Ok(id);
         }
 
@@ -78,7 +66,9 @@ impl GoogleCalendar {
             .cloned();
 
         if let Some(id) = result {
-            cache::put(&key, id.clone(), Duration::from_hours(72)).await?;
+            self.cache
+                .put(&key, id.clone(), Duration::from_hours(72))
+                .await?;
             Ok(id.to_owned())
         } else {
             Err(anyhow!("Calendar id not found for name {}", name))
@@ -140,7 +130,7 @@ impl CalendarProvider for GoogleCalendar {
         let cache_key = format!("Calendar_free_busy_hash_{}", hasher.finish());
 
         let busy = {
-            if let Some(busy) = cache::get(&cache_key).await? {
+            if let Some(busy) = self.cache.get(&cache_key).await? {
                 busy
             } else {
                 let (_, busy) = self
@@ -158,7 +148,9 @@ impl CalendarProvider for GoogleCalendar {
                     .doit()
                     .await?;
 
-                cache::put(&cache_key, busy.clone(), Duration::from_hours(8)).await?;
+                self.cache
+                    .put(&cache_key, busy.clone(), Duration::from_hours(8))
+                    .await?;
                 busy
             }
         };
@@ -276,7 +268,9 @@ impl CalendarProvider for GoogleCalendar {
 
         if let Some(id) = cal.id {
             let key = format!("calendar_name_id_map_{}", name);
-            cache::put(&key, id, Duration::from_hours(24)).await?;
+            self.cache
+                .put(&key, id, Duration::from_hours(24))
+                .await?;
         }
         Ok(())
     }

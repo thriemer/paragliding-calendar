@@ -6,9 +6,7 @@ use std::{
 use anyhow::{Result, anyhow};
 use fjall::{Iter, Keyspace};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::{sync::OnceCell, task};
-
-static GLOBAL_CACHE: OnceCell<PersistentCache> = OnceCell::const_new();
+use tokio::task;
 
 #[derive(Serialize, Deserialize)]
 struct StoredEntry<T> {
@@ -25,7 +23,7 @@ fn get_from_store(store: Keyspace, key: Vec<u8>) -> anyhow::Result<Option<Vec<u8
 }
 
 impl PersistentCache {
-    fn from_keyspace(keyspace: Keyspace) -> Self {
+    pub fn from_keyspace(keyspace: Keyspace) -> Self {
         PersistentCache { store: keyspace }
     }
 
@@ -39,7 +37,6 @@ impl PersistentCache {
     ) -> Result<()> {
         let store = self.store.clone();
         let key = key.as_bytes().to_vec();
-        // Calculate expiry time
         let expires_at = SystemTime::now()
             .checked_add(ttl)
             .ok_or(anyhow!("TTL overflow"))?
@@ -53,7 +50,6 @@ impl PersistentCache {
     }
 
     /// Retrieves a value if it exists and has not expired.
-    /// Returns `None` for cache misses or expired entries.
     #[tracing::instrument(name = "query_cache", level = "debug", skip(self))]
     pub async fn get<T: DeserializeOwned + Send + 'static>(&self, key: &str) -> Result<Option<T>> {
         let store = self.store.clone();
@@ -67,17 +63,12 @@ impl PersistentCache {
             let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
             if now < entry.expires_at {
-                tracing::debug!("Key found and still fresh");
-                // Fresh
                 Ok(Some(entry.value))
             } else {
-                tracing::debug!("Key found but expired");
                 self.remove(key).await?;
                 Ok(None)
             }
         } else {
-            tracing::debug!("Key not found");
-            // Key not found
             Ok(None)
         }
     }
@@ -93,73 +84,26 @@ impl PersistentCache {
             .filter_map(|pair| pair.value().ok())
             .filter_map(|bytes| {
                 let entry: postcard::Result<StoredEntry<T>> = postcard::from_bytes(&bytes);
-                if entry.is_err() {
-                    return None;
-                }
-                let entry = entry.unwrap();
+                let entry = entry.ok()?;
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_secs();
 
                 if now < entry.expires_at {
-                    tracing::debug!("Key found and still fresh");
-                    // Fresh
                     Some(entry.value)
                 } else {
-                    return None;
+                    None
                 }
             })
             .collect::<Vec<T>>();
         Ok(result)
     }
 
-    /// Manually removes a key from the cache.
     pub async fn remove(&self, key: &str) -> Result<()> {
         let key = key.as_bytes().to_vec();
         let store = self.store.clone();
         let _ = task::spawn_blocking(move || store.remove(key)).await?;
         Ok(())
     }
-}
-
-/// Initializes the global persistent cache. **Must be called once before use.**
-pub fn init(keyspace: Keyspace) -> Result<()> {
-    let cache = PersistentCache::from_keyspace(keyspace);
-    GLOBAL_CACHE
-        .set(cache)
-        .map_err(|_| anyhow!("Cache already initialized"))?;
-    Ok(())
-}
-
-/// Returns a reference to the globally initialized cache.
-/// # Panics
-/// Panics if the cache has not been initialized by calling `cache::init().await` first.
-fn get_cache() -> &'static PersistentCache {
-    GLOBAL_CACHE
-        .get()
-        .expect("Cache not initialized. Call cache::init().await first.")
-}
-
-// Public, ergonomic API endpoints that use the global cache.
-pub async fn put<T: Serialize + Send + Debug + 'static>(
-    key: &str,
-    value: T,
-    ttl: Duration,
-) -> Result<()> {
-    get_cache().put(key, value, ttl).await
-}
-
-pub async fn get<T: DeserializeOwned + Send + 'static>(key: &str) -> Result<Option<T>> {
-    get_cache().get(key).await
-}
-
-pub async fn get_all_starting_with<T: DeserializeOwned + Send + 'static>(
-    key: &str,
-) -> Result<Vec<T>> {
-    get_cache().get_all_starting_with(key).await
-}
-
-pub async fn remove(key: &str) -> Result<()> {
-    get_cache().remove(key).await
 }

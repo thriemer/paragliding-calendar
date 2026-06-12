@@ -3,6 +3,8 @@
 //! This service orchestrates the creation of paragliding events in a calendar
 //! based on weather conditions, site evaluations, and user availability.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 
@@ -10,6 +12,8 @@ use crate::{
     calendar::{CalendarEvent, CalendarProvider},
     location::Location,
     paragliding::{ParaglidingSite, ParaglidingSiteProvider, repository::UserSettings, site_evaluator},
+    routing::Routing,
+    weather::open_meteo::OpenMeteoClient,
 };
 
 /// Represents a time window when paragliding is feasible
@@ -20,11 +24,14 @@ pub struct FlyableWindow {
     pub end: DateTime<Utc>,
 }
 
-pub struct ParaglidingCalendarService;
+pub struct ParaglidingCalendarService {
+    routing: Arc<Routing>,
+    weather: Arc<OpenMeteoClient>,
+}
 
 impl ParaglidingCalendarService {
-    pub fn new() -> Self {
-        Self
+    pub fn new(routing: Arc<Routing>, weather: Arc<OpenMeteoClient>) -> Self {
+        Self { routing, weather }
     }
 
     /// Create calendar events for paragliding based on location and configuration
@@ -103,11 +110,10 @@ impl ParaglidingCalendarService {
 
             if let Some(launch) = site.launches.first() {
                 let weather_model = site.preferred_weather_model.as_deref();
-                match crate::weather::open_meteo::get_forecast(
-                    launch.location.clone(),
-                    weather_model,
-                )
-                .await
+                match self
+                    .weather
+                    .get_forecast(launch.location.clone(), weather_model)
+                    .await
                 {
                     Ok(forecast) => {
                         let evaluation = site_evaluator::evaluate_site(site, &forecast).await;
@@ -144,7 +150,9 @@ impl ParaglidingCalendarService {
 
         for (eval, site) in sites_with_weather {
             let drive_to_site = Duration::seconds(
-                crate::routing::get_travel_time(location, &site.launches[0].location).await? as i64,
+                self.routing
+                    .get_travel_time(location, &site.launches[0].location)
+                    .await? as i64,
             );
 
             for mut daily_summary in eval.daily_summaries.clone() {
