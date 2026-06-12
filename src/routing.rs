@@ -2,18 +2,20 @@ use std::{env, sync::Arc, time::Duration};
 
 use anyhow::{Context, Ok, Result, anyhow};
 use rand::RngExt;
+use reqwest_middleware::ClientWithMiddleware;
 use serde::Deserialize;
 use tracing::instrument;
 
-use crate::{API_CLIENT, cache::PersistentCache, location::Location};
+use crate::{cache::PersistentCache, location::Location};
 
 pub struct Routing {
     cache: Arc<PersistentCache>,
+    http: ClientWithMiddleware,
 }
 
 impl Routing {
-    pub fn new(cache: Arc<PersistentCache>) -> Self {
-        Self { cache }
+    pub fn new(cache: Arc<PersistentCache>, http: ClientWithMiddleware) -> Self {
+        Self { cache, http }
     }
 
     #[instrument(skip(self))]
@@ -28,7 +30,7 @@ impl Routing {
             return Ok(cached);
         }
 
-        let seconds = get_travel_time_call(source, destination).await?;
+        let seconds = self.get_travel_time_call(source, destination).await?;
 
         let jitter: f32 = rand::rng().random_range(0.9..1.1);
         self.cache
@@ -40,26 +42,30 @@ impl Routing {
             .await?;
         Ok(seconds)
     }
-}
 
-async fn get_travel_time_call(source: &Location, destination: &Location) -> Result<u64> {
-    tracing::debug!("Calling the API");
-    let url = format!(
-        "https://graphhopper.com/api/1/route?point={},{}&point={},{}&profile=car&points_encoded=false&calc_points=false&key={}",
-        source.latitude,
-        source.longitude,
-        destination.latitude,
-        destination.longitude,
-        env::var("GRAPHHOPPER_API_KEY").context("Missing GRAPHHOPPER_API_KEY env var")?
-    );
-    let response = API_CLIENT.get(url).send().await?;
-    let response: ApiResponse = response.json().await?;
+    async fn get_travel_time_call(
+        &self,
+        source: &Location,
+        destination: &Location,
+    ) -> Result<u64> {
+        tracing::debug!("Calling the API");
+        let url = format!(
+            "https://graphhopper.com/api/1/route?point={},{}&point={},{}&profile=car&points_encoded=false&calc_points=false&key={}",
+            source.latitude,
+            source.longitude,
+            destination.latitude,
+            destination.longitude,
+            env::var("GRAPHHOPPER_API_KEY").context("Missing GRAPHHOPPER_API_KEY env var")?
+        );
+        let response = self.http.get(url).send().await?;
+        let response: ApiResponse = response.json().await?;
 
-    response
-        .paths
-        .get(0)
-        .map(|path| path.time / 1000)
-        .ok_or(anyhow!("No paths in response"))
+        response
+            .paths
+            .get(0)
+            .map(|path| path.time / 1000)
+            .ok_or(anyhow!("No paths in response"))
+    }
 }
 
 #[derive(Debug, Deserialize)]

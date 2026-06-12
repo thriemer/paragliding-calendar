@@ -20,11 +20,8 @@ use crate::{
         dhv,
         flight::{Track, analytics},
     },
-    store,
     weather::{self, WeatherModel},
 };
-
-const DECISION_GRAPH_KEY: &str = "decision_graph";
 
 #[derive(Serialize, Deserialize)]
 pub struct ElevationResponse {
@@ -265,30 +262,26 @@ async fn analyze_flight(body: Body) -> Result<Json<analytics::FlightAnalysis>, S
     Ok(Json(analysis))
 }
 
-async fn get_decision_graph() -> Result<Json<Value>, StatusCode> {
-    let stored: Option<String> = store::get(DECISION_GRAPH_KEY)
+async fn get_decision_graph(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, StatusCode> {
+    let graph = state
+        .decision_graph
+        .load()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if let Some(graph) = stored {
-        let value: Value =
-            serde_json::from_str(&graph).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        return Ok(Json(value));
-    }
-
-    let default = include_str!("../paragliding/flyable_decision_graph.json");
-    let value: Value =
-        serde_json::from_str(default).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(value))
+    Ok(Json(graph))
 }
 
-async fn save_decision_graph(Json(payload): Json<Value>) -> Result<StatusCode, StatusCode> {
-    let graph = serde_json::to_string(&payload).map_err(|_| StatusCode::BAD_REQUEST)?;
-
-    store::put::<String>(DECISION_GRAPH_KEY, graph)
+async fn save_decision_graph(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Result<StatusCode, StatusCode> {
+    state
+        .decision_graph
+        .save(&payload)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     Ok(StatusCode::OK)
 }
 

@@ -1,8 +1,6 @@
-use std::{env, sync::LazyLock};
+use std::env;
 
 use anyhow::Result;
-use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use tokio::time;
 
 use crate::{
@@ -26,20 +24,6 @@ mod store;
 mod telemetry;
 mod weather;
 mod web;
-
-static API_CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
-    let retry_policy = ExponentialBackoff::builder()
-        .base(3)
-        .retry_bounds(
-            std::time::Duration::from_secs(10),
-            std::time::Duration::from_mins(30),
-        )
-        .build_with_max_retries(5);
-    let client = ClientBuilder::new(reqwest::Client::new())
-        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-        .build();
-    client
-});
 
 async fn create_calender_entries(state: &AppState) -> Result<()> {
     let settings = match state.site_repo.get_settings().await? {
@@ -108,7 +92,6 @@ async fn main() -> Result<()> {
         .or(env::var("CACHE_DIRECTORY").ok())
         .expect("Cache environment variable not set.");
     let db = fjall::Database::builder(&db_path).open()?;
-    store::init(db.keyspace("store", fjall::KeyspaceCreateOptions::default)?)?;
     let state = AppState::new(&db)?;
 
     let job_state = state.clone();

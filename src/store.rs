@@ -1,11 +1,9 @@
 use std::fmt::Debug;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use fjall::{Iter, Keyspace};
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::{sync::OnceCell, task};
-
-static GLOBAL_STORE: OnceCell<PersistentStore> = OnceCell::const_new();
+use tokio::task;
 
 pub struct PersistentStore {
     store: Keyspace,
@@ -16,7 +14,7 @@ fn get_from_store(store: Keyspace, key: Vec<u8>) -> anyhow::Result<Option<Vec<u8
 }
 
 impl PersistentStore {
-    fn from_keyspace(keyspace: Keyspace) -> Self {
+    pub fn from_keyspace(keyspace: Keyspace) -> Self {
         PersistentStore { store: keyspace }
     }
 
@@ -70,36 +68,4 @@ impl PersistentStore {
         let _ = task::spawn_blocking(move || store.remove(key)).await?;
         Ok(())
     }
-}
-
-pub fn init(keyspace: Keyspace) -> Result<()> {
-    let store = PersistentStore::from_keyspace(keyspace);
-    GLOBAL_STORE
-        .set(store)
-        .map_err(|_| anyhow!("Store already initialized"))?;
-    Ok(())
-}
-
-fn get_store() -> &'static PersistentStore {
-    GLOBAL_STORE
-        .get()
-        .expect("Store not initialized. Call store::init() first.")
-}
-
-pub async fn put<T: Serialize + Send + Debug + 'static>(key: &str, value: T) -> Result<()> {
-    get_store().put(key, value).await
-}
-
-pub async fn get<T: DeserializeOwned + Send + 'static>(key: &str) -> Result<Option<T>> {
-    get_store().get(key).await
-}
-
-pub async fn get_all_starting_with<T: DeserializeOwned + Send + 'static>(
-    key: &str,
-) -> Result<Vec<T>> {
-    get_store().get_all_starting_with(key).await
-}
-
-pub async fn remove(key: &str) -> Result<()> {
-    get_store().remove(key).await
 }

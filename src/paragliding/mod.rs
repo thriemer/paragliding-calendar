@@ -1,3 +1,4 @@
+pub mod decision_graph;
 pub mod repository;
 pub mod dhv;
 pub mod flight;
