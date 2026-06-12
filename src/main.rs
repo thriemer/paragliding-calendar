@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
             .or(env::var("CACHE_DIRECTORY").ok())
             .expect("Cache environment variable not set."),
     )?;
-
+    web::run().await;
     tokio::join!(async { web::run().await }, async {
         let mut interval = time::interval(time::Duration::from_hours(8));
         loop {

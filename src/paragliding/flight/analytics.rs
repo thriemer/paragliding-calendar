@@ -11,6 +11,7 @@ pub struct TrackPointDto {
     pub longitude: f64,
     pub height: f64,
     pub time: String,
+    pub climb_rate: f64,
 }
 
 impl From<&TrackPoint> for TrackPointDto {
@@ -20,6 +21,7 @@ impl From<&TrackPoint> for TrackPointDto {
             longitude: point.loc.longitude,
             height: point.loc.height,
             time: point.time.to_rfc3339(),
+            climb_rate: 0.0,
         }
     }
 }
@@ -71,7 +73,20 @@ pub fn analyse_flight(track: &Track) -> FlightAnalysis {
     let total_height_gained = calculate_total_elevation_gained(&track);
 
     FlightAnalysis {
-        path: track.points.iter().map(TrackPointDto::from).collect(),
+        path: {
+            track
+                .points
+                .iter()
+                .enumerate()
+                .map(|(i, point)| {
+                    let mut dto = TrackPointDto::from(point);
+                    if i > 0 && i - 1 < bearing_vel.len() {
+                        dto.climb_rate = bearing_vel[i - 1].0.vertical.get_ms();
+                    }
+                    dto
+                })
+                .collect()
+        },
         duration: format!("{:?}", d.unwrap()),
         distance: format!("{}", km.unwrap()),
         max_altitude: format!("{}", height.unwrap()),

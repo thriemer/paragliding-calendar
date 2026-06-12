@@ -16,13 +16,7 @@ pub async fn get_forecast(source: Location, model: Option<&str>) -> Result<Weath
     }
 
     let forecast = get_forecast_raw(source.clone(), model).await?;
-    let jitter: f32 = rand::rng().random_range(0.9..1.1);
-    cache::put(
-        &key,
-        forecast.clone(),
-        Duration::from_hours((6f32 * jitter) as u64),
-    )
-    .await?;
+    cache::put(&key, forecast.clone(), Duration::from_hours(6u64)).await?;
     tracing::info!("Weather fetch for {} was successful.", source.to_key());
     Ok(forecast)
 }

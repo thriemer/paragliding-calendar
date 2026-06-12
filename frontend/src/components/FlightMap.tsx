@@ -1,4 +1,4 @@
-import { Viewer, Entity, PolylineGraphics, Globe } from "resium";
+import { Viewer, Primitive, Globe } from "resium";
 import * as Cesium from "cesium";
 import { useEffect, useState, useRef } from "react";
 import { TrackPoint } from "../hooks/useFlightAnalytics";
@@ -10,12 +10,20 @@ interface FlightMapProps {
 const ionAccessToken =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIwODQ1NjlhMy01OTZjLTQ5ZTgtYWZjMS05NTdjZTBhYjViMTciLCJpZCI6NDIxMjIxLCJpYXQiOjE3NzY3NjYxMzN9.jY86EZR37l3t4CZKNsjBFYFqqadwYSmQjfZmXpDMlok";
 
+const getColorForClimbRate = (rate: number): Cesium.Color => {
+  if (rate < -2) return Cesium.Color.RED;
+  if (rate < -0.5) return Cesium.Color.ORANGE;
+  if (rate < 0.5) return Cesium.Color.YELLOW;
+  if (rate < 2) return Cesium.Color.LIME;
+  return Cesium.Color.BLUE;
+};
+
 export function FlightMap({ path }: FlightMapProps) {
+  console.log(path);
   const [terrainProvider, setTerrainProvider] =
     useState<Cesium.TerrainProvider | null>(null);
   const viewerRef = useRef<{ cesiumElement?: Cesium.Viewer } | null>(null);
 
-  // Load terrain (same as before)
   useEffect(() => {
     Cesium.Ion.defaultAccessToken = ionAccessToken;
     async function loadTerrain() {
@@ -32,16 +40,18 @@ export function FlightMap({ path }: FlightMapProps) {
     loadTerrain();
   }, []);
 
-  // Convert TrackPoint array to Cesium.Cartesian3 array
   const getPathPositions = (): Cesium.Cartesian3[] => {
-    return path.map((point) => {
-      console.log(point);
-      return Cesium.Cartesian3.fromDegrees(
+    return path.map((point) =>
+      Cesium.Cartesian3.fromDegrees(
         point.longitude,
         point.latitude,
         point.height,
-      );
-    });
+      ),
+    );
+  };
+
+  const getPathColors = (): Cesium.Color[] => {
+    return path.map((point) => getColorForClimbRate(point.climb_rate));
   };
 
   if (!terrainProvider) {
@@ -66,17 +76,25 @@ export function FlightMap({ path }: FlightMapProps) {
       projectionPicker={false}
       terrainProvider={terrainProvider}
     >
-      <Globe depthTestAgainstTerrain={true} enableLighting={false} />
-      {path.length > 0 && (
-        <Entity name="Flight Path">
-          <PolylineGraphics
-            positions={getPathPositions()}
-            width={4}
-            material={Cesium.Color.YELLOW}
-            clampToGround={false} // Keep altitude from TrackPoint
-            arcType={Cesium.ArcType.GEODESIC}
-          />
-        </Entity>
+      <Globe depthTestAgainstTerrain={true} enableLighting={true} />
+      {path.length > 1 && (
+        <Primitive
+          appearance={
+            new Cesium.PolylineColorAppearance({
+              translucent: false,
+            })
+          }
+          geometryInstances={
+            new Cesium.GeometryInstance({
+              geometry: new Cesium.PolylineGeometry({
+                positions: getPathPositions(),
+                colors: getPathColors(),
+                colorsPerVertex: true,
+                width: 4.0,
+              }),
+            })
+          }
+        />
       )}
     </Viewer>
   );

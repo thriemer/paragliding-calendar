@@ -6,6 +6,7 @@ export interface TrackPoint {
   longitude: number;
   height: number;
   time: string;
+  climb_rate: number;
 }
 
 export interface FlightAnalysis {
