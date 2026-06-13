@@ -5,12 +5,13 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 
 use crate::{
-    application::ParaglidingCalendarService,
+    application::Planner,
     cache::PersistentCache,
     calendar::web_flow_authenticator::WebFlowAuthenticator,
+    domain::ports::ActivitySource,
     location::GeoProvider,
     paragliding::{
-        decision_graph::DecisionGraphRepository, repository::ParaglidingSiteRepository,
+        repository::ParaglidingSiteRepository, source::ParaglidingActivitySource,
     },
     routing::{Routing, RoutingProvider},
     store::PersistentStore,
@@ -23,12 +24,11 @@ pub struct AppState {
     pub store: Arc<PersistentStore>,
     pub http: ClientWithMiddleware,
     pub site_repo: Arc<ParaglidingSiteRepository>,
-    pub decision_graph: Arc<DecisionGraphRepository>,
     pub auth: Arc<WebFlowAuthenticator>,
     pub routing: Arc<dyn RoutingProvider>,
     pub weather: Arc<dyn WeatherProvider>,
     pub geo: Arc<dyn GeoProvider>,
-    pub service: Arc<ParaglidingCalendarService>,
+    pub planner: Arc<Planner>,
 }
 
 impl AppState {
@@ -60,24 +60,23 @@ impl AppState {
         let weather: Arc<dyn WeatherProvider> = open_meteo.clone();
         let geo: Arc<dyn GeoProvider> = open_meteo;
 
-        let service = Arc::new(ParaglidingCalendarService::new(
-            routing.clone(),
-            weather.clone(),
-        ));
         let site_repo = Arc::new(ParaglidingSiteRepository::new(store.clone()));
-        let decision_graph = Arc::new(DecisionGraphRepository::new(store.clone()));
+
+        let paragliding_source: Arc<dyn ActivitySource> = Arc::new(
+            ParaglidingActivitySource::new(site_repo.clone(), weather.clone()),
+        );
+        let planner = Arc::new(Planner::new(vec![paragliding_source], routing.clone()));
 
         Ok(Self {
             cache,
             store,
             http,
             site_repo,
-            decision_graph,
             auth,
             routing,
             weather,
             geo,
-            service,
+            planner,
         })
     }
 }

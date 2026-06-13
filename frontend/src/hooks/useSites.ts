@@ -31,7 +31,6 @@ export interface ApiSite {
   mute_alerts?: boolean;
   rating?: number;
   preferred_weather_model?: string;
-  rule_overwrite?: unknown;
 }
 
 export function useSites() {

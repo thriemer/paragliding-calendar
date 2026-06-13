@@ -37,3 +37,4 @@ config.toml
 
 # Cache directory
 cache/
+.direnv

@@ -2,13 +2,11 @@ import { useState } from "react";
 import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { JdmConfigProvider, DecisionGraph } from "@gorules/jdm-editor";
 import { ApiSite } from "../hooks/useSites";
-import { useWeatherModels, WeatherModel } from "../hooks/useWeatherModels";
+import { useWeatherModels } from "../hooks/useWeatherModels";
 import { LaunchEditor } from "./LaunchEditor";
 import { LandingEditor } from "./LandingEditor";
 import styles from "./SiteEditor.module.css";
-import { API } from "../config/api";
 
 interface SiteEditorProps {
   site: ApiSite;
@@ -113,35 +111,6 @@ function ParkingLocationPicker({
   );
 }
 
-function RuleEditor({
-  rule,
-  onChange,
-  onRemove,
-}: {
-  rule: unknown;
-  onChange: (rule: unknown) => void;
-  onRemove: () => void;
-}) {
-  const [localRule, setLocalRule] = useState(rule || { nodes: [], edges: [] });
-
-  return (
-    <div className={styles.ruleEditor}>
-      <JdmConfigProvider>
-        <DecisionGraph
-          value={localRule}
-          onChange={(newRule) => {
-            setLocalRule(newRule);
-            onChange(newRule);
-          }}
-        />
-      </JdmConfigProvider>
-      <button className="btn btn-small btn-danger" onClick={onRemove} style={{ marginTop: "10px" }}>
-        Remove Rule
-      </button>
-    </div>
-  );
-}
-
 export function SiteEditor({ site, onSave, onDelete, onCancel }: SiteEditorProps) {
   const { models } = useWeatherModels();
   const [name, setName] = useState(site.name);
@@ -152,21 +121,6 @@ export function SiteEditor({ site, onSave, onDelete, onCancel }: SiteEditorProps
   const [muteAlerts, setMuteAlerts] = useState(site.mute_alerts || false);
   const [rating, setRating] = useState(site.rating || 0);
   const [preferredWeatherModel, setPreferredWeatherModel] = useState(site.preferred_weather_model);
-  const [ruleOverwrite, setRuleOverwrite] = useState(site.rule_overwrite);
-  const [showRuleEditor, setShowRuleEditor] = useState(false);
-
-  const addRuleOverwrite = async () => {
-    try {
-      const response = await fetch(API.decisionGraph);
-      if (response.ok) {
-        const defaultGraph = await response.json();
-        setRuleOverwrite(defaultGraph);
-      }
-    } catch (error) {
-      console.error("Failed to fetch default decision graph:", error);
-      setRuleOverwrite({ nodes: [], edges: [] });
-    }
-  };
 
   const handleLaunchChange = (index: number, launch: Launch) => {
     const updated = [...launches];
@@ -226,7 +180,6 @@ export function SiteEditor({ site, onSave, onDelete, onCancel }: SiteEditorProps
       mute_alerts: muteAlerts || undefined,
       rating: rating > 0 ? rating : undefined,
       preferred_weather_model: preferredWeatherModel || undefined,
-      rule_overwrite: ruleOverwrite || undefined,
     });
   };
 
@@ -305,21 +258,6 @@ export function SiteEditor({ site, onSave, onDelete, onCancel }: SiteEditorProps
             country: country || null,
           })}>
             Add Parking Location
-          </button>
-        )}
-      </div>
-
-      <div className={styles.formGroup}>
-        <label>Rule Overwrite:</label>
-        {ruleOverwrite ? (
-          <RuleEditor
-            rule={ruleOverwrite}
-            onChange={setRuleOverwrite}
-            onRemove={() => setRuleOverwrite(undefined)}
-          />
-        ) : (
-          <button className="btn btn-small" onClick={addRuleOverwrite}>
-            Add Rule Overwrite
           </button>
         )}
       </div>

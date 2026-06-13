@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-use serde::Serialize;
-use zen_engine::DecisionEngine;
-use zen_engine::model::DecisionContent;
 
 use crate::{
-    paragliding::{ParaglidingLaunch, ParaglidingSite},
+    paragliding::{ParaglidingLaunch, ParaglidingSite, SiteType},
     weather::{self, WeatherData, WeatherForecast},
 };
 
@@ -44,7 +41,6 @@ impl DailySummary {
             return;
         }
 
-        // Sort by timestamp
         let mut sorted_scores = self.hourly_scores.clone();
         sorted_scores.sort_by_key(|h| h.timestamp);
 
@@ -56,11 +52,9 @@ impl DailySummary {
                 Some(range_scores) => {
                     let last_score = range_scores.last().unwrap();
 
-                    // Check if consecutive
                     if score.timestamp == last_score.timestamp + Duration::hours(1) {
                         range_scores.push(score);
                     } else {
-                        // Finalize current range
                         if !range_scores.is_empty() {
                             let start = range_scores.first().unwrap().timestamp;
                             let end = range_scores.last().unwrap().timestamp;
@@ -68,25 +62,22 @@ impl DailySummary {
                             ranges.push(FlyableRange { start, end });
                         }
 
-                        // Start new range
                         current_range = Some(vec![score]);
                     }
                 }
                 None => {
-                    // Start first range
                     current_range = Some(vec![score]);
                 }
             }
         }
 
-        // Handle the last range
-        if let Some(range_scores) = current_range {
-            if !range_scores.is_empty() {
-                let start = range_scores.first().unwrap().timestamp;
-                let end = range_scores.last().unwrap().timestamp;
+        if let Some(range_scores) = current_range
+            && !range_scores.is_empty()
+        {
+            let start = range_scores.first().unwrap().timestamp;
+            let end = range_scores.last().unwrap().timestamp;
 
-                ranges.push(FlyableRange { start, end });
-            }
+            ranges.push(FlyableRange { start, end });
         }
 
         self.ranges = ranges;
@@ -98,40 +89,35 @@ pub struct SiteEvaluationResult {
     pub daily_summaries: Vec<DailySummary>,
 }
 
-#[derive(Debug, Serialize)]
-struct LaunchWeather {
-    weather: WeatherData,
-    launch: ParaglidingLaunch,
+const MAX_WIND_MS: f32 = 25.0 / 3.6;
+const MAX_GUST_MS: f32 = 40.0 / 3.6;
+
+fn is_flyable(weather: &WeatherData, launch: &ParaglidingLaunch) -> bool {
+    if !matches!(launch.site_type, SiteType::Hang) {
+        return false;
+    }
+    if weather.precipitation != 0.0 {
+        return false;
+    }
+    if weather.wind_speed_ms >= MAX_WIND_MS {
+        return false;
+    }
+    if weather.wind_gust_ms >= MAX_GUST_MS {
+        return false;
+    }
+    wind_direction_in_sector(
+        weather.wind_direction as f64,
+        launch.direction_degrees_start,
+        launch.direction_degrees_stop,
+    )
 }
 
-async fn is_flyable_decision_evaluation(
-    weather: &WeatherData,
-    launch: &ParaglidingLaunch,
-    rule_overwrite: Option<&String>,
-) -> bool {
-    let lw = LaunchWeather {
-        weather: weather.clone(),
-        launch: launch.clone(),
-    };
-
-    let decision_content: DecisionContent = if let Some(rule) = rule_overwrite {
-        serde_json::from_str(rule).unwrap_or_else(|_| {
-            serde_json::from_str(include_str!("flyable_decision_graph.json")).unwrap()
-        })
+fn wind_direction_in_sector(wind_dir: f64, start: f64, stop: f64) -> bool {
+    if start < stop {
+        start < wind_dir && wind_dir < stop
     } else {
-        serde_json::from_str(include_str!("flyable_decision_graph.json")).unwrap()
-    };
-
-    let engine = DecisionEngine::default();
-    let decision = engine.create_decision(decision_content.into());
-
-    let result = decision
-        .evaluate(serde_json::to_value(&lw).unwrap().into())
-        .await
-        .unwrap();
-
-    let flyable = result.result.dot("flyable").unwrap().as_bool().unwrap();
-    flyable
+        start < wind_dir || wind_dir < stop
+    }
 }
 
 pub async fn evaluate_site(
@@ -150,16 +136,10 @@ pub async fn evaluate_site(
         let mut hourly_scores = Vec::new();
 
         for weather_data in &daily_forecast.forecast {
-            let mut any_flyable = false;
-            let rule_overwrite = site.rule_overwrite.as_ref();
-            for launch in site.launches.iter() {
-                let flyable =
-                    is_flyable_decision_evaluation(&weather_data, launch, rule_overwrite).await;
-                any_flyable = any_flyable | flyable;
-                if any_flyable {
-                    break;
-                }
-            }
+            let any_flyable = site
+                .launches
+                .iter()
+                .any(|launch| is_flyable(weather_data, launch));
 
             hourly_scores.push(HourlyScore {
                 timestamp: weather_data.timestamp,
@@ -177,16 +157,11 @@ pub async fn evaluate_site(
 fn split_forecast_by_days(forecast: WeatherForecast) -> Vec<WeatherForecast> {
     let mut daily_forecasts: HashMap<NaiveDate, Vec<WeatherData>> = HashMap::new();
 
-    // Group hourly data by date
     for weather_data in forecast.forecast {
         let date = weather_data.timestamp.date_naive();
-        daily_forecasts
-            .entry(date)
-            .or_insert_with(Vec::new)
-            .push(weather_data);
+        daily_forecasts.entry(date).or_default().push(weather_data);
     }
 
-    // Calculate daylight hours once per day and filter
     daily_forecasts
         .into_iter()
         .filter_map(|(date, daily_data)| {

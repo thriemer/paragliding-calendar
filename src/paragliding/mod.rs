@@ -1,8 +1,8 @@
-pub mod decision_graph;
 pub mod repository;
 pub mod dhv;
 pub mod flight;
 pub mod site_evaluator;
+pub mod source;
 
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +28,6 @@ pub struct ParaglidingSite {
     pub mute_alerts: Option<bool>,
     pub rating: Option<u8>,
     pub preferred_weather_model: Option<String>,
-    pub rule_overwrite: Option<String>,
 }
 
 /// Represents a paragliding site from any data source

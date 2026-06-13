@@ -353,7 +353,6 @@ impl From<DHVFlyingSite> for ParaglidingSite {
             mute_alerts: None,
             rating: None,
             preferred_weather_model: None,
-            rule_overwrite: None,
         }
     }
 }

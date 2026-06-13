@@ -7,7 +7,6 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
@@ -149,8 +148,6 @@ pub fn router() -> Router<AppState> {
         .route("/geocode", get(geocode))
         .route("/settings", get(get_settings))
         .route("/settings", put(save_settings))
-        .route("/decision-graph", get(get_decision_graph))
-        .route("/decision-graph", post(save_decision_graph))
         .route("/weather-models", get(get_weather_models))
 }
 
@@ -260,29 +257,6 @@ async fn analyze_flight(body: Body) -> Result<Json<analytics::FlightAnalysis>, S
     tracing::info!("Flight analysis complete");
 
     Ok(Json(analysis))
-}
-
-async fn get_decision_graph(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, StatusCode> {
-    let graph = state
-        .decision_graph
-        .load()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(graph))
-}
-
-async fn save_decision_graph(
-    State(state): State<AppState>,
-    Json(payload): Json<Value>,
-) -> Result<StatusCode, StatusCode> {
-    state
-        .decision_graph
-        .save(&payload)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(StatusCode::OK)
 }
 
 #[derive(Serialize)]
