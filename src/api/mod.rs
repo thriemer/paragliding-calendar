@@ -20,7 +20,7 @@ use crate::{
         dhv,
         flight::{Track, analytics},
     },
-    weather::{self, WeatherModel},
+    weather::WeatherModel,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -76,7 +76,7 @@ async fn get_elevation(
     Query(query): Query<ElevationQuery>,
 ) -> Result<Json<ElevationResponse>, StatusCode> {
     let elevation = state
-        .weather
+        .geo
         .fetch_elevation(query.latitude, query.longitude)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -88,7 +88,7 @@ async fn geocode(
     Query(query): Query<GeocodeQuery>,
 ) -> Result<Json<GeocodeResponse>, StatusCode> {
     let locations = state
-        .weather
+        .geo
         .geocode(&query.name)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -290,8 +290,8 @@ struct WeatherModelsResponse {
     models: Vec<WeatherModel>,
 }
 
-async fn get_weather_models() -> Json<WeatherModelsResponse> {
+async fn get_weather_models(State(state): State<AppState>) -> Json<WeatherModelsResponse> {
     Json(WeatherModelsResponse {
-        models: weather::get_available_weather_models(),
+        models: state.weather.available_models(),
     })
 }

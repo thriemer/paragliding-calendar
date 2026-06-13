@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use sunrise::{Coordinates, SolarDay, SolarEvent};
@@ -6,6 +7,17 @@ use sunrise::{Coordinates, SolarDay, SolarEvent};
 use crate::location::Location;
 
 pub mod open_meteo;
+
+#[async_trait]
+pub trait WeatherProvider: Send + Sync {
+    async fn get_forecast(
+        &self,
+        source: Location,
+        model: Option<&str>,
+    ) -> Result<WeatherForecast>;
+
+    fn available_models(&self) -> Vec<WeatherModel>;
+}
 
 pub fn get_sunrise_sunset(
     location: &Location,
@@ -124,33 +136,4 @@ impl WeatherData {
 pub struct WeatherModel {
     pub id: String,
     pub name: String,
-}
-
-pub fn get_available_weather_models() -> Vec<WeatherModel> {
-    vec![
-        WeatherModel {
-            id: "ecmwf_ifs04".to_string(),
-            name: "ECMWF IFS ( deterministic)".to_string(),
-        },
-        WeatherModel {
-            id: "icon".to_string(),
-            name: "ICON (DWD)".to_string(),
-        },
-        WeatherModel {
-            id: "icon_eu".to_string(),
-            name: "ICON EU (DWD)".to_string(),
-        },
-        WeatherModel {
-            id: "gfs".to_string(),
-            name: "GFS (NOAA)".to_string(),
-        },
-        WeatherModel {
-            id: "gem".to_string(),
-            name: "GEM (CMC)".to_string(),
-        },
-        WeatherModel {
-            id: "arpege_world".to_string(),
-            name: "ARPEGE World (Météo-France)".to_string(),
-        },
-    ]
 }

@@ -1,12 +1,23 @@
-use std::{env, sync::Arc, time::Duration};
+use std::{env, sync::Arc, time::Duration as StdDuration};
 
-use anyhow::{Context, Ok, Result, anyhow};
+use anyhow::{Context, Result, anyhow};
+use async_trait::async_trait;
+use chrono::Duration;
 use rand::RngExt;
 use reqwest_middleware::ClientWithMiddleware;
 use serde::Deserialize;
 use tracing::instrument;
 
 use crate::{cache::PersistentCache, location::Location};
+
+#[async_trait]
+pub trait RoutingProvider: Send + Sync {
+    async fn get_travel_time(
+        &self,
+        source: &Location,
+        destination: &Location,
+    ) -> Result<Duration>;
+}
 
 pub struct Routing {
     cache: Arc<PersistentCache>,
@@ -16,31 +27,6 @@ pub struct Routing {
 impl Routing {
     pub fn new(cache: Arc<PersistentCache>, http: ClientWithMiddleware) -> Self {
         Self { cache, http }
-    }
-
-    #[instrument(skip(self))]
-    pub async fn get_travel_time(
-        &self,
-        source: &Location,
-        destination: &Location,
-    ) -> Result<u64> {
-        let key = source.to_key() + "-" + &destination.to_key();
-
-        if let Some(cached) = self.cache.get::<u64>(&key).await? {
-            return Ok(cached);
-        }
-
-        let seconds = self.get_travel_time_call(source, destination).await?;
-
-        let jitter: f32 = rand::rng().random_range(0.9..1.1);
-        self.cache
-            .put(
-                &key,
-                seconds,
-                Duration::from_hours((24f32 * 7f32 * jitter) as u64),
-            )
-            .await?;
-        Ok(seconds)
     }
 
     async fn get_travel_time_call(
@@ -65,6 +51,34 @@ impl Routing {
             .get(0)
             .map(|path| path.time / 1000)
             .ok_or(anyhow!("No paths in response"))
+    }
+}
+
+#[async_trait]
+impl RoutingProvider for Routing {
+    #[instrument(skip(self))]
+    async fn get_travel_time(
+        &self,
+        source: &Location,
+        destination: &Location,
+    ) -> Result<Duration> {
+        let key = source.to_key() + "-" + &destination.to_key();
+
+        if let Some(cached) = self.cache.get::<u64>(&key).await? {
+            return Ok(Duration::seconds(cached as i64));
+        }
+
+        let seconds = self.get_travel_time_call(source, destination).await?;
+
+        let jitter: f32 = rand::rng().random_range(0.9..1.1);
+        self.cache
+            .put(
+                &key,
+                seconds,
+                StdDuration::from_hours((24f32 * 7f32 * jitter) as u64),
+            )
+            .await?;
+        Ok(Duration::seconds(seconds as i64))
     }
 }
 

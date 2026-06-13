@@ -12,8 +12,8 @@ use crate::{
     calendar::{CalendarEvent, CalendarProvider},
     location::Location,
     paragliding::{ParaglidingSite, ParaglidingSiteProvider, repository::UserSettings, site_evaluator},
-    routing::Routing,
-    weather::open_meteo::OpenMeteoClient,
+    routing::RoutingProvider,
+    weather::WeatherProvider,
 };
 
 /// Represents a time window when paragliding is feasible
@@ -25,12 +25,12 @@ pub struct FlyableWindow {
 }
 
 pub struct ParaglidingCalendarService {
-    routing: Arc<Routing>,
-    weather: Arc<OpenMeteoClient>,
+    routing: Arc<dyn RoutingProvider>,
+    weather: Arc<dyn WeatherProvider>,
 }
 
 impl ParaglidingCalendarService {
-    pub fn new(routing: Arc<Routing>, weather: Arc<OpenMeteoClient>) -> Self {
+    pub fn new(routing: Arc<dyn RoutingProvider>, weather: Arc<dyn WeatherProvider>) -> Self {
         Self { routing, weather }
     }
 
@@ -149,11 +149,10 @@ impl ParaglidingCalendarService {
         let mut windows = Vec::new();
 
         for (eval, site) in sites_with_weather {
-            let drive_to_site = Duration::seconds(
-                self.routing
-                    .get_travel_time(location, &site.launches[0].location)
-                    .await? as i64,
-            );
+            let drive_to_site = self
+                .routing
+                .get_travel_time(location, &site.launches[0].location)
+                .await?;
 
             for mut daily_summary in eval.daily_summaries.clone() {
                 // Filter hourly scores based on calendar availability

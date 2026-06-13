@@ -8,12 +8,13 @@ use crate::{
     application::ParaglidingCalendarService,
     cache::PersistentCache,
     calendar::web_flow_authenticator::WebFlowAuthenticator,
+    location::GeoProvider,
     paragliding::{
         decision_graph::DecisionGraphRepository, repository::ParaglidingSiteRepository,
     },
-    routing::Routing,
+    routing::{Routing, RoutingProvider},
     store::PersistentStore,
-    weather::open_meteo::OpenMeteoClient,
+    weather::{WeatherProvider, open_meteo::OpenMeteoClient},
 };
 
 #[derive(Clone)]
@@ -24,8 +25,9 @@ pub struct AppState {
     pub site_repo: Arc<ParaglidingSiteRepository>,
     pub decision_graph: Arc<DecisionGraphRepository>,
     pub auth: Arc<WebFlowAuthenticator>,
-    pub routing: Arc<Routing>,
-    pub weather: Arc<OpenMeteoClient>,
+    pub routing: Arc<dyn RoutingProvider>,
+    pub weather: Arc<dyn WeatherProvider>,
+    pub geo: Arc<dyn GeoProvider>,
     pub service: Arc<ParaglidingCalendarService>,
 }
 
@@ -51,8 +53,13 @@ impl AppState {
             cache.clone(),
         ));
 
-        let routing = Arc::new(Routing::new(cache.clone(), http.clone()));
-        let weather = Arc::new(OpenMeteoClient::new(cache.clone()));
+        let routing: Arc<dyn RoutingProvider> =
+            Arc::new(Routing::new(cache.clone(), http.clone()));
+
+        let open_meteo = Arc::new(OpenMeteoClient::new(cache.clone()));
+        let weather: Arc<dyn WeatherProvider> = open_meteo.clone();
+        let geo: Arc<dyn GeoProvider> = open_meteo;
+
         let service = Arc::new(ParaglidingCalendarService::new(
             routing.clone(),
             weather.clone(),
@@ -69,6 +76,7 @@ impl AppState {
             auth,
             routing,
             weather,
+            geo,
             service,
         })
     }

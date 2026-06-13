@@ -1,9 +1,14 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
+use async_trait::async_trait;
 use tracing::instrument;
 
-use crate::{cache::PersistentCache, location::Location, weather::WeatherForecast};
+use crate::{
+    cache::PersistentCache,
+    location::{GeoProvider, Location},
+    weather::{WeatherForecast, WeatherModel, WeatherProvider},
+};
 
 pub struct OpenMeteoClient {
     cache: Arc<PersistentCache>,
@@ -13,9 +18,12 @@ impl OpenMeteoClient {
     pub fn new(cache: Arc<PersistentCache>) -> Self {
         Self { cache }
     }
+}
 
+#[async_trait]
+impl WeatherProvider for OpenMeteoClient {
     #[instrument(skip_all, fields(lat = %source.latitude, lon = %source.longitude))]
-    pub async fn get_forecast(
+    async fn get_forecast(
         &self,
         source: Location,
         model: Option<&str>,
@@ -35,13 +43,45 @@ impl OpenMeteoClient {
         Ok(forecast)
     }
 
+    fn available_models(&self) -> Vec<WeatherModel> {
+        vec![
+            WeatherModel {
+                id: "ecmwf_ifs04".to_string(),
+                name: "ECMWF IFS ( deterministic)".to_string(),
+            },
+            WeatherModel {
+                id: "icon".to_string(),
+                name: "ICON (DWD)".to_string(),
+            },
+            WeatherModel {
+                id: "icon_eu".to_string(),
+                name: "ICON EU (DWD)".to_string(),
+            },
+            WeatherModel {
+                id: "gfs".to_string(),
+                name: "GFS (NOAA)".to_string(),
+            },
+            WeatherModel {
+                id: "gem".to_string(),
+                name: "GEM (CMC)".to_string(),
+            },
+            WeatherModel {
+                id: "arpege_world".to_string(),
+                name: "ARPEGE World (Météo-France)".to_string(),
+            },
+        ]
+    }
+}
+
+#[async_trait]
+impl GeoProvider for OpenMeteoClient {
     #[instrument(skip(self), fields(location_name = %location_name))]
-    pub async fn geocode(&self, location_name: &str) -> Result<Vec<Location>> {
+    async fn geocode(&self, location_name: &str) -> Result<Vec<Location>> {
         geocode_raw(location_name).await
     }
 
     #[instrument(skip(self))]
-    pub async fn fetch_elevation(&self, latitude: f64, longitude: f64) -> Result<f64> {
+    async fn fetch_elevation(&self, latitude: f64, longitude: f64) -> Result<f64> {
         let rounded_lat = (latitude * 1000.0).round() / 1000.0;
         let rounded_lon = (longitude * 1000.0).round() / 1000.0;
         let cache_key = format!("elevation_{}_{}", rounded_lat, rounded_lon);
