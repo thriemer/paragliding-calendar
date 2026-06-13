@@ -1,5 +1,9 @@
 import { useState } from "react";
-import { calculateLargeArc, degreesToRadians } from "../utils/compassUtils";
+import {
+  calculateLargeArc,
+  degreesToRadians,
+  radiansToDegrees,
+} from "../utils/compassUtils";
 import styles from "./LaunchEditor.module.css";
 
 interface CompassRoseProps {
@@ -13,14 +17,6 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
   const radius = 60;
   const center = radius + 10;
 
-  const degToRad = degreesToRadians;
-
-  const radToDeg = (rad: number) => {
-    let deg = (rad * 180 / Math.PI) + 90;
-    if (deg < 0) deg += 360;
-    return deg;
-  };
-
   const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>, mode: "start" | "stop") => {
     setDragMode(mode);
     handleMouseMove(e);
@@ -28,12 +24,12 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     if (!dragMode) return;
-    
+
     const svg = e.currentTarget;
     const rect = svg.getBoundingClientRect();
     const x = e.clientX - rect.left - center;
     const y = e.clientY - rect.top - center;
-    const angle = radToDeg(Math.atan2(y, x));
+    const angle = radiansToDegrees(Math.atan2(y, x));
     
     if (dragMode === "start") {
       onChange(angle, stopDegrees);
@@ -46,10 +42,10 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
     setDragMode(null);
   };
 
-  const startX = center + radius * Math.cos(degToRad(startDegrees));
-  const startY = center + radius * Math.sin(degToRad(startDegrees));
-  const stopX = center + radius * Math.cos(degToRad(stopDegrees));
-  const stopY = center + radius * Math.sin(degToRad(stopDegrees));
+  const startX = center + radius * Math.cos(degreesToRadians(startDegrees));
+  const startY = center + radius * Math.sin(degreesToRadians(startDegrees));
+  const stopX = center + radius * Math.cos(degreesToRadians(stopDegrees));
+  const stopY = center + radius * Math.sin(degreesToRadians(stopDegrees));
 
   const largeArc = calculateLargeArc(startDegrees, stopDegrees);
   const sweepFlag = 1;
@@ -67,7 +63,7 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
         <circle cx={center} cy={center} r={radius} fill="#f0f0f0" stroke="#ccc" />
         
         {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => {
-          const rad = degToRad(deg);
+          const rad = degreesToRadians(deg);
           const x1 = center + (radius - 10) * Math.cos(rad);
           const y1 = center + (radius - 10) * Math.sin(rad);
           const x2 = center + radius * Math.cos(rad);
@@ -79,7 +75,7 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
         
         {["N", "E", "S", "W"].map((dir, i) => {
           const deg = i * 90;
-          const rad = degToRad(deg);
+          const rad = degreesToRadians(deg);
           const x = center + (radius - 20) * Math.cos(rad);
           const y = center + (radius - 20) * Math.sin(rad);
           return (

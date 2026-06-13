@@ -1,5 +1,5 @@
-import { useState, useRef } from "react";
 import { useSiteImport } from "../hooks/useSiteImport";
+import { useFileDragDrop } from "../hooks/useFileDragDrop";
 import "./FileUploader.css";
 
 interface FileUploaderProps {
@@ -7,67 +7,19 @@ interface FileUploaderProps {
 }
 
 export function FileUploader({ onImport }: FileUploaderProps) {
-  const [isDragging, setIsDragging] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const { importSites, importing, result, error } = useSiteImport();
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = () => {
-    setIsDragging(false);
-  };
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      const file = files[0];
-      const importResult = await importSites(file);
-      if (importResult) {
-        onImport();
-      }
-    }
-  };
-
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      const file = files[0];
-      const importResult = await importSites(file);
-      if (importResult) {
-        onImport();
-      }
-    }
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  };
-
-  const handleClick = () => {
-    fileInputRef.current?.click();
-  };
+  const { isDragging, dropZoneProps, fileInputProps } = useFileDragDrop(async (file) => {
+    const importResult = await importSites(file);
+    if (importResult) onImport();
+  });
 
   return (
     <div className="file-uploader">
       <div
         className={`drop-zone ${isDragging ? "dragging" : ""} ${importing ? "uploading" : ""}`}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={handleClick}
+        {...dropZoneProps}
       >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".xml"
-          onChange={handleFileSelect}
-          style={{ display: "none" }}
-        />
+        <input {...fileInputProps} accept=".xml" />
         {importing ? (
           <span>Uploading...</span>
         ) : (

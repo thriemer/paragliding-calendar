@@ -6,6 +6,11 @@ import styles from "./LocationPicker.module.css";
 import { API } from "../config/api";
 import { ApiLocation } from "../hooks/useSites";
 import { MapClickHandler } from "../utils/leaflet";
+import { fetchJson } from "../utils/fetchJson";
+
+interface ElevationResponse {
+  elevation: number;
+}
 
 interface LocationPickerProps {
   location: ApiLocation;
@@ -22,15 +27,12 @@ export function LocationPicker({ location, elevation, onChange }: LocationPicker
   const fetchElevation = async (lat: number, lng: number) => {
     setLoadingElevation(true);
     try {
-      const response = await fetch(API.elevation(lat, lng));
-      if (response.ok) {
-        const data = await response.json();
-        setPickElev(data.elevation);
-        onChange(
-          { ...location, latitude: lat, longitude: lng },
-          data.elevation
-        );
-      }
+      const data = await fetchJson<ElevationResponse>(API.elevation(lat, lng));
+      setPickElev(data.elevation);
+      onChange(
+        { ...location, latitude: lat, longitude: lng },
+        data.elevation,
+      );
     } catch (error) {
       console.error("Failed to fetch elevation:", error);
     } finally {

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { API } from "../config/api";
+import { fetchJson } from "../utils/fetchJson";
 
 export interface ApiLocation {
   latitude: number;
@@ -37,27 +38,25 @@ export function useSites() {
   const [sites, setSites] = useState<ApiSite[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch(API.sites)
-      .then((res) => res.json())
-      .then((data) => {
-        setSites(data);
-        setLoading(false);
-      })
-      .catch(console.error);
-  }, []);
-
-  const refresh = () => {
-    setRefreshing(true);
-    fetch(API.sites)
-      .then((res) => res.json())
-      .then((data) => {
-        setSites(data);
-        setRefreshing(false);
-      })
-      .catch(console.error);
+  const load = async (setBusy: (b: boolean) => void) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setSites(await fetchJson<ApiSite[]>(API.sites));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load sites");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  return { sites, loading, refreshing, refresh };
+  useEffect(() => {
+    load(setLoading);
+  }, []);
+
+  const refresh = () => load(setRefreshing);
+
+  return { sites, loading, refreshing, error, refresh };
 }

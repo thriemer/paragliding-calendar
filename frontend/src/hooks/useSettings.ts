@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { API } from "../config/api";
+import { fetchJson } from "../utils/fetchJson";
 
 export interface UserSettings {
   location_name: string;
@@ -12,53 +13,53 @@ export interface UserSettings {
   all_calendar_names: string[];
 }
 
+interface SettingsResponse extends Omit<UserSettings, "excluded_calendar_names"> {
+  excluded_calendar_names: string[];
+}
+
+function withSet(data: SettingsResponse | UserSettings): UserSettings {
+  return {
+    ...data,
+    excluded_calendar_names: new Set(data.excluded_calendar_names),
+  };
+}
+
 export function useSettings() {
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(API.settings)
-      .then((res) => res.json())
-      .then((data) => {
-	      console.log(data);
-      const settingsWithSet: UserSettings = {
-        ...data,
-        excluded_calendar_names: new Set(data.excluded_calendar_names)
-      };
-      setSettings(settingsWithSet);
-        setLoading(false);
-      })
-      .catch(console.error);
+    fetchJson<SettingsResponse>(API.settings)
+      .then((data) => setSettings(withSet(data)))
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : "Failed to load settings"),
+      )
+      .finally(() => setLoading(false));
   }, []);
 
   const updateSettings = async (newSettings: UserSettings): Promise<boolean> => {
     setSaving(true);
+    setError(null);
     try {
-      const response = await fetch(API.settings, {
+      await fetchJson(API.settings, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(newSettings),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...newSettings,
+          excluded_calendar_names: [...newSettings.excluded_calendar_names],
+        }),
       });
-      if (response.ok) {
-      const settingsWithSet: UserSettings = {
-        ...newSettings,
-        excluded_calendar_names: new Set(newSettings.excluded_calendar_names)
-      };
- 
-        setSettings(settingsWithSet);
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error("Failed to save settings:", error);
+      setSettings(withSet(newSettings));
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save settings");
       return false;
     } finally {
       setSaving(false);
     }
   };
 
-  return { settings, loading, saving, updateSettings };
+  return { settings, loading, saving, error, updateSettings };
 }

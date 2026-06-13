@@ -41,7 +41,7 @@ export function SettingsModal({
       search_radius_km: radius,
       calendar_name: calendarName,
       minimum_flyable_hours: minFlyableHours,
-      excluded_calendar_names: [...excludedCalendarNames],
+      excluded_calendar_names: excludedCalendarNames,
       all_calendar_names: settings.all_calendar_names,
     });
   };
@@ -118,7 +118,7 @@ export function SettingsModal({
           <label>Exclude calendars from free/busy check:</label>
           {settings.all_calendar_names.map((name) => {
             return (
-              <label>
+              <label key={name}>
                 <input
                   type="checkbox"
                   name="ExcludedCalendars"
@@ -126,12 +126,13 @@ export function SettingsModal({
                   value={name}
                   onChange={(e) =>
                     setExcludedCalendarNames((excluded) => {
+                      const next = new Set(excluded);
                       if (e.target.checked) {
-                        excluded.add(e.target.value);
+                        next.add(e.target.value);
                       } else {
-                        excluded.delete(e.target.value);
+                        next.delete(e.target.value);
                       }
-                      return new Set(excluded);
+                      return next;
                     })
                   }
                 />

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { API } from "../config/api";
+import { fetchJson } from "../utils/fetchJson";
 
 export interface ImportResponse {
   imported: number;
@@ -16,32 +17,16 @@ export function useSiteImport() {
     setResult(null);
 
     try {
-      const response = await fetch(API.siteImport, {
+      const data = await fetchJson<ImportResponse>(API.siteImport, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/octet-stream",
-        },
+        headers: { "Content-Type": "application/octet-stream" },
         body: file,
-        signal: AbortSignal.timeout(300000), // 5 minute timeout
+        signal: AbortSignal.timeout(300000),
       });
-
-      if (!response.ok) {
-        let detail = "";
-        try {
-          const errorData = await response.json();
-          detail = errorData.message || JSON.stringify(errorData);
-        } catch {
-          // Response body might not be JSON
-        }
-        throw new Error(`Upload failed: ${response.status} ${response.statusText} ${detail}`);
-      }
-
-      const data: ImportResponse = await response.json();
       setResult(data);
       return data;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Upload failed";
-      setError(message);
+      setError(err instanceof Error ? err.message : "Upload failed");
       return null;
     } finally {
       setImporting(false);

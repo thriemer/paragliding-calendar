@@ -19,7 +19,6 @@ const getColorForClimbRate = (rate: number): Cesium.Color => {
 };
 
 export function FlightMap({ path }: FlightMapProps) {
-  console.log(path);
   const [terrainProvider, setTerrainProvider] =
     useState<Cesium.TerrainProvider | null>(null);
   const viewerRef = useRef<{ cesiumElement?: Cesium.Viewer } | null>(null);

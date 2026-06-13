@@ -1,65 +1,20 @@
-import { useState, useRef } from "react";
 import { useFlightAnalytics } from "../hooks/useFlightAnalytics";
+import { useFileDragDrop } from "../hooks/useFileDragDrop";
 import { FlightMap } from "./FlightMap";
 import { FlightAnalysisCard } from "./FlightAnalysisCard";
 import styles from "./FlightUploader.module.css";
 
 export function FlightUploader() {
-  const [isDragging, setIsDragging] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const { analyzeFlight, analyzing, analysis, error, clearAnalysis } = useFlightAnalytics();
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = () => {
-    setIsDragging(false);
-  };
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      const file = files[0];
-      await analyzeFlight(file);
-    }
-  };
-
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      const file = files[0];
-      await analyzeFlight(file);
-    }
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  };
-
-  const handleClick = () => {
-    fileInputRef.current?.click();
-  };
+  const { isDragging, dropZoneProps, fileInputProps } = useFileDragDrop(analyzeFlight);
 
   return (
     <div className={styles.container}>
       <div
         className={`${styles.dropZone} ${isDragging ? styles.dragging : ""} ${analyzing ? styles.uploading : ""}`}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={handleClick}
+        {...dropZoneProps}
       >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".kml"
-          onChange={handleFileSelect}
-          style={{ display: "none" }}
-        />
+        <input {...fileInputProps} accept=".kml" />
         {analyzing ? (
           <span>Analyzing flight...</span>
         ) : (

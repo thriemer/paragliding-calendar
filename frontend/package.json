@@ -12,11 +12,9 @@
   "dependencies": {
     "cesium": "^1.140.0",
     "leaflet": "^1.9.4",
-    "maplibre-gl": "^4.0.0",
     "react": "^19",
     "react-dom": "^19",
     "react-leaflet": "^5.0.0",
-    "react-map-gl": "^7.1.0",
     "resium": "^1.21.0"
   },
   "devDependencies": {

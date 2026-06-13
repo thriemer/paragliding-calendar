@@ -135,6 +135,7 @@ function App() {
       {selectedSite && (
         <div className={styles.modalOverlay}>
           <SiteEditor
+            key={selectedSite.name || "new"}
             site={selectedSite}
             onSave={handleSaveSite}
             onDelete={selectedSite.name ? handleDeleteSite : undefined}
