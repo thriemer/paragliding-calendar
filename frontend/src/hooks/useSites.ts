@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { API } from "../config/api";
 import { fetchJson } from "../utils/fetchJson";
 
@@ -34,29 +34,21 @@ export interface ApiSite {
   preferred_weather_model?: string;
 }
 
+export const sitesQueryKey = ["sites"] as const;
+
 export function useSites() {
-  const [sites, setSites] = useState<ApiSite[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const query = useQuery({
+    queryKey: sitesQueryKey,
+    queryFn: () => fetchJson<ApiSite[]>(API.sites),
+  });
 
-  const load = async (setBusy: (b: boolean) => void) => {
-    setBusy(true);
-    setError(null);
-    try {
-      setSites(await fetchJson<ApiSite[]>(API.sites));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load sites");
-    } finally {
-      setBusy(false);
-    }
+  return {
+    sites: query.data ?? [],
+    loading: query.isPending,
+    error: query.error
+      ? query.error instanceof Error
+        ? query.error.message
+        : "Failed to load sites"
+      : null,
   };
-
-  useEffect(() => {
-    load(setLoading);
-  }, []);
-
-  const refresh = () => load(setRefreshing);
-
-  return { sites, loading, refreshing, error, refresh };
 }

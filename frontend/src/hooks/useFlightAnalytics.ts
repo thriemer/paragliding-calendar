@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { API } from "../config/api";
 import { fetchJson } from "../utils/fetchJson";
 
@@ -26,36 +26,33 @@ export interface FlightAnalysis {
 }
 
 export function useFlightAnalytics() {
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analysis, setAnalysis] = useState<FlightAnalysis | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const analyzeFlight = async (file: File): Promise<FlightAnalysis | null> => {
-    setAnalyzing(true);
-    setError(null);
-    setAnalysis(null);
-
-    try {
-      const data = await fetchJson<FlightAnalysis>(API.flightAnalyze, {
+  const mutation = useMutation({
+    mutationFn: (file: File) =>
+      fetchJson<FlightAnalysis>(API.flightAnalyze, {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },
         body: file,
         signal: AbortSignal.timeout(300000),
-      });
-      setAnalysis(data);
-      return data;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Analysis failed");
+      }),
+  });
+
+  const analyzeFlight = async (file: File): Promise<FlightAnalysis | null> => {
+    try {
+      return await mutation.mutateAsync(file);
+    } catch {
       return null;
-    } finally {
-      setAnalyzing(false);
     }
   };
 
-  const clearAnalysis = () => {
-    setAnalysis(null);
-    setError(null);
+  return {
+    analyzeFlight,
+    analyzing: mutation.isPending,
+    analysis: mutation.data ?? null,
+    error: mutation.error
+      ? mutation.error instanceof Error
+        ? mutation.error.message
+        : "Analysis failed"
+      : null,
+    clearAnalysis: mutation.reset,
   };
-
-  return { analyzeFlight, analyzing, analysis, error, clearAnalysis };
 }

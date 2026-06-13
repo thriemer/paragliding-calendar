@@ -1,37 +1,42 @@
-import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { API } from "../config/api";
 import { fetchJson } from "../utils/fetchJson";
+import { sitesQueryKey } from "./useSites";
 
 export interface ImportResponse {
   imported: number;
 }
 
 export function useSiteImport() {
-  const [importing, setImporting] = useState(false);
-  const [result, setResult] = useState<ImportResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
-  const importSites = async (file: File): Promise<ImportResponse | null> => {
-    setImporting(true);
-    setError(null);
-    setResult(null);
-
-    try {
-      const data = await fetchJson<ImportResponse>(API.siteImport, {
+  const mutation = useMutation({
+    mutationFn: (file: File) =>
+      fetchJson<ImportResponse>(API.siteImport, {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },
         body: file,
         signal: AbortSignal.timeout(300000),
-      });
-      setResult(data);
-      return data;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: sitesQueryKey }),
+  });
+
+  const importSites = async (file: File): Promise<ImportResponse | null> => {
+    try {
+      return await mutation.mutateAsync(file);
+    } catch {
       return null;
-    } finally {
-      setImporting(false);
     }
   };
 
-  return { importSites, importing, result, error };
+  return {
+    importSites,
+    importing: mutation.isPending,
+    result: mutation.data ?? null,
+    error: mutation.error
+      ? mutation.error instanceof Error
+        ? mutation.error.message
+        : "Upload failed"
+      : null,
+  };
 }

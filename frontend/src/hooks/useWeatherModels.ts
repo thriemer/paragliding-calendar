@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { API } from "../config/api";
 import { fetchJson } from "../utils/fetchJson";
 
@@ -12,18 +12,20 @@ interface WeatherModelsResponse {
 }
 
 export function useWeatherModels() {
-  const [models, setModels] = useState<WeatherModel[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const query = useQuery({
+    queryKey: ["weatherModels"],
+    queryFn: () => fetchJson<WeatherModelsResponse>(API.weatherModels),
+    staleTime: Infinity,
+    select: (data) => data.models ?? [],
+  });
 
-  useEffect(() => {
-    fetchJson<WeatherModelsResponse>(API.weatherModels)
-      .then((data) => setModels(data.models || []))
-      .catch((err) =>
-        setError(err instanceof Error ? err.message : "Failed to load weather models"),
-      )
-      .finally(() => setLoading(false));
-  }, []);
-
-  return { models, loading, error };
+  return {
+    models: query.data ?? [],
+    loading: query.isPending,
+    error: query.error
+      ? query.error instanceof Error
+        ? query.error.message
+        : "Failed to load weather models"
+      : null,
+  };
 }

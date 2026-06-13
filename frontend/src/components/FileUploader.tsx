@@ -2,16 +2,9 @@ import { useSiteImport } from "../hooks/useSiteImport";
 import { useFileDragDrop } from "../hooks/useFileDragDrop";
 import "./FileUploader.css";
 
-interface FileUploaderProps {
-  onImport: () => void;
-}
-
-export function FileUploader({ onImport }: FileUploaderProps) {
+export function FileUploader() {
   const { importSites, importing, result, error } = useSiteImport();
-  const { isDragging, dropZoneProps, fileInputProps } = useFileDragDrop(async (file) => {
-    const importResult = await importSites(file);
-    if (importResult) onImport();
-  });
+  const { isDragging, dropZoneProps, fileInputProps } = useFileDragDrop(importSites);
 
   return (
     <div className="file-uploader">

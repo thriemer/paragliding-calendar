@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import "./styles/App.css";
 import styles from "./styles/App.module.css";
 import { useSites, ApiSite } from "./hooks/useSites";
-import { useUpdateSite, deleteSite } from "./hooks/useUpdateSite";
+import { useUpdateSite } from "./hooks/useUpdateSite";
 import { useSettings, UserSettings } from "./hooks/useSettings";
 import { SitesMap } from "./components/SitesMap";
 import { FilterPanel, Filters } from "./components/FilterPanel";
@@ -19,8 +19,8 @@ function App() {
   const [selectedSite, setSelectedSite] = useState<ApiSite | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [mapView, setMapView] = useState<{ center: [number, number]; zoom: number } | null>(null);
-  const { sites, loading: sitesLoading, refresh } = useSites();
-  const { updateSite } = useUpdateSite();
+  const { sites, loading: sitesLoading } = useSites();
+  const { updateSite, deleteSite } = useUpdateSite();
   const { settings, updateSettings } = useSettings();
 
   const filteredSites = useMemo(() => {
@@ -52,18 +52,12 @@ function App() {
 
   const handleSaveSite = async (updatedSite: ApiSite) => {
     const success = await updateSite(updatedSite);
-    if (success) {
-      await refresh();
-      setSelectedSite(null);
-    }
+    if (success) setSelectedSite(null);
   };
 
   const handleDeleteSite = async (siteName: string) => {
     const success = await deleteSite(siteName);
-    if (success) {
-      await refresh();
-      setSelectedSite(null);
-    }
+    if (success) setSelectedSite(null);
   };
 
   const handleSaveSettings = async (newSettings: UserSettings) => {
@@ -112,7 +106,7 @@ function App() {
                 onFilterChange={setFilters}
                 sites={sites}
               />
-              <FileUploader onImport={refresh} />
+              <FileUploader />
             </>
           )}
         </aside>
