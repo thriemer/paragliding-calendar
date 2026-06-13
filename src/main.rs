@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    let db_path = env::var("XDG_CACHE_HOME")
+    let db_path = env::var("XDG_DATA_HOME")
         .ok()
         .or(env::var("CACHE_DIRECTORY").ok())
         .expect("Cache environment variable not set.");

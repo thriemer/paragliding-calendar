@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -25,6 +25,15 @@ const landingIcon = createColoredIcon("red");
 const userLocationIcon = createColoredIcon("orange");
 const unknownIcon = createColoredIcon("grey");
 
+const circlePathOptions = {
+  color: "#000000",
+  weight: 2,
+  opacity: 0.7,
+  fillColor: "#000000",
+  fillOpacity: 0.05,
+  dashArray: "5, 5",
+};
+
 type MapView = { center: [number, number]; zoom: number };
 
 interface SitesMapProps {
@@ -44,10 +53,14 @@ function MapController({ onMapViewChange }: { onMapViewChange: (view: MapView) =
     cbRef.current({ center: map.getCenter(), zoom: map.getZoom() });
   }, [map]);
 
-  useMapEvents({
-    zoomend: () => cbRef.current({ center: map.getCenter(), zoom: map.getZoom() }),
-    moveend: () => cbRef.current({ center: map.getCenter(), zoom: map.getZoom() }),
-  });
+  const handlers = useMemo(
+    () => ({
+      zoomend: () => cbRef.current({ center: map.getCenter(), zoom: map.getZoom() }),
+      moveend: () => cbRef.current({ center: map.getCenter(), zoom: map.getZoom() }),
+    }),
+    [map],
+  );
+  useMapEvents(handlers);
   return null;
 }
 
@@ -108,7 +121,13 @@ function PopupEditButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-function LandingMarker({ landing, onEdit }: { landing: LandingWithOverlap; onEdit?: () => void }) {
+const LandingMarker = memo(function LandingMarker({
+  landing,
+  onEdit,
+}: {
+  landing: LandingWithOverlap;
+  onEdit?: (siteName: string) => void;
+}) {
   return (
     <Marker
       position={[landing.location.lat, landing.location.lng]}
@@ -130,15 +149,21 @@ function LandingMarker({ landing, onEdit }: { landing: LandingWithOverlap; onEdi
         {onEdit && (
           <>
             <br />
-            <PopupEditButton onClick={onEdit} />
+            <PopupEditButton onClick={() => onEdit(landing.siteName)} />
           </>
         )}
       </Popup>
     </Marker>
   );
-}
+});
 
-function LaunchMarker({ launch, onEdit }: { launch: LaunchWithOverlap; onEdit?: () => void }) {
+const LaunchMarker = memo(function LaunchMarker({
+  launch,
+  onEdit,
+}: {
+  launch: LaunchWithOverlap;
+  onEdit?: (siteName: string) => void;
+}) {
   const icon = launch.siteType === "Winch" ? winchIcon : hangIcon;
   return (
     <Marker
@@ -163,22 +188,22 @@ function LaunchMarker({ launch, onEdit }: { launch: LaunchWithOverlap; onEdit?: 
         {onEdit && (
           <>
             <br />
-            <PopupEditButton onClick={onEdit} />
+            <PopupEditButton onClick={() => onEdit(launch.siteName)} />
           </>
         )}
       </Popup>
     </Marker>
   );
-}
+});
 
-function SiteOverviewMarker({
+const SiteOverviewMarker = memo(function SiteOverviewMarker({
   site,
   launch,
   onEdit,
 }: {
   site: ApiSite;
   launch: ApiSite["launches"][number];
-  onEdit?: () => void;
+  onEdit?: (siteName: string) => void;
 }) {
   const type = getSiteType(site);
   return (
@@ -197,13 +222,13 @@ function SiteOverviewMarker({
         {onEdit && (
           <>
             <br />
-            <PopupEditButton onClick={onEdit} />
+            <PopupEditButton onClick={() => onEdit(site.name)} />
           </>
         )}
       </Popup>
     </Marker>
   );
-}
+});
 
 export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, settings }: SitesMapProps) {
   const { launchesWithOverlap, landingsWithOverlap, center } = useMemo(() => {
@@ -256,17 +281,28 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, setting
   const mapCenter = mapView?.center ?? center;
   const hasLocationSettings = settings && settings.location_latitude && settings.location_longitude;
 
-  const editHandlerForSiteName = (siteName: string): (() => void) | undefined => {
-    if (!onSiteClick) return undefined;
-    return () => {
-      const site = sites.find((s) => s.name === siteName);
-      if (site) onSiteClick(site);
-    };
-  };
+  const sitesRef = useRef(sites);
+  sitesRef.current = sites;
+  const onSiteClickRef = useRef(onSiteClick);
+  onSiteClickRef.current = onSiteClick;
+
+  const handleEditSite = useCallback((siteName: string) => {
+    const cb = onSiteClickRef.current;
+    if (!cb) return;
+    const site = sitesRef.current.find((s) => s.name === siteName);
+    if (site) cb(site);
+  }, []);
+
+  const editHandler = onSiteClick ? handleEditSite : undefined;
 
   return (
     <div className={styles.mapContainer}>
-      <MapContainer center={mapCenter} zoom={mapView?.zoom ?? 6} style={{ height: "100%", width: "100%" }}>
+      <MapContainer
+        center={mapCenter}
+        zoom={mapView?.zoom ?? 6}
+        preferCanvas
+        style={{ height: "100%", width: "100%" }}
+      >
         <MapController onMapViewChange={onMapViewChange} />
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -277,14 +313,7 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, setting
             <Circle
               center={[settings.location_latitude, settings.location_longitude]}
               radius={settings.search_radius_km * 1000}
-              pathOptions={{
-                color: "#000000",
-                weight: 2,
-                opacity: 0.7,
-                fillColor: "#000000",
-                fillOpacity: 0.05,
-                dashArray: "5, 5",
-              }}
+              pathOptions={circlePathOptions}
             />
             <Marker
               position={[settings.location_latitude, settings.location_longitude]}
@@ -306,14 +335,14 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, setting
               <LandingMarker
                 key={`landing-${landing.siteName}-${idx}`}
                 landing={landing}
-                onEdit={editHandlerForSiteName(landing.siteName)}
+                onEdit={editHandler}
               />
             ))}
             {launchesWithOverlap.map((launch, idx) => (
               <LaunchMarker
                 key={`launch-${launch.siteName}-${idx}`}
                 launch={launch}
-                onEdit={editHandlerForSiteName(launch.siteName)}
+                onEdit={editHandler}
               />
             ))}
           </>
@@ -324,7 +353,7 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, setting
                 key={`${site.name}-${idx}`}
                 site={site}
                 launch={launch}
-                onEdit={onSiteClick ? () => onSiteClick(site) : undefined}
+                onEdit={editHandler}
               />
             )),
           )

@@ -37,17 +37,14 @@ impl DailySummary {
     pub fn calculate_flyable_time_ranges(&mut self) {
         self.ranges.clear();
 
-        if self.hourly_scores.is_empty() {
-            return;
-        }
-
-        let mut sorted_scores = self.hourly_scores.clone();
-        sorted_scores.sort_by_key(|h| h.timestamp);
+        let mut flyable: Vec<&HourlyScore> =
+            self.hourly_scores.iter().filter(|h| h.is_flyable).collect();
+        flyable.sort_by_key(|h| h.timestamp);
 
         let mut ranges: Vec<FlyableRange> = Vec::new();
         let mut current_range: Option<Vec<&HourlyScore>> = None;
 
-        for score in &sorted_scores {
+        for score in flyable {
             match &mut current_range {
                 Some(range_scores) => {
                     let last_score = range_scores.last().unwrap();
@@ -55,12 +52,9 @@ impl DailySummary {
                     if score.timestamp == last_score.timestamp + Duration::hours(1) {
                         range_scores.push(score);
                     } else {
-                        if !range_scores.is_empty() {
-                            let start = range_scores.first().unwrap().timestamp;
-                            let end = range_scores.last().unwrap().timestamp;
-
-                            ranges.push(FlyableRange { start, end });
-                        }
+                        let start = range_scores.first().unwrap().timestamp;
+                        let end = range_scores.last().unwrap().timestamp;
+                        ranges.push(FlyableRange { start, end });
 
                         current_range = Some(vec![score]);
                     }
@@ -71,12 +65,9 @@ impl DailySummary {
             }
         }
 
-        if let Some(range_scores) = current_range
-            && !range_scores.is_empty()
-        {
+        if let Some(range_scores) = current_range {
             let start = range_scores.first().unwrap().timestamp;
             let end = range_scores.last().unwrap().timestamp;
-
             ranges.push(FlyableRange { start, end });
         }
 

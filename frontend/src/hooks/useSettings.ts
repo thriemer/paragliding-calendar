@@ -48,11 +48,15 @@ export function useSettings() {
 
   const mutation = useMutation({
     mutationFn: async (newSettings: UserSettings) => {
-      await fetchJson(API.settings, {
+      const response = await fetch(API.settings, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(toResponse(newSettings)),
       });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Failed to save settings (${response.status})`);
+      }
       return newSettings;
     },
     onSuccess: (newSettings) => {

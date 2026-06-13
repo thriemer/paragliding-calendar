@@ -45,7 +45,7 @@ impl AppState {
         let client_id = env::var("GOOGLE_CLIENT_ID").expect("Missing GOOGLE_CLIENT_ID");
         let client_secret = env::var("GOOGLE_CLIENT_SECRET").expect("Missing GOOGLE_CLIENT_SECRET");
         let redirect_uri = env::var("OAUTH_REDIRECT_URL").unwrap_or_else(|_| {
-            "https://linus-x1.bangus-firefighter.ts.net/oauth/callback".to_string()
+            "https://linus-x1.bangus-firefighter.ts.net:8080/oauth/callback".to_string()
         });
         let auth = Arc::new(WebFlowAuthenticator::new(
             client_id,
