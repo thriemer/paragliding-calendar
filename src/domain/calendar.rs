@@ -34,3 +34,55 @@ impl Display for CalendarEvent {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, TimeZone};
+
+    fn event(start_h: u32, end_h: u32) -> CalendarEvent {
+        CalendarEvent {
+            title: "evt".into(),
+            start_time: Utc.with_ymd_and_hms(2026, 6, 13, start_h, 0, 0).unwrap(),
+            end_time: Utc.with_ymd_and_hms(2026, 6, 13, end_h, 0, 0).unwrap(),
+            is_all_day: false,
+            location: None,
+            body: None,
+        }
+    }
+
+    #[test]
+    fn overlap_returns_true_for_intersecting_intervals() {
+        let e = event(10, 12);
+        let s = Utc.with_ymd_and_hms(2026, 6, 13, 11, 0, 0).unwrap();
+        assert!(e.has_overlap(s, s + Duration::hours(2)));
+    }
+
+    #[test]
+    fn overlap_returns_false_for_disjoint_before() {
+        let e = event(10, 12);
+        let s = Utc.with_ymd_and_hms(2026, 6, 13, 8, 0, 0).unwrap();
+        assert!(!e.has_overlap(s, s + Duration::hours(1)));
+    }
+
+    #[test]
+    fn overlap_returns_false_for_disjoint_after() {
+        let e = event(10, 12);
+        let s = Utc.with_ymd_and_hms(2026, 6, 13, 13, 0, 0).unwrap();
+        assert!(!e.has_overlap(s, s + Duration::hours(1)));
+    }
+
+    #[test]
+    fn overlap_returns_false_for_touching_at_end() {
+        let e = event(10, 12);
+        let s = Utc.with_ymd_and_hms(2026, 6, 13, 12, 0, 0).unwrap();
+        assert!(!e.has_overlap(s, s + Duration::hours(1)));
+    }
+
+    #[test]
+    fn overlap_returns_false_for_touching_at_start() {
+        let e = event(10, 12);
+        let s = Utc.with_ymd_and_hms(2026, 6, 13, 9, 0, 0).unwrap();
+        assert!(!e.has_overlap(s, s + Duration::hours(1)));
+    }
+}

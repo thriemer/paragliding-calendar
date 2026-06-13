@@ -24,15 +24,16 @@ export function LocationPicker({ location, elevation, onChange }: LocationPicker
   const [pickElev, setPickElev] = useState(elevation);
   const [loadingElevation, setLoadingElevation] = useState(false);
 
-  const fetchElevation = async (lat: number, lng: number) => {
+  const updateLocation = async (lat: number, lng: number) => {
+    setPickLat(lat);
+    setPickLng(lng);
+    const newLocation = { ...location, latitude: lat, longitude: lng };
+    onChange(newLocation, pickElev);
     setLoadingElevation(true);
     try {
       const data = await fetchJson<ElevationResponse>(API.elevation(lat, lng));
       setPickElev(data.elevation);
-      onChange(
-        { ...location, latitude: lat, longitude: lng },
-        data.elevation,
-      );
+      onChange(newLocation, data.elevation);
     } catch (error) {
       console.error("Failed to fetch elevation:", error);
     } finally {
@@ -41,16 +42,12 @@ export function LocationPicker({ location, elevation, onChange }: LocationPicker
   };
 
   const handleMapClick = (lat: number, lng: number) => {
-    setPickLat(lat);
-    setPickLng(lng);
-    fetchElevation(lat, lng);
+    updateLocation(lat, lng);
   };
 
   const handleMarkerDrag = (e: L.LeafletMouseEvent) => {
     const { lat, lng } = e.target.getLatLng();
-    setPickLat(lat);
-    setPickLng(lng);
-    fetchElevation(lat, lng);
+    updateLocation(lat, lng);
   };
 
   return (

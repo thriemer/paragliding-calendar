@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef } from "react";
 import {
   calculateLargeArc,
   degreesToRadians,
@@ -12,34 +12,47 @@ interface CompassRoseProps {
   onChange: (start: number, stop: number) => void;
 }
 
+function angularDistance(a: number, b: number): number {
+  const diff = Math.abs(a - b) % 360;
+  return diff > 180 ? 360 - diff : diff;
+}
+
 export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRoseProps) {
-  const [dragMode, setDragMode] = useState<"start" | "stop" | null>(null);
+  const dragModeRef = useRef<"start" | "stop" | null>(null);
   const radius = 60;
   const center = radius + 10;
 
-  const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>, mode: "start" | "stop") => {
-    setDragMode(mode);
-    handleMouseMove(e);
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (!dragMode) return;
-
-    const svg = e.currentTarget;
+  const getAngleFromEvent = (e: React.MouseEvent<SVGSVGElement>): number => {
+    const svg = e.currentTarget as SVGSVGElement;
     const rect = svg.getBoundingClientRect();
     const x = e.clientX - rect.left - center;
     const y = e.clientY - rect.top - center;
-    const angle = radiansToDegrees(Math.atan2(y, x));
-    
-    if (dragMode === "start") {
-      onChange(angle, stopDegrees);
-    } else {
-      onChange(startDegrees, angle);
-    }
+    return radiansToDegrees(Math.atan2(y, x));
+  };
+
+  const apply = (mode: "start" | "stop", angle: number) => {
+    if (mode === "start") onChange(angle, stopDegrees);
+    else onChange(startDegrees, angle);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+    const angle = getAngleFromEvent(e);
+    const mode: "start" | "stop" =
+      angularDistance(angle, startDegrees) <= angularDistance(angle, stopDegrees)
+        ? "start"
+        : "stop";
+    dragModeRef.current = mode;
+    apply(mode, angle);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const mode = dragModeRef.current;
+    if (!mode) return;
+    apply(mode, getAngleFromEvent(e));
   };
 
   const handleMouseUp = () => {
-    setDragMode(null);
+    dragModeRef.current = null;
   };
 
   const startX = center + radius * Math.cos(degreesToRadians(startDegrees));
@@ -52,16 +65,17 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
 
   return (
     <div className={styles.compassRose}>
-      <svg 
-        width={center * 2} 
-        height={center * 2} 
+      <svg
+        width={center * 2}
+        height={center * 2}
+        onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         style={{ cursor: 'pointer' }}
       >
         <circle cx={center} cy={center} r={radius} fill="#f0f0f0" stroke="#ccc" />
-        
+
         {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => {
           const rad = degreesToRadians(deg);
           const x1 = center + (radius - 10) * Math.cos(rad);
@@ -72,14 +86,14 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
             <line key={deg} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#999" />
           );
         })}
-        
+
         {["N", "E", "S", "W"].map((dir, i) => {
           const deg = i * 90;
           const rad = degreesToRadians(deg);
           const x = center + (radius - 20) * Math.cos(rad);
           const y = center + (radius - 20) * Math.sin(rad);
           return (
-            <text key={dir} x={x} y={y} textAnchor="middle" dominantBaseline="middle" fontSize="12" fontWeight="bold">
+            <text key={dir} x={x} y={y} textAnchor="middle" dominantBaseline="middle" fontSize="12" fontWeight="bold" pointerEvents="none">
               {dir}
             </text>
           );
@@ -90,25 +104,14 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
           fill="rgba(76, 175, 80, 0.3)"
           stroke="#4caf50"
           strokeWidth="2"
+          pointerEvents="none"
         />
 
-        <line x1={center} y1={center} x2={startX} y2={startY} stroke="#2196f3" strokeWidth="3" 
-          onMouseDown={(e) => handleMouseDown(e, "start")}
-          style={{ cursor: 'grab' }}
-        />
-        <circle cx={startX} cy={startY} r="6" fill="#2196f3" 
-          onMouseDown={(e) => handleMouseDown(e, "start")}
-          style={{ cursor: 'grab' }}
-        />
+        <line x1={center} y1={center} x2={startX} y2={startY} stroke="#2196f3" strokeWidth="3" pointerEvents="none" />
+        <circle cx={startX} cy={startY} r="6" fill="#2196f3" pointerEvents="none" />
 
-        <line x1={center} y1={center} x2={stopX} y2={stopY} stroke="#f44336" strokeWidth="3"
-          onMouseDown={(e) => handleMouseDown(e, "stop")}
-          style={{ cursor: 'grab' }}
-        />
-        <circle cx={stopX} cy={stopY} r="6" fill="#f44336"
-          onMouseDown={(e) => handleMouseDown(e, "stop")}
-          style={{ cursor: 'grab' }}
-        />
+        <line x1={center} y1={center} x2={stopX} y2={stopY} stroke="#f44336" strokeWidth="3" pointerEvents="none" />
+        <circle cx={stopX} cy={stopY} r="6" fill="#f44336" pointerEvents="none" />
       </svg>
       <div className={styles.compassLabels}>
         <span style={{ color: '#2196f3' }}>Start: {Math.round(startDegrees)}°</span>

@@ -1,4 +1,5 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
+use std::error::Error;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use std::fs;
@@ -36,18 +37,17 @@ impl Track {
                     let tag_name = String::from_utf8_lossy(name.as_ref()).to_string();
 
                     if tag_name == "Placemark" {
-                        in_track_placemark = true;
+                        // Stay neutral until the Metadata element confirms this is a track.
+                        // Without this, non-track Placemarks (e.g. takeoff markers) would
+                        // leak their <coordinates> into the track buffer.
+                        in_track_placemark = false;
                         in_placemark = true;
-                    } else if in_track_placemark && tag_name == "Metadata" {
+                    } else if in_placemark && tag_name == "Metadata" {
                         in_metadata = true;
                         for attr in e.attributes().flatten() {
                             if attr.key.as_ref() == b"type" {
                                 let attr_val = String::from_utf8_lossy(&attr.value).to_string();
-                                if attr_val == "track" {
-                                    in_track_placemark = true;
-                                } else {
-                                    in_track_placemark = false;
-                                }
+                                in_track_placemark = attr_val == "track";
                                 break;
                             }
                         }
@@ -143,10 +143,15 @@ impl Track {
             let lat: f64 = parts[1].parse().map_err(|_| "Invalid latitude")?;
             let height: f64 = parts[2].parse().map_err(|_| "Invalid height")?;
 
-            let offset_secs = if i < seconds.len() {
-                seconds[i]
-            } else {
-                i as i64
+            // Skip points without an explicit timestamp rather than guessing the
+            // offset from the index — the cadence is not constant across emitters.
+            let Some(&offset_secs) = seconds.get(i) else {
+                tracing::warn!(
+                    point_index = i,
+                    seconds_len = seconds.len(),
+                    "KML coords have more points than SecondsFromTimeOfFirstPoint entries; truncating"
+                );
+                break;
             };
 
             let time = base_datetime + chrono::Duration::seconds(offset_secs);
@@ -168,7 +173,124 @@ impl Track {
     }
 }
 
-fn parse_datetime(s: &str) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
-    let naive = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")?;
+fn parse_datetime(s: &str) -> Result<DateTime<Utc>, Box<dyn Error>> {
+    // Accept both "2026-06-13T10:00:00" and "2026-06-13T10:00:00Z" / "+02:00".
+    // We assume the timestamp is UTC if no offset is given (matches what the FS
+    // KML emitters publish).
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    let trimmed = s.trim_end_matches('Z');
+    let naive = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M:%S")?;
     Ok(DateTime::from_naive_utc_and_offset(naive, Utc))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    const SAMPLE_KML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark>
+      <Metadata type="track">
+        <FsInfo time_of_first_point="2026-06-13T10:00:00"></FsInfo>
+        <SecondsFromTimeOfFirstPoint>0 5 10</SecondsFromTimeOfFirstPoint>
+        <PressureAltitude>1000.0 1010.0 1020.0</PressureAltitude>
+      </Metadata>
+      <LineString>
+        <coordinates>
+          13.0,50.0,1000.0 13.001,50.001,1010.0 13.002,50.002,1020.0
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>"#;
+
+    #[test]
+    fn parses_three_trackpoints_from_minimal_kml() {
+        let track = Track::from_kml(SAMPLE_KML).unwrap();
+        assert_eq!(track.points.len(), 3);
+    }
+
+    #[test]
+    fn trackpoint_coordinates_are_lon_lat_height_in_kml_order() {
+        let track = Track::from_kml(SAMPLE_KML).unwrap();
+        let p = &track.points[0];
+        assert_eq!(p.loc.longitude, 13.0);
+        assert_eq!(p.loc.latitude, 50.0);
+        assert_eq!(p.loc.height, 1000.0);
+    }
+
+    #[test]
+    fn timestamps_use_first_point_plus_seconds_offset() {
+        let track = Track::from_kml(SAMPLE_KML).unwrap();
+        let base = Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap();
+        assert_eq!(track.points[0].time, base);
+        assert_eq!(track.points[1].time, base + chrono::Duration::seconds(5));
+        assert_eq!(track.points[2].time, base + chrono::Duration::seconds(10));
+    }
+
+    #[test]
+    fn ignores_coordinates_from_non_track_placemark() {
+        let kml = r#"<?xml version="1.0"?>
+<kml><Document>
+<Placemark>
+  <Metadata type="marker"></Metadata>
+  <Point><coordinates>99.0,99.0,99.0</coordinates></Point>
+</Placemark>
+<Placemark>
+  <Metadata type="track">
+    <FsInfo time_of_first_point="2026-06-13T10:00:00"></FsInfo>
+    <SecondsFromTimeOfFirstPoint>0 5</SecondsFromTimeOfFirstPoint>
+  </Metadata>
+  <LineString><coordinates>13.0,50.0,1000.0 13.001,50.001,1010.0</coordinates></LineString>
+</Placemark>
+</Document></kml>"#;
+        let track = Track::from_kml(kml).unwrap();
+        assert_eq!(track.points.len(), 2);
+        assert_eq!(track.points[0].loc.longitude, 13.0);
+    }
+
+    #[test]
+    fn accepts_iso_timestamp_with_z_suffix() {
+        let kml = SAMPLE_KML.replace(
+            "time_of_first_point=\"2026-06-13T10:00:00\"",
+            "time_of_first_point=\"2026-06-13T10:00:00Z\"",
+        );
+        let track = Track::from_kml(&kml).unwrap();
+        let base = Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap();
+        assert_eq!(track.points[0].time, base);
+    }
+
+    #[test]
+    fn truncates_when_seconds_shorter_than_coords() {
+        let kml = r#"<?xml version="1.0"?>
+<kml><Document><Placemark>
+<Metadata type="track">
+  <FsInfo time_of_first_point="2026-06-13T10:00:00"></FsInfo>
+  <SecondsFromTimeOfFirstPoint>0 5</SecondsFromTimeOfFirstPoint>
+</Metadata>
+<LineString><coordinates>13.0,50.0,1000.0 13.001,50.001,1010.0 13.002,50.002,1020.0</coordinates></LineString>
+</Placemark></Document></kml>"#;
+        let track = Track::from_kml(kml).unwrap();
+        assert_eq!(
+            track.points.len(),
+            2,
+            "third coordinate has no matching seconds entry, must be skipped",
+        );
+    }
+
+    #[test]
+    fn missing_time_of_first_point_returns_error() {
+        let kml = r#"<?xml version="1.0"?>
+<kml><Document><Placemark>
+<Metadata type="track">
+<SecondsFromTimeOfFirstPoint>0</SecondsFromTimeOfFirstPoint>
+</Metadata>
+<LineString><coordinates>13.0,50.0,1000.0</coordinates></LineString>
+</Placemark></Document></kml>"#;
+        assert!(Track::from_kml(kml).is_err());
+    }
 }

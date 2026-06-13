@@ -9,22 +9,25 @@ use crate::domain::{
     weather::{WeatherForecast, WeatherModel},
 };
 
+#[cfg_attr(test, mockall::automock)]
 #[async_trait(?Send)]
 pub trait ActivitySource: Send + Sync {
     async fn suggest(&self, ctx: &PlanningContext) -> Result<Vec<ActivitySuggestion>>;
 }
 
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait WeatherProvider: Send + Sync {
     async fn get_forecast(
         &self,
         source: Location,
-        model: Option<&str>,
+        model: Option<String>,
     ) -> Result<WeatherForecast>;
 
     fn available_models(&self) -> Vec<WeatherModel>;
 }
 
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait RoutingProvider: Send + Sync {
     async fn get_travel_time(
@@ -34,6 +37,8 @@ pub trait RoutingProvider: Send + Sync {
     ) -> Result<Duration>;
 }
 
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
 pub trait CalendarProvider {
     async fn is_busy(
         &self,
@@ -47,6 +52,7 @@ pub trait CalendarProvider {
     async fn create_calendar(&mut self, name: &str) -> Result<()>;
 }
 
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait GeoProvider: Send + Sync {
     async fn geocode(&self, location_name: &str) -> Result<Vec<Location>>;

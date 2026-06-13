@@ -237,3 +237,78 @@ fn calculate_total_elevation_gained(track: &Track) -> Distance {
             .sum(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::paragliding::flight::Location as FlightLocation;
+    use chrono::TimeZone;
+
+    fn point(lat: f64, lon: f64, height: f64, secs: i64) -> TrackPoint {
+        TrackPoint {
+            loc: FlightLocation {
+                latitude: lat,
+                longitude: lon,
+                height,
+            },
+            time: Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap()
+                + Duration::seconds(secs),
+        }
+    }
+
+    fn track(points: Vec<TrackPoint>) -> Track {
+        Track {
+            points,
+            metadata: String::new(),
+        }
+    }
+
+    #[test]
+    fn flight_duration_is_last_minus_first() {
+        let t = track(vec![
+            point(50.0, 13.0, 1000.0, 0),
+            point(50.0, 13.0, 1000.0, 600),
+        ]);
+        assert_eq!(calculate_flight_duration(&t), Some(Duration::seconds(600)));
+    }
+
+    #[test]
+    fn flight_duration_is_none_for_empty_track() {
+        let t = track(vec![]);
+        assert!(calculate_flight_duration(&t).is_none());
+    }
+
+    #[test]
+    fn height_over_takeoff_uses_max_minus_start() {
+        let t = track(vec![
+            point(50.0, 13.0, 1000.0, 0),
+            point(50.0, 13.0, 1500.0, 60),
+            point(50.0, 13.0, 1200.0, 120),
+        ]);
+        let h = calculate_height_over_takeoff(&t).unwrap();
+        assert_eq!(format!("{h}"), "500m");
+    }
+
+    #[test]
+    fn total_elevation_gained_ignores_descents() {
+        let t = track(vec![
+            point(50.0, 13.0, 1000.0, 0),
+            point(50.0, 13.0, 1100.0, 60),
+            point(50.0, 13.0, 1050.0, 120),
+            point(50.0, 13.0, 1200.0, 180),
+        ]);
+        let gain = calculate_total_elevation_gained(&t);
+        assert_eq!(format!("{gain}"), "250m");
+    }
+
+    #[test]
+    fn track_log_length_sums_segment_distances() {
+        let t = track(vec![
+            point(50.0, 13.0, 0.0, 0),
+            point(50.0, 13.0, 100.0, 60),
+            point(50.0, 13.0, 200.0, 120),
+        ]);
+        let length = calculate_track_log_length(&t).unwrap();
+        assert_eq!(format!("{length}"), "200m");
+    }
+}

@@ -53,3 +53,24 @@ pub struct PlanningContext {
     pub horizon: TimeWindow,
     pub conflict_calendars: Vec<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn time_window_duration_is_end_minus_start() {
+        let start = Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap();
+        let end = start + Duration::hours(3);
+        let w = TimeWindow { start, end };
+        assert_eq!(w.duration(), Duration::hours(3));
+    }
+
+    #[test]
+    fn time_window_zero_duration_when_start_equals_end() {
+        let t = Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap();
+        let w = TimeWindow { start: t, end: t };
+        assert_eq!(w.duration(), Duration::zero());
+    }
+}

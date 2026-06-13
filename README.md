@@ -1,46 +1,59 @@
 # TravelAI
 
-## Important:
+An activity planner. It looks at your Google Calendar, finds free windows, and
+fills them with suggested activities — scheduling the best ones back as
+calendar events.
 
-Loading secrets from env
+Activities are pluggable. For now there is one: **paragliding**, which scores
+upcoming flyable windows against weather and known DHV sites, and ships with a
+React + Cesium UI for managing sites and analysing flight logs (KML).
+
+Stack: Rust (Axum) backend, React + Cesium frontend, fjall on-disk store.
+
+## Run locally
+
+Prerequisites: Rust (edition 2024), Node.js, a Google OAuth client (for the
+Calendar integration), and `gpg` if you use the encrypted secrets file.
 
 ```bash
+# 1. Load secrets into the shell (decrypts .env_enc)
 eval "$(./load_env.sh)"
+
+# 2. Build the frontend (served from frontend/dist by the backend)
+cd frontend && npm install && npm run build && cd ..
+
+# 3. Run the backend
+cargo run --no-default-features --features http   # plain HTTP on :8080
+# or, with TLS (requires TLS_CERT_PATH and TLS_KEY_PATH):
+cargo run                                         # HTTPS on :8080
 ```
 
-# Paragliding Flight Log Analytics
+Required env vars: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+`OAUTH_REDIRECT_URL`, `CACHE_DIRECTORY` (or `XDG_CACHE_HOME`).
+Optional: `PORT`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `RUST_LOG`.
 
-## Per Flight Log Analytics
+For frontend-only iteration: `cd frontend && npm run dev` (Vite on :3001).
 
-- [x] Flight Duration
-- [x] Distance Takeoff - Landing
-- [x] Height over Takeoff
-- [x] Track Log Length
-- [x] Maximum/Average Climb/Sink
-- [x] Glide Ratio
-- [x] Total Elevation gained
-- [ ] Time spent thermaling, gliding, soaring/ridge running
-- [ ] Wind Speed
-- [ ] Thermal trigger points/thermal origin
-- [ ] Task Analytics (FAI - Triangle, Flat Triangle, Out and Return)
+## Deploy
 
-## Combined Flight Analytics
+Deployment is a NixOS module exposed by the flake. On the target host:
 
-- [ ] General statistics (#flights per country/wing, histogram of length/distance)
-- [ ] Popular takeoffs and popular inofficial takeoffs
-- [ ] Popular landing fields
-- [ ] Thermal climb rate forecast
-- [ ] Average glide,speed,distance per glider
+```nix
+{
+  imports = [ inputs.travelai.nixosModules.travelai ];
 
-## Data Sources
+  services.travelai = {
+    enable          = true;
+    enableTLS       = true;          # or false for plain HTTP
+    port            = 8080;
+    redirectUrl     = "https://example.com/oauth/callback";
+    secretsFilePath = "/run/secrets/travelai.env";   # EnvironmentFile
+    otelEndpoint    = "http://alloy:4318";           # optional
+  };
+}
+```
 
-- XCContest
-- DHV-XC
-- XC Globe
-    http://xcglobe.com/flights/igc/2749468
-- Paragliding Forum
-- CFD
-- XC League
-- French Paragliding Association's website
-- flightlog.org
-    - scraping kml files work, but the glider info needs to be pulled
+The module runs the service as a dedicated `travelai` user with a managed
+`CacheDirectory`, opens the firewall port, and restarts on failure. Build
+artifacts come from `packages.travelai-tls` / `packages.travelai-http` in the
+flake.

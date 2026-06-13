@@ -89,33 +89,57 @@ impl WeatherData {
         }
     }
 
-    #[must_use]
-    pub fn format_temperature(&self) -> String {
-        format!("{:.1}°C", self.temperature)
-    }
-
-    #[must_use]
-    pub fn format_wind(&self) -> String {
-        let direction = Self::wind_direction_to_cardinal(self.wind_direction);
-        format!(
-            "{:.1} m/s {} (gusts {:.1} m/s)",
-            self.wind_speed_ms, direction, self.wind_gust_ms
-        )
-    }
-
-    #[must_use]
-    pub fn format_description(&self) -> String {
-        self.description.clone()
-    }
-
-    #[must_use]
-    pub fn format_pressure(&self) -> String {
-        format!("{:.1} hPa", self.pressure)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeatherModel {
     pub id: String,
     pub name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[test]
+    fn kelvin_to_celsius_known_values() {
+        assert!((WeatherData::kelvin_to_celsius(273.15) - 0.0).abs() < 0.001);
+        assert!((WeatherData::kelvin_to_celsius(373.15) - 100.0).abs() < 0.001);
+        assert!((WeatherData::kelvin_to_celsius(0.0) - -273.15).abs() < 0.001);
+    }
+
+    #[rstest]
+    #[case(0, "N")]
+    #[case(11, "N")]
+    #[case(349, "N")]
+    #[case(360, "N")]
+    #[case(22, "NNE")]
+    #[case(45, "NE")]
+    #[case(67, "ENE")]
+    #[case(90, "E")]
+    #[case(112, "ESE")]
+    #[case(135, "SE")]
+    #[case(157, "SSE")]
+    #[case(180, "S")]
+    #[case(202, "SSW")]
+    #[case(225, "SW")]
+    #[case(247, "WSW")]
+    #[case(270, "W")]
+    #[case(292, "WNW")]
+    #[case(315, "NW")]
+    #[case(337, "NNW")]
+    fn wind_direction_to_cardinal_cases(#[case] deg: u16, #[case] expected: &str) {
+        assert_eq!(WeatherData::wind_direction_to_cardinal(deg), expected);
+    }
+
+    #[test]
+    fn sunrise_sunset_returns_sunrise_before_sunset() {
+        let loc = Location::new(50.7, 13.0, "Test".into(), "DE".into());
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 6, 13).unwrap();
+        let (sunrise, sunset) = get_sunrise_sunset(&loc, date).unwrap();
+        assert!(sunrise < sunset);
+        assert_eq!(sunrise.date_naive(), date);
+        assert_eq!(sunset.date_naive(), date);
+    }
 }

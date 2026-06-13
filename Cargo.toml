@@ -77,3 +77,5 @@ lettre = { version = "0.11", default-features = false, features = ["smtp-transpo
 
 [dev-dependencies]
 rstest = "0.26"
+mockall = "0.13"
+tempfile = "3"

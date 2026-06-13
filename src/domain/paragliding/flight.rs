@@ -54,7 +54,7 @@ impl Div<Duration> for AngleDelta {
 
 impl Angle {
     pub fn to_cartesian(&self) -> (f64, f64) {
-        let (s, c) = (0.5 * self.0 / std::f64::consts::PI).sin_cos();
+        let (s, c) = (self.0 * std::f64::consts::PI / 180.0).sin_cos();
         (c, s) // cosine, sine because x is forward
     }
 }
@@ -63,7 +63,7 @@ impl Sub for Angle {
     type Output = AngleDelta;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        let mut diff = (rhs.0 - self.0) % 360.0;
+        let mut diff = (self.0 - rhs.0) % 360.0;
         if diff > 180.0 {
             diff -= 360.0;
         } else if diff < -180.0 {
@@ -223,4 +223,117 @@ pub struct TrackPoint {
 pub struct Track {
     pub points: Vec<TrackPoint>,
     pub metadata: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn distance_from_km_and_from_meters_are_equivalent() {
+        let a = Distance::from_km(1.0);
+        let b = Distance::from_meters(1000.0);
+        assert_eq!(a.0, b.0);
+    }
+
+    #[test]
+    fn distance_display_switches_units_at_one_kilometer() {
+        assert_eq!(format!("{}", Distance::from_meters(800.0)), "800m");
+        assert_eq!(format!("{}", Distance::from_km(1.5)), "1.50km");
+    }
+
+    #[test]
+    fn distance_addition_sums_meters() {
+        let s = Distance::from_meters(100.0) + Distance::from_meters(250.0);
+        assert_eq!(s.0, 350.0);
+    }
+
+    #[test]
+    fn scalar_velocity_min_max_pick_correct_value() {
+        let slow = ScalarVelocity::from_ms(2.0);
+        let fast = ScalarVelocity::from_ms(8.0);
+        assert_eq!(ScalarVelocity::min(&slow, &fast).get_ms(), 2.0);
+        assert_eq!(ScalarVelocity::max(&slow, &fast).get_ms(), 8.0);
+    }
+
+    #[test]
+    fn scalar_velocity_display_switches_units_at_4_ms() {
+        assert_eq!(format!("{}", ScalarVelocity::from_ms(3.5)), "3.5 m/s");
+        assert_eq!(format!("{}", ScalarVelocity::from_ms(5.0)), "18.0 km/h");
+    }
+
+    #[test]
+    fn distance_per_duration_gives_velocity_in_ms() {
+        let v = Distance::from_meters(100.0) / Duration::seconds(10);
+        assert_eq!(v.get_ms(), 10.0);
+    }
+
+    #[test]
+    fn angle_subtraction_normalises_within_180_range() {
+        let a = Angle(10.0);
+        let b = Angle(350.0);
+        let delta = a - b;
+        assert!(delta.0.abs() <= 180.0);
+    }
+
+    #[test]
+    fn angle_subtraction_is_clockwise_from_rhs_to_self() {
+        // Going from 350° to 10° the short way is +20° (clockwise).
+        let delta = Angle(10.0) - Angle(350.0);
+        assert!((delta.0 - 20.0).abs() < 1e-9, "expected +20°, got {}", delta.0);
+
+        // And the reverse should be -20°.
+        let delta = Angle(350.0) - Angle(10.0);
+        assert!((delta.0 + 20.0).abs() < 1e-9, "expected -20°, got {}", delta.0);
+    }
+
+    #[test]
+    fn to_cartesian_returns_forward_axis_for_zero_degrees() {
+        // Bearing 0° (north) should map to x=1, z=0 (purely forward).
+        let (x, z) = Angle(0.0).to_cartesian();
+        assert!((x - 1.0).abs() < 1e-9, "x={x}");
+        assert!(z.abs() < 1e-9, "z={z}");
+    }
+
+    #[test]
+    fn to_cartesian_returns_lateral_axis_for_ninety_degrees() {
+        // Bearing 90° (east) should map to x=0, z=1.
+        let (x, z) = Angle(90.0).to_cartesian();
+        assert!(x.abs() < 1e-9, "x={x}");
+        assert!((z - 1.0).abs() < 1e-9, "z={z}");
+    }
+
+    #[test]
+    fn to_cartesian_is_periodic_in_360_degrees() {
+        let (x0, z0) = Angle(45.0).to_cartesian();
+        let (x1, z1) = Angle(405.0).to_cartesian();
+        assert!((x0 - x1).abs() < 1e-9);
+        assert!((z0 - z1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn location_distance_to_self_is_zero() {
+        let p = Location {
+            latitude: 50.0,
+            longitude: 13.0,
+            height: 1000.0,
+        };
+        assert_eq!(p.distance(&p).0, 0.0);
+    }
+
+    #[test]
+    fn location_distance_includes_vertical_component() {
+        let a = Location {
+            latitude: 50.0,
+            longitude: 13.0,
+            height: 0.0,
+        };
+        let b = Location {
+            latitude: 50.0,
+            longitude: 13.0,
+            height: 100.0,
+        };
+        let d = a.distance(&b).0;
+        assert!((d - 100.0).abs() < 0.001, "expected ~100m, got {d}");
+    }
 }

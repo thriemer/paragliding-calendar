@@ -69,3 +69,137 @@ impl PersistentStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+    use tempfile::TempDir;
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct Sample {
+        a: u32,
+        b: String,
+    }
+
+    fn fresh_store() -> (TempDir, PersistentStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = fjall::Database::builder(dir.path()).open().unwrap();
+        let ks = db
+            .keyspace("store", fjall::KeyspaceCreateOptions::default)
+            .unwrap();
+        (dir, PersistentStore::from_keyspace(ks))
+    }
+
+    #[tokio::test]
+    async fn put_then_get_returns_the_value() {
+        let (_dir, store) = fresh_store();
+        let s = Sample {
+            a: 42,
+            b: "hi".into(),
+        };
+        store.put("k", s).await.unwrap();
+        let got: Sample = store.get("k").await.unwrap().unwrap();
+        assert_eq!(
+            got,
+            Sample {
+                a: 42,
+                b: "hi".into()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn get_returns_none_for_unknown_key() {
+        let (_dir, store) = fresh_store();
+        let got: Option<Sample> = store.get("missing").await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn put_overwrites_existing_key() {
+        let (_dir, store) = fresh_store();
+        store
+            .put(
+                "k",
+                Sample {
+                    a: 1,
+                    b: "x".into(),
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .put(
+                "k",
+                Sample {
+                    a: 2,
+                    b: "y".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let got: Sample = store.get("k").await.unwrap().unwrap();
+        assert_eq!(got.a, 2);
+        assert_eq!(got.b, "y");
+    }
+
+    #[tokio::test]
+    async fn remove_deletes_existing_key() {
+        let (_dir, store) = fresh_store();
+        store
+            .put(
+                "k",
+                Sample {
+                    a: 1,
+                    b: "x".into(),
+                },
+            )
+            .await
+            .unwrap();
+        store.remove("k").await.unwrap();
+        let got: Option<Sample> = store.get("k").await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_all_starting_with_returns_matching_entries() {
+        let (_dir, store) = fresh_store();
+        store
+            .put(
+                "site_a",
+                Sample {
+                    a: 1,
+                    b: "a".into(),
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .put(
+                "site_b",
+                Sample {
+                    a: 2,
+                    b: "b".into(),
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .put(
+                "other",
+                Sample {
+                    a: 99,
+                    b: "z".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let sites: Vec<Sample> = store.get_all_starting_with("site_").await.unwrap();
+        assert_eq!(sites.len(), 2);
+        assert!(sites.iter().any(|s| s.a == 1));
+        assert!(sites.iter().any(|s| s.a == 2));
+        assert!(!sites.iter().any(|s| s.a == 99));
+    }
+}

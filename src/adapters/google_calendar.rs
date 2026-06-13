@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
+use async_trait::async_trait;
 use chrono::{DateTime, Datelike, NaiveTime, Utc};
 use google_apis_common::GetToken;
 use google_calendar3::{
@@ -339,6 +340,7 @@ impl GoogleCalendar {
     }
 }
 
+#[async_trait]
 impl CalendarProvider for GoogleCalendar {
     #[instrument(skip(self))]
     async fn is_busy(

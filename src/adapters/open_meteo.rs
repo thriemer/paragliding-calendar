@@ -29,16 +29,19 @@ impl WeatherProvider for OpenMeteoClient {
     async fn get_forecast(
         &self,
         source: Location,
-        model: Option<&str>,
+        model: Option<String>,
     ) -> Result<WeatherForecast> {
-        let model_suffix = model.map(|m| format!("_{}", m)).unwrap_or_default();
+        let model_suffix = model
+            .as_deref()
+            .map(|m| format!("_{}", m))
+            .unwrap_or_default();
         let key = format!("weather_for_{}{}", source.to_key(), model_suffix);
 
         if let Some(cached) = self.cache.get::<WeatherForecast>(&key).await? {
             return Ok(cached);
         }
 
-        let forecast = get_forecast_raw(source.clone(), model).await?;
+        let forecast = get_forecast_raw(source.clone(), model.as_deref()).await?;
         self.cache
             .put(&key, forecast.clone(), Duration::from_hours(6u64))
             .await?;

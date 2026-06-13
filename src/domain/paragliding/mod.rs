@@ -97,3 +97,37 @@ pub fn degrees_to_compass(degrees: f64) -> String {
         _ => "NNW".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case(0.0, "N")]
+    #[case(11.0, "N")]
+    #[case(11.25, "NNE")]
+    #[case(22.5, "NNE")]
+    #[case(45.0, "NE")]
+    #[case(90.0, "E")]
+    #[case(135.0, "SE")]
+    #[case(180.0, "S")]
+    #[case(225.0, "SW")]
+    #[case(270.0, "W")]
+    #[case(315.0, "NW")]
+    #[case(348.75, "N")]
+    #[case(360.0, "N")]
+    fn degrees_to_compass_boundaries(#[case] deg: f64, #[case] expected: &str) {
+        assert_eq!(degrees_to_compass(deg), expected);
+    }
+
+    #[test]
+    fn degrees_to_compass_normalizes_overflow() {
+        assert_eq!(degrees_to_compass(370.0), degrees_to_compass(10.0));
+    }
+
+    #[test]
+    fn degrees_to_compass_normalizes_negative() {
+        assert_eq!(degrees_to_compass(-10.0), degrees_to_compass(350.0));
+    }
+}

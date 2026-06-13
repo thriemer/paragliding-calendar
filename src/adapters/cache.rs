@@ -107,3 +107,107 @@ impl PersistentCache {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn fresh_cache() -> (TempDir, PersistentCache) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = fjall::Database::builder(dir.path()).open().unwrap();
+        let ks = db
+            .keyspace("cache", fjall::KeyspaceCreateOptions::default)
+            .unwrap();
+        (dir, PersistentCache::from_keyspace(ks))
+    }
+
+    #[tokio::test]
+    async fn put_then_get_within_ttl_returns_value() {
+        let (_dir, cache) = fresh_cache();
+        cache
+            .put("k", 42u32, Duration::from_secs(60))
+            .await
+            .unwrap();
+        let got: Option<u32> = cache.get("k").await.unwrap();
+        assert_eq!(got, Some(42));
+    }
+
+    #[tokio::test]
+    async fn get_missing_key_returns_none() {
+        let (_dir, cache) = fresh_cache();
+        let got: Option<u32> = cache.get("missing").await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_after_ttl_expiry_returns_none() {
+        let (_dir, cache) = fresh_cache();
+        cache
+            .put("k", 42u32, Duration::from_millis(100))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let got: Option<u32> = cache.get("k").await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_all_starting_with_filters_expired_entries() {
+        let (_dir, cache) = fresh_cache();
+        cache
+            .put("fresh_a", 1u32, Duration::from_secs(60))
+            .await
+            .unwrap();
+        cache
+            .put("fresh_b", 2u32, Duration::from_millis(100))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+
+        let values: Vec<u32> = cache.get_all_starting_with("fresh_").await.unwrap();
+        assert_eq!(values, vec![1u32]);
+    }
+
+    #[tokio::test]
+    async fn zero_ttl_treats_entry_as_already_expired() {
+        let (_dir, cache) = fresh_cache();
+        cache.put("k", 42u32, Duration::ZERO).await.unwrap();
+        let got: Option<u32> = cache.get("k").await.unwrap();
+        assert!(got.is_none(), "expires_at == now should be expired (strict <)");
+
+        cache
+            .put("z", 7u32, Duration::ZERO)
+            .await
+            .unwrap();
+        let bulk: Vec<u32> = cache.get_all_starting_with("z").await.unwrap();
+        assert!(bulk.is_empty());
+    }
+
+    #[tokio::test]
+    async fn remove_actually_deletes_the_entry() {
+        let (_dir, cache) = fresh_cache();
+        cache
+            .put("k", 42u32, Duration::from_secs(60))
+            .await
+            .unwrap();
+        cache.remove("k").await.unwrap();
+        let got: Option<u32> = cache.get("k").await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn put_overwrites_existing_entry_and_resets_ttl() {
+        let (_dir, cache) = fresh_cache();
+        cache
+            .put("k", 1u32, Duration::from_secs(60))
+            .await
+            .unwrap();
+        cache
+            .put("k", 2u32, Duration::from_secs(60))
+            .await
+            .unwrap();
+        let got: Option<u32> = cache.get("k").await.unwrap();
+        assert_eq!(got, Some(2));
+    }
+}
