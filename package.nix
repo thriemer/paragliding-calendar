@@ -4,81 +4,86 @@
   rustPlatform,
   pkg-config,
   openssl,
-  bun,
+  nodejs,
   enableTLS ? false,
   basePath ? "./",
-}:
-rustPlatform.buildRustPackage rec {
-  pname = "travelai";
-  version = "0.1.0";
+}: let
+  frontend = pkgs.buildNpmPackage {
+    pname = "travelai-frontend";
+    version = "0.1.0";
 
-  src = lib.cleanSourceWith {
-    src = ./.;
-    filter = path: type:
-    # Keep Rust source files, Cargo.toml/lock, and frontend assets
-      (lib.hasSuffix ".rs" path)
-      || (baseNameOf path == "Cargo.toml")
-      || (baseNameOf path == "Cargo.lock")
-      || (lib.hasPrefix "frontend" path)
-      ||
-      # But exclude NixOS module files when building the Rust package
-      (!(lib.hasSuffix ".nix" path) && !(lib.hasSuffix ".md" path));
+    src = lib.cleanSourceWith {
+      src = ./frontend;
+      filter = path: type:
+        !(lib.hasInfix "/node_modules/" path)
+        && !(lib.hasInfix "/dist/" path);
+    };
+
+    npmDepsHash = "sha256-xV/aNbVFaihwUUE5v48qgH3Kx4wai69JL6haOOwbHR4=";
+
+    nativeBuildInputs = [nodejs];
+
+    env.API_BASE_PATH = basePath;
+
+    buildPhase = ''
+      runHook preBuild
+      npm run build -- --base=${basePath}
+      runHook postBuild
+    '';
+
+    installPhase = ''
+      runHook preInstall
+      mkdir -p $out
+      cp -r dist/. $out/
+      runHook postInstall
+    '';
   };
+in
+  rustPlatform.buildRustPackage rec {
+    pname = "travelai";
+    version = "0.1.0";
 
-  cargoLock.lockFile = ./Cargo.lock;
+    src = lib.cleanSourceWith {
+      src = ./.;
+      filter = path: type:
+        (lib.hasSuffix ".rs" path)
+        || (baseNameOf path == "Cargo.toml")
+        || (baseNameOf path == "Cargo.lock")
+        || (!(lib.hasSuffix ".nix" path) && !(lib.hasSuffix ".md" path) && !(lib.hasPrefix "frontend" path));
+    };
 
-  nativeBuildInputs = [
-    pkg-config
-    bun
-    pkgs.bun2nix.hook # the magic setup hook
-  ];
+    cargoLock.lockFile = ./Cargo.lock;
 
-  buildInputs = [openssl];
+    nativeBuildInputs = [pkg-config];
+    buildInputs = [openssl];
 
-  bunRoot = "frontend";
-  bunDeps = pkgs.bun2nix.fetchBunDeps {
-    bunNix = ./bun.nix; # generated in step 2
-  };
+    buildPhase = ''
+      runHook preBuild
+      cargo build --release ${lib.optionalString (!enableTLS) "--no-default-features --features=http"}
+      runHook postBuild
+    '';
 
-  buildPhase = ''
-    runHook preBuild
+    installPhase = ''
+      runHook preInstall
 
-    # Build frontend
-    cd frontend
-    bun install --frozen-lockfile
-    bun run build --public-path='${basePath}' --define __API_BASE_PATH__='"${basePath}"'
-    cd ..
+      mkdir -p $out/bin
+      install -m755 -T target/release/travelai $out/bin/travelai
 
-    # Build Rust binary
-    cargo build --release ${lib.optionalString (!enableTLS) "--no-default-features --features=http"}
+      mkdir -p $out/bin/frontend/dist
+      cp -r ${frontend}/. $out/bin/frontend/dist/
 
-    runHook postBuild
-  '';
+      runHook postInstall
+    '';
 
-  installPhase = ''
-    runHook preInstall
+    env = {
+      OPENSSL_DIR = "${openssl.dev}";
+      OPENSSL_LIB_DIR = "${openssl.out}/lib";
+    };
 
-    mkdir -p $out/bin
-    mkdir -p $out/bin/frontend
-
-    # Install binary
-    install -m755 -T target/release/travelai $out/bin/travelai
-
-    # Install frontend
-    cp -r frontend/dist $out/bin/frontend
-
-    runHook postInstall
-  '';
-
-  env = {
-    OPENSSL_DIR = "${openssl.dev}";
-    OPENSSL_LIB_DIR = "${openssl.out}/lib";
-  };
-
-  meta = with lib; {
-    description = "Intelligent paragliding and outdoor adventure travel planning CLI";
-    homepage = "https://github.com/thriemer/paragliding-calendar";
-    license = licenses.mit;
-    platforms = platforms.linux;
-  };
-}
+    meta = with lib; {
+      description = "Intelligent paragliding and outdoor adventure travel planning CLI";
+      homepage = "https://github.com/thriemer/paragliding-calendar";
+      license = licenses.mit;
+      platforms = platforms.linux;
+    };
+  }

@@ -5,9 +5,6 @@
   ...
 }: let
   cfg = config.services.travelai;
-  inherit (self.inputs) bun2nix;
-  # Extend the system pkgs with the bun2nix overlay
-  pkgsWithOverlay = pkgs.extend bun2nix.overlays.default;
 in {
   options.services.travelai = {
     enable = lib.mkEnableOption "travelai - Intelligent paragliding and outdoor adventure travel planning";
@@ -56,7 +53,7 @@ in {
   };
 
   config = lib.mkIf cfg.enable (let
-    travelai = pkgsWithOverlay.callPackage ./package.nix {
+    travelai = pkgs.callPackage ./package.nix {
       enableTLS = cfg.enableTLS;
       basePath = cfg.basePath;
     };
