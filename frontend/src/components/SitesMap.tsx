@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -23,34 +23,37 @@ const hangIcon = createColoredIcon("green");
 const bothIcon = createColoredIcon("violet");
 const landingIcon = createColoredIcon("red");
 const userLocationIcon = createColoredIcon("orange");
+const unknownIcon = createColoredIcon("grey");
+
+type MapView = { center: [number, number]; zoom: number };
 
 interface SitesMapProps {
   sites: ApiSite[];
   onSiteClick?: (site: ApiSite) => void;
-  mapView: { center: [number, number]; zoom: number } | null;
-  onMapViewChange: (view: { center: [number, number]; zoom: number }) => void;
+  mapView: MapView | null;
+  onMapViewChange: (view: MapView) => void;
   settings?: UserSettings;
 }
 
-function MapController({ onMapViewChange }: { onMapViewChange: (view: { center: [number, number]; zoom: number }) => void }) {
+function MapController({ onMapViewChange }: { onMapViewChange: (view: MapView) => void }) {
   const map = useMap();
+  const cbRef = useRef(onMapViewChange);
+  cbRef.current = onMapViewChange;
 
   useEffect(() => {
-    onMapViewChange({ center: map.getCenter(), zoom: map.getZoom() });
-  }, []);
+    cbRef.current({ center: map.getCenter(), zoom: map.getZoom() });
+  }, [map]);
 
   useMapEvents({
-    zoomend: () => {
-      onMapViewChange({ center: map.getCenter(), zoom: map.getZoom() });
-    },
-    moveend: () => {
-      onMapViewChange({ center: map.getCenter(), zoom: map.getZoom() });
-    },
+    zoomend: () => cbRef.current({ center: map.getCenter(), zoom: map.getZoom() }),
+    moveend: () => cbRef.current({ center: map.getCenter(), zoom: map.getZoom() }),
   });
   return null;
 }
 
-function getSiteType(site: ApiSite): "winch" | "hang" | "both" | "none" {
+type SiteType = "winch" | "hang" | "both" | "none";
+
+function getSiteType(site: ApiSite): SiteType {
   const types = new Set(site.launches.map((l) => l.site_type));
   const hasWinch = types.has("Winch");
   const hasHang = types.has("Hang");
@@ -61,12 +64,18 @@ function getSiteType(site: ApiSite): "winch" | "hang" | "both" | "none" {
   return "none";
 }
 
-function getMarkerIcon(site: ApiSite): L.Icon {
-  const type = getSiteType(site);
+function getMarkerIcon(type: SiteType): L.Icon {
   if (type === "winch") return winchIcon;
   if (type === "hang") return hangIcon;
   if (type === "both") return bothIcon;
-  return createColoredIcon("grey");
+  return unknownIcon;
+}
+
+function siteTypeLabel(type: SiteType): string {
+  if (type === "both") return "Winch + Hang";
+  if (type === "winch") return "Winch";
+  if (type === "hang") return "Hang";
+  return "Unknown";
 }
 
 function coordsMatch(a: { lat: number; lng: number }, b: { lat: number; lng: number }, tolerance = 0.0001): boolean {
@@ -74,7 +83,7 @@ function coordsMatch(a: { lat: number; lng: number }, b: { lat: number; lng: num
 }
 
 interface LaunchData {
-  location: { latitude: number; longitude: number };
+  location: { lat: number; lng: number };
   elevation: number;
   siteName: string;
   siteCountry: string | null;
@@ -82,66 +91,178 @@ interface LaunchData {
 }
 
 interface LandingData {
-  location: { latitude: number; longitude: number };
+  location: { lat: number; lng: number };
   elevation: number;
   siteName: string;
   siteCountry: string | null;
 }
 
+type LaunchWithOverlap = LaunchData & { hasLandingAtSameLocation: boolean };
+type LandingWithOverlap = LandingData & { hasLaunchAtSameLocation: boolean };
+
+function PopupEditButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button className={styles.popupEditBtn} onClick={onClick}>
+      Edit
+    </button>
+  );
+}
+
+function LandingMarker({ landing, onEdit }: { landing: LandingWithOverlap; onEdit?: () => void }) {
+  return (
+    <Marker
+      position={[landing.location.lat, landing.location.lng]}
+      icon={landingIcon}
+      opacity={landing.hasLaunchAtSameLocation ? 0.5 : 1}
+    >
+      <Popup>
+        <strong>Landing: {landing.siteName}</strong>
+        <br />
+        {landing.siteCountry}
+        <br />
+        Elevation: {landing.elevation}m
+        {landing.hasLaunchAtSameLocation && (
+          <>
+            <br />
+            <em>Note: Launch also nearby</em>
+          </>
+        )}
+        {onEdit && (
+          <>
+            <br />
+            <PopupEditButton onClick={onEdit} />
+          </>
+        )}
+      </Popup>
+    </Marker>
+  );
+}
+
+function LaunchMarker({ launch, onEdit }: { launch: LaunchWithOverlap; onEdit?: () => void }) {
+  const icon = launch.siteType === "Winch" ? winchIcon : hangIcon;
+  return (
+    <Marker
+      position={[launch.location.lat, launch.location.lng]}
+      icon={icon}
+      opacity={launch.hasLandingAtSameLocation ? 0.5 : 1}
+    >
+      <Popup>
+        <strong>Launch: {launch.siteName}</strong>
+        <br />
+        Type: {launch.siteType}
+        <br />
+        {launch.siteCountry}
+        <br />
+        Elevation: {launch.elevation}m
+        {launch.hasLandingAtSameLocation && (
+          <>
+            <br />
+            <em>Note: Landing also nearby</em>
+          </>
+        )}
+        {onEdit && (
+          <>
+            <br />
+            <PopupEditButton onClick={onEdit} />
+          </>
+        )}
+      </Popup>
+    </Marker>
+  );
+}
+
+function SiteOverviewMarker({
+  site,
+  launch,
+  onEdit,
+}: {
+  site: ApiSite;
+  launch: ApiSite["launches"][number];
+  onEdit?: () => void;
+}) {
+  const type = getSiteType(site);
+  return (
+    <Marker
+      position={[launch.location.latitude, launch.location.longitude]}
+      icon={getMarkerIcon(type)}
+    >
+      <Popup>
+        <strong>{site.name}</strong>
+        <br />
+        Type: {siteTypeLabel(type)}
+        <br />
+        {site.country}
+        <br />
+        Elevation: {launch.elevation}m
+        {onEdit && (
+          <>
+            <br />
+            <PopupEditButton onClick={onEdit} />
+          </>
+        )}
+      </Popup>
+    </Marker>
+  );
+}
+
 export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, settings }: SitesMapProps) {
+  const { launchesWithOverlap, landingsWithOverlap, center } = useMemo(() => {
+    const launches: LaunchData[] = sites
+      .flatMap((site) =>
+        site.launches.map((l) => ({
+          location: { lat: l.location.latitude, lng: l.location.longitude },
+          elevation: l.elevation,
+          siteName: site.name,
+          siteCountry: site.country,
+          siteType: l.site_type,
+        })),
+      )
+      .filter((loc) => loc.location.lat && loc.location.lng);
 
-  const launches: LaunchData[] = sites
-    .flatMap((site) =>
-      site.launches.map((l) => ({
-        location: { lat: l.location.latitude, lng: l.location.longitude },
-        elevation: l.elevation,
-        siteName: site.name,
-        siteCountry: site.country,
-        siteType: l.site_type,
-      }))
-    )
-    .filter((loc) => loc.location.lat && loc.location.lng);
+    const landings: LandingData[] = sites
+      .flatMap((site) =>
+        site.landings.map((l) => ({
+          location: { lat: l.location.latitude, lng: l.location.longitude },
+          elevation: l.elevation,
+          siteName: site.name,
+          siteCountry: site.country,
+        })),
+      )
+      .filter((loc) => loc.location.lat && loc.location.lng);
 
-  const landings: LandingData[] = sites
-    .flatMap((site) =>
-      site.landings.map((l) => ({
-        location: { lat: l.location.latitude, lng: l.location.longitude },
-        elevation: l.elevation,
-        siteName: site.name,
-        siteCountry: site.country,
-      }))
-    )
-    .filter((loc) => loc.location.lat && loc.location.lng);
+    const launchesWithOverlap: LaunchWithOverlap[] = launches.map((launch) => ({
+      ...launch,
+      hasLandingAtSameLocation: landings.some((landing) => coordsMatch(launch.location, landing.location)),
+    }));
 
-  const launchesWithOverlap = launches.map((launch) => {
-    const matchingLandings = landings.filter((landing) =>
-      coordsMatch(launch.location, landing.location)
-    );
-    return { ...launch, hasLandingAtSameLocation: matchingLandings.length > 0 };
-  });
+    const landingsWithOverlap: LandingWithOverlap[] = landings.map((landing) => ({
+      ...landing,
+      hasLaunchAtSameLocation: launches.some((launch) => coordsMatch(launch.location, landing.location)),
+    }));
 
-  const landingsWithOverlap = landings.map((landing) => {
-    const matchingLaunches = launches.filter((launch) =>
-      coordsMatch(launch.location, landing.location)
-    );
-    return { ...landing, hasLaunchAtSameLocation: matchingLaunches.length > 0 };
-  });
+    const allPositions = [...launches, ...landings].map((l) => l.location);
+    const center: [number, number] =
+      allPositions.length > 0
+        ? [
+            allPositions.reduce((sum, p) => sum + p.lat, 0) / allPositions.length,
+            allPositions.reduce((sum, p) => sum + p.lng, 0) / allPositions.length,
+          ]
+        : [47.0, 10.0];
 
-  const allPositions = [...launches, ...landings].map((l) => l.location);
-
-  const center: [number, number] =
-    allPositions.length > 0
-      ? [
-          allPositions.reduce((sum, p) => sum + p.lat, 0) / allPositions.length,
-          allPositions.reduce((sum, p) => sum + p.lng, 0) / allPositions.length,
-        ]
-      : [47.0, 10.0];
+    return { launchesWithOverlap, landingsWithOverlap, center };
+  }, [sites]);
 
   const isZoomedIn = mapView ? mapView.zoom >= 11 : false;
-
   const mapCenter = mapView?.center ?? center;
-
   const hasLocationSettings = settings && settings.location_latitude && settings.location_longitude;
+
+  const editHandlerForSiteName = (siteName: string): (() => void) | undefined => {
+    if (!onSiteClick) return undefined;
+    return () => {
+      const site = sites.find((s) => s.name === siteName);
+      if (site) onSiteClick(site);
+    };
+  };
 
   return (
     <div className={styles.mapContainer}>
@@ -182,103 +303,30 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, setting
         {isZoomedIn ? (
           <>
             {landingsWithOverlap.map((landing, idx) => (
-              <Marker
+              <LandingMarker
                 key={`landing-${landing.siteName}-${idx}`}
-                position={[landing.location.lat, landing.location.lng]}
-                icon={landingIcon}
-                opacity={landing.hasLaunchAtSameLocation ? 0.5 : 1}
-              >
-                <Popup>
-                  <strong>Landing: {landing.siteName}</strong>
-                  <br />
-                  {landing.siteCountry}
-                  <br />
-                  Elevation: {landing.elevation}m
-                  {landing.hasLaunchAtSameLocation && <><br /><em>Note: Launch also nearby</em></>}
-                  {onSiteClick && (
-                    <>
-                      <br />
-                      <button
-                        className={styles.popupEditBtn}
-                        onClick={() => {
-                          const site = sites.find((s) => s.name === landing.siteName);
-                          if (site) onSiteClick(site);
-                        }}
-                      >
-                        Edit
-                      </button>
-                    </>
-                  )}
-                </Popup>
-              </Marker>
+                landing={landing}
+                onEdit={editHandlerForSiteName(landing.siteName)}
+              />
             ))}
-            {launchesWithOverlap.map((launch, idx) => {
-              const icon = launch.siteType === "Winch" ? winchIcon : hangIcon;
-              return (
-                <Marker
-                  key={`launch-${launch.siteName}-${idx}`}
-                  position={[launch.location.lat, launch.location.lng]}
-                  icon={icon}
-                  opacity={launch.hasLandingAtSameLocation ? 0.5 : 1}
-                >
-                  <Popup>
-                    <strong>Launch: {launch.siteName}</strong>
-                    <br />
-                    Type: {launch.siteType}
-                    <br />
-                    {launch.siteCountry}
-                    <br />
-                    Elevation: {launch.elevation}m
-                    {launch.hasLandingAtSameLocation && <><br /><em>Note: Landing also nearby</em></>}
-                    {onSiteClick && (
-                      <>
-                        <br />
-                        <button
-                          className={styles.popupEditBtn}
-                          onClick={() => {
-                            const site = sites.find((s) => s.name === launch.siteName);
-                            if (site) onSiteClick(site);
-                          }}
-                        >
-                          Edit
-                        </button>
-                      </>
-                    )}
-                  </Popup>
-                </Marker>
-              );
-            })}
+            {launchesWithOverlap.map((launch, idx) => (
+              <LaunchMarker
+                key={`launch-${launch.siteName}-${idx}`}
+                launch={launch}
+                onEdit={editHandlerForSiteName(launch.siteName)}
+              />
+            ))}
           </>
         ) : (
           sites.map((site) =>
             site.launches.map((launch, idx) => (
-              <Marker
+              <SiteOverviewMarker
                 key={`${site.name}-${idx}`}
-                position={[launch.location.latitude, launch.location.longitude]}
-                icon={getMarkerIcon(site)}
-              >
-                <Popup>
-                  <strong>{site.name}</strong>
-                  <br />
-                  Type: {getSiteType(site) === "both" ? "Winch + Hang" : getSiteType(site) === "winch" ? "Winch" : getSiteType(site) === "hang" ? "Hang" : "Unknown"}
-                  <br />
-                  {site.country}
-                  <br />
-                  Elevation: {launch.elevation}m
-                  {onSiteClick && (
-                    <>
-                      <br />
-                      <button
-                        className={styles.popupEditBtn}
-                        onClick={() => onSiteClick(site)}
-                      >
-                        Edit
-                      </button>
-                    </>
-                  )}
-                </Popup>
-              </Marker>
-            ))
+                site={site}
+                launch={launch}
+                onEdit={onSiteClick ? () => onSiteClick(site) : undefined}
+              />
+            )),
           )
         )}
       </MapContainer>
