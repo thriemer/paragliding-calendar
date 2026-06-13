@@ -5,17 +5,18 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 
 use crate::{
-    application::Planner,
-    cache::PersistentCache,
-    calendar::web_flow_authenticator::WebFlowAuthenticator,
-    domain::ports::ActivitySource,
-    location::GeoProvider,
-    paragliding::{
-        repository::ParaglidingSiteRepository, source::ParaglidingActivitySource,
+    adapters::{
+        activities::paragliding::{
+            repository::ParaglidingSiteRepository, source::ParaglidingActivitySource,
+        },
+        cache::PersistentCache,
+        google_calendar::WebFlowAuthenticator,
+        graphhopper::Routing,
+        open_meteo::OpenMeteoClient,
+        store::PersistentStore,
     },
-    routing::{Routing, RoutingProvider},
-    store::PersistentStore,
-    weather::{WeatherProvider, open_meteo::OpenMeteoClient},
+    application::Planner,
+    domain::ports::{ActivitySource, GeoProvider, RoutingProvider, WeatherProvider},
 };
 
 #[derive(Clone)]

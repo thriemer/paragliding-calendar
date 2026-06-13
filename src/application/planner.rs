@@ -4,13 +4,9 @@ use anyhow::Result;
 use chrono::{DateTime, Duration, TimeDelta, Utc};
 use futures::future;
 
-use crate::{
-    calendar::CalendarProvider,
-    domain::{
-        ports::ActivitySource,
-        shared::{ActivitySuggestion, PlanningContext, TimeWindow, Timing},
-    },
-    routing::RoutingProvider,
+use crate::domain::{
+    activities::{ActivitySuggestion, PlanningContext, TimeWindow, Timing},
+    ports::{ActivitySource, CalendarProvider, RoutingProvider},
 };
 
 pub struct Planner {

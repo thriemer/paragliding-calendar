@@ -5,27 +5,23 @@ use chrono::{Duration, Utc};
 use tokio::time;
 
 use crate::{
+    adapters::google_calendar::GoogleCalendar,
     app_state::AppState,
-    calendar::{CalendarEvent, CalendarProvider, google::GoogleCalendar},
-    domain::shared::{ActivitySuggestion, PlanningContext, TimeWindow, Timing},
-    location::Location,
-    paragliding::repository::UserSettings,
+    domain::{
+        activities::{ActivitySuggestion, PlanningContext, TimeWindow, Timing},
+        calendar::CalendarEvent,
+        location::Location,
+        paragliding::UserSettings,
+        ports::CalendarProvider,
+    },
 };
 
-mod api;
+mod adapters;
 mod app_state;
 mod application;
-mod cache;
-mod calendar;
 mod config;
 mod domain;
-mod email;
-mod location;
-mod paragliding;
-mod routing;
-mod store;
 mod telemetry;
-mod weather;
 mod web;
 
 async fn create_calender_entries(state: &AppState) -> Result<()> {

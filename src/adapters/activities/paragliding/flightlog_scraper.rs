@@ -3,7 +3,7 @@ use reqwest::Client;
 use std::fs;
 use std::time::Duration;
 
-use crate::paragliding::flight::Track;
+use crate::domain::paragliding::flight::Track;
 
 const BASE_URL: &str = "https://flightlog.org/fl.html";
 const START_ID: i64 = 942736;

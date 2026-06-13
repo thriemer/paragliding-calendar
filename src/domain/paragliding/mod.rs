@@ -1,12 +1,8 @@
-pub mod repository;
-pub mod dhv;
 pub mod flight;
-pub mod site_evaluator;
-pub mod source;
 
 use serde::{Deserialize, Serialize};
 
-use super::Location;
+use crate::domain::location::Location;
 
 pub trait ParaglidingSiteProvider {
     async fn fetch_all_sites(&self) -> Vec<ParaglidingSite>;
@@ -30,7 +26,6 @@ pub struct ParaglidingSite {
     pub preferred_weather_model: Option<String>,
 }
 
-/// Represents a paragliding site from any data source
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParaglidingLaunch {
     pub site_type: SiteType,
@@ -52,6 +47,34 @@ pub enum SiteType {
     Hang,
     Winch,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserSettings {
+    pub location_name: String,
+    pub location_latitude: f64,
+    pub location_longitude: f64,
+    pub search_radius_km: f64,
+    pub calendar_name: String,
+    pub minimum_flyable_hours: u32,
+    pub excluded_calendar_names: Vec<String>,
+}
+
+impl Default for UserSettings {
+    fn default() -> Self {
+        let calendar_name = "Paragliding".to_string();
+        Self {
+            //TODO: replace with real location
+            location_name: "Gornau/Erz".to_string(),
+            location_latitude: 50.7,
+            location_longitude: 13.0,
+            search_radius_km: 150.0,
+            calendar_name: calendar_name.clone(),
+            minimum_flyable_hours: 2,
+            excluded_calendar_names: vec![calendar_name],
+        }
+    }
+}
+
 #[must_use]
 pub fn degrees_to_compass(degrees: f64) -> String {
     let normalized = degrees.rem_euclid(360.0);

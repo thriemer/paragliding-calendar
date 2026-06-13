@@ -1,23 +1,9 @@
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use sunrise::{Coordinates, SolarDay, SolarEvent};
 
-use crate::location::Location;
-
-pub mod open_meteo;
-
-#[async_trait]
-pub trait WeatherProvider: Send + Sync {
-    async fn get_forecast(
-        &self,
-        source: Location,
-        model: Option<&str>,
-    ) -> Result<WeatherForecast>;
-
-    fn available_models(&self) -> Vec<WeatherModel>;
-}
+use crate::domain::location::Location;
 
 pub fn get_sunrise_sunset(
     location: &Location,
@@ -103,13 +89,11 @@ impl WeatherData {
         }
     }
 
-    /// Format temperature with unit
     #[must_use]
     pub fn format_temperature(&self) -> String {
         format!("{:.1}°C", self.temperature)
     }
 
-    /// Format wind information
     #[must_use]
     pub fn format_wind(&self) -> String {
         let direction = Self::wind_direction_to_cardinal(self.wind_direction);
@@ -119,13 +103,11 @@ impl WeatherData {
         )
     }
 
-    /// Format weather description with proper capitalization
     #[must_use]
     pub fn format_description(&self) -> String {
         self.description.clone()
     }
 
-    /// Format atmospheric pressure with unit
     #[must_use]
     pub fn format_pressure(&self) -> String {
         format!("{:.1} hPa", self.pressure)

@@ -5,9 +5,12 @@ use async_trait::async_trait;
 use tracing::instrument;
 
 use crate::{
-    cache::PersistentCache,
-    location::{GeoProvider, Location},
-    weather::{WeatherForecast, WeatherModel, WeatherProvider},
+    adapters::cache::PersistentCache,
+    domain::{
+        location::Location,
+        ports::{GeoProvider, WeatherProvider},
+        weather::{WeatherForecast, WeatherModel},
+    },
 };
 
 pub struct OpenMeteoClient {
@@ -166,15 +169,13 @@ async fn geocode_raw(location_name: &str) -> Result<Vec<Location>> {
     Ok(geocoding_results)
 }
 
-/// `OpenMeteo` API response structures and conversion utilities
 mod openmeteo {
     use chrono::Utc;
     use serde::Deserialize;
 
     use super::{Location, WeatherForecast};
-    use crate::weather::WeatherData;
+    use crate::domain::weather::WeatherData;
 
-    /// Current weather and forecast response from `OpenMeteo` API
     #[derive(Debug, Deserialize)]
     pub struct ForecastResponse {
         pub latitude: f64,
@@ -186,7 +187,6 @@ mod openmeteo {
         pub current: Option<CurrentData>,
     }
 
-    /// Hourly weather data from `OpenMeteo`
     #[derive(Debug, Deserialize)]
     pub struct HourlyData {
         pub time: Vec<String>,
@@ -208,7 +208,6 @@ mod openmeteo {
         pub weather_code: Option<Vec<u8>>,
     }
 
-    /// Daily weather data from `OpenMeteo`
     #[derive(Debug, Deserialize)]
     pub struct DailyData {
         pub time: Vec<String>,
@@ -226,7 +225,6 @@ mod openmeteo {
         pub weather_code: Option<Vec<Option<u8>>>,
     }
 
-    /// Current weather data from `OpenMeteo` (when available)
     #[derive(Debug, Deserialize)]
     pub struct CurrentData {
         #[serde(rename = "temperature_2m")]
@@ -247,7 +245,6 @@ mod openmeteo {
         pub weather_code: u8,
     }
 
-    /// Geocoding response from `OpenMeteo`
     #[derive(Debug, Deserialize)]
     pub struct GeocodingResponse {
         pub results: Option<Vec<GeocodingResult>>,
@@ -275,7 +272,6 @@ mod openmeteo {
         }
     }
 
-    /// Convert `OpenMeteo` weather code to human-readable description
     #[must_use]
     pub fn weather_code_to_description(code: u8) -> &'static str {
         match code {
@@ -311,24 +307,19 @@ mod openmeteo {
         }
     }
 
-    // Convert OpenMeteo API responses to internal models
     impl WeatherForecast {
-        /// Create forecast from `OpenMeteo` API response
         #[must_use]
         pub fn from_openmeteo(response: &ForecastResponse, location: Location) -> Self {
             let mut forecasts = Vec::new();
 
-            // Process hourly data if available
             if let Some(hourly) = &response.hourly {
                 let len = hourly.time.len();
 
                 for i in 0..len {
-                    // Parse timestamp
                     let timestamp =
                         chrono::NaiveDateTime::parse_from_str(&hourly.time[i], "%Y-%m-%dT%H:%M")
                             .map_or_else(|_| Utc::now(), |dt| dt.and_utc());
 
-                    // Extract data with safe indexing and default values
                     let temperature = *hourly
                         .temperature
                         .as_ref()

@@ -7,10 +7,6 @@ use std::{
 use chrono::{DateTime, Duration, Utc};
 use geo::{Bearing as _, Distance as GeoDistance};
 
-pub mod analytics;
-pub mod flightlog_scraper;
-pub mod kml;
-
 pub struct Distance(f64); //distance in meters
 
 impl Distance {

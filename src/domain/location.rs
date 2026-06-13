@@ -1,16 +1,5 @@
-//! Location model for geographic coordinates and metadata
-
-use anyhow::Result;
-use async_trait::async_trait;
 use haversine::{Location as HaversineLocation, Units, distance};
 use serde::{Deserialize, Serialize};
-
-#[async_trait]
-pub trait GeoProvider: Send + Sync {
-    async fn geocode(&self, location_name: &str) -> Result<Vec<Location>>;
-
-    async fn fetch_elevation(&self, latitude: f64, longitude: f64) -> Result<f64>;
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Location {
@@ -51,7 +40,6 @@ impl Location {
     }
 
     pub fn to_key(&self) -> String {
-        // Round to 6 decimal places (~0.1 meter precision)
         let lat = (self.latitude * 1_000_000.0).round() as i64;
         let lon = (self.longitude * 1_000_000.0).round() as i64;
         format!("{}_{}_{}_{}", lat, lon, self.name, self.country)

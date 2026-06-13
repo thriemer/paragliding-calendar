@@ -5,7 +5,7 @@ use quick_xml::de::from_str;
 use serde::Deserialize;
 use tracing;
 
-use crate::{
+use crate::domain::{
     location::Location,
     paragliding::{
         ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, ParaglidingSiteProvider, SiteType,

@@ -10,16 +10,18 @@ use serde::{Deserialize, Serialize};
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
-    app_state::AppState,
-    calendar::{CalendarProvider, google::GoogleCalendar},
-    location::Location,
-    paragliding::{
-        ParaglidingSite, ParaglidingSiteProvider,
-        repository::UserSettings,
-        dhv,
-        flight::{Track, analytics},
+    adapters::{
+        activities::paragliding::dhv,
+        google_calendar::GoogleCalendar,
     },
-    weather::WeatherModel,
+    app_state::AppState,
+    application::flight_analytics,
+    domain::{
+        location::Location,
+        paragliding::{ParaglidingSite, ParaglidingSiteProvider, UserSettings, flight::Track},
+        ports::CalendarProvider,
+        weather::WeatherModel,
+    },
 };
 
 #[derive(Serialize, Deserialize)]
@@ -229,7 +231,7 @@ async fn import_sites(
     }))
 }
 
-async fn analyze_flight(body: Body) -> Result<Json<analytics::FlightAnalysis>, StatusCode> {
+async fn analyze_flight(body: Body) -> Result<Json<flight_analytics::FlightAnalysis>, StatusCode> {
     tracing::info!("Starting flight analysis");
 
     let bytes = axum::body::to_bytes(body, 50 * 1024 * 1024)
@@ -253,7 +255,7 @@ async fn analyze_flight(body: Body) -> Result<Json<analytics::FlightAnalysis>, S
 
     tracing::info!("Parsed track with {} points", track.points.len());
 
-    let analysis = analytics::analyse_flight(&track);
+    let analysis = flight_analytics::analyse_flight(&track);
     tracing::info!("Flight analysis complete");
 
     Ok(Json(analysis))

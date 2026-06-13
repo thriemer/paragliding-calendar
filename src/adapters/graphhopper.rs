@@ -8,16 +8,10 @@ use reqwest_middleware::ClientWithMiddleware;
 use serde::Deserialize;
 use tracing::instrument;
 
-use crate::{cache::PersistentCache, location::Location};
-
-#[async_trait]
-pub trait RoutingProvider: Send + Sync {
-    async fn get_travel_time(
-        &self,
-        source: &Location,
-        destination: &Location,
-    ) -> Result<Duration>;
-}
+use crate::{
+    adapters::cache::PersistentCache,
+    domain::{location::Location, ports::RoutingProvider},
+};
 
 pub struct Routing {
     cache: Arc<PersistentCache>,

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 
-use crate::paragliding::flight::{
+use crate::domain::paragliding::flight::{
     AngularVelocity, BearingVelocity, Distance, ScalarVelocity, Track, TrackPoint,
 };
 

@@ -5,14 +5,12 @@ use async_trait::async_trait;
 use chrono::Duration;
 
 use crate::{
+    adapters::activities::paragliding::{repository::ParaglidingSiteRepository, site_evaluator},
     domain::{
-        ports::ActivitySource,
-        shared::{ActivityKind, ActivitySuggestion, PlanningContext, TimeWindow, Timing},
+        activities::{ActivityKind, ActivitySuggestion, PlanningContext, TimeWindow, Timing},
+        paragliding::ParaglidingSiteProvider,
+        ports::{ActivitySource, WeatherProvider},
     },
-    paragliding::{
-        ParaglidingSiteProvider, repository::ParaglidingSiteRepository, site_evaluator,
-    },
-    weather::WeatherProvider,
 };
 
 pub struct ParaglidingActivitySource {

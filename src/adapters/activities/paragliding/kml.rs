@@ -3,7 +3,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use std::fs;
 
-use crate::paragliding::flight::{Location, Track, TrackPoint};
+use crate::domain::paragliding::flight::{Location, Track, TrackPoint};
 
 impl Track {
     pub fn from_kml_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {

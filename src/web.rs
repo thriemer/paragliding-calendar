@@ -7,7 +7,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::ServeDir;
 use tower_http::timeout::TimeoutLayer;
 
-use crate::{api, app_state::AppState, config};
+use crate::{adapters::http, app_state::AppState, config};
 
 async fn oauth_callback(
     State(state): State<AppState>,
@@ -36,7 +36,7 @@ pub async fn run(state: AppState) {
 
     let app = Router::new()
         .route("/oauth/callback", get(oauth_callback))
-        .nest("/api", api::router())
+        .nest("/api", http::router())
         .fallback_service(ServeDir::new("frontend/dist"))
         .layer(cors)
         .layer(TimeoutLayer::with_status_code(

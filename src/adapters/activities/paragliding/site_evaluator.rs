@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 
-use crate::{
+use crate::domain::{
     paragliding::{ParaglidingLaunch, ParaglidingSite, SiteType},
     weather::{self, WeatherData, WeatherForecast},
 };
