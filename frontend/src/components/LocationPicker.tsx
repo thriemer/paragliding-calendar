@@ -1,35 +1,16 @@
 import { useState } from "react";
-import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
-import L from "leaflet";
+import { MapContainer, TileLayer, Marker } from "react-leaflet";
+import type L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import styles from "./LocationPicker.module.css";
 import { API } from "../config/api";
+import { ApiLocation } from "../hooks/useSites";
+import { MapClickHandler } from "../utils/leaflet";
 
 interface LocationPickerProps {
-  location: { latitude: number; longitude: number; name: string; country: string | null };
+  location: ApiLocation;
   elevation: number;
-  onChange: (location: { latitude: number; longitude: number; name: string; country: string | null }, elevation: number) => void;
-}
-
-function fixLeafletIcon() {
-  // @ts-ignore
-  delete L.Icon.Default.prototype._getIconUrl;
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-  });
-}
-
-fixLeafletIcon();
-
-function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => void }) {
-  useMapEvents({
-    click: (e) => {
-      onClick(e.latlng.lat, e.latlng.lng);
-    },
-  });
-  return null;
+  onChange: (location: ApiLocation, elevation: number) => void;
 }
 
 export function LocationPicker({ location, elevation, onChange }: LocationPickerProps) {

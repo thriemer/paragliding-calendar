@@ -1,30 +1,12 @@
-import { useState, useEffect } from "react";
+import { useEffect } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { ApiSite } from "../hooks/useSites";
 import { UserSettings } from "../hooks/useSettings";
 import { Legend } from "./Legend";
+import "../utils/leaflet";
 import styles from "./SitesMap.module.css";
-
-interface LocationSettings {
-  latitude: number;
-  longitude: number;
-  name: string;
-  radius_km: number;
-}
-
-const fixLeafletIcon = () => {
-  // @ts-ignore
-  delete L.Icon.Default.prototype._getIconUrl;
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-  });
-};
-
-fixLeafletIcon();
 
 const createColoredIcon = (color: string) =>
   new L.Icon({

@@ -1,34 +1,23 @@
 import { useState } from "react";
 import { LocationPicker } from "./LocationPicker";
+import { ApiLanding, ApiLocation } from "../hooks/useSites";
 import styles from "./LandingEditor.module.css";
 
-interface Landing {
-  location: { latitude: number; longitude: number; name: string; country: string | null };
-  elevation: number;
-}
-
 interface LandingEditorProps {
-  landing: Landing;
+  landing: ApiLanding;
   index: number;
-  onChange: (index: number, landing: Landing) => void;
+  onChange: (index: number, landing: ApiLanding) => void;
   onRemove: (index: number) => void;
 }
 
 export function LandingEditor({ landing, index, onChange, onRemove }: LandingEditorProps) {
   const [isCollapsed, setIsCollapsed] = useState(true);
 
-  const handleChange = (field: string, value: any) => {
-    const updated = { ...landing };
-    if (field === "name") {
-      updated.location = { ...updated.location, name: value };
-    }
-    onChange(index, updated);
+  const handleNameChange = (name: string) => {
+    onChange(index, { ...landing, location: { ...landing.location, name } });
   };
 
-  const handleLocationChange = (
-    location: { latitude: number; longitude: number; name: string; country: string | null },
-    elevation: number
-  ) => {
+  const handleLocationChange = (location: ApiLocation, elevation: number) => {
     onChange(index, { ...landing, location, elevation });
   };
 
@@ -61,7 +50,7 @@ export function LandingEditor({ landing, index, onChange, onRemove }: LandingEdi
               <input
                 type="text"
                 value={landing.location.name}
-                onChange={(e) => handleChange("name", e.target.value)}
+                onChange={(e) => handleNameChange(e.target.value)}
                 placeholder="Landing name"
               />
             </div>

@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
-import L from "leaflet";
+import { MapContainer, TileLayer, Marker } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { ApiSite } from "../hooks/useSites";
+import { ApiSite, ApiLaunch, ApiLanding, ApiLocation } from "../hooks/useSites";
 import { useWeatherModels } from "../hooks/useWeatherModels";
+import { MapClickHandler } from "../utils/leaflet";
 import { LaunchEditor } from "./LaunchEditor";
 import { LandingEditor } from "./LandingEditor";
 import styles from "./SiteEditor.module.css";
@@ -13,40 +13,6 @@ interface SiteEditorProps {
   onSave: (updatedSite: ApiSite) => void;
   onDelete?: (siteName: string) => void;
   onCancel: () => void;
-}
-
-interface Launch {
-  location: { latitude: number; longitude: number; name: string; country: string | null };
-  direction_degrees_start: number;
-  direction_degrees_stop: number;
-  elevation: number;
-  site_type: string;
-}
-
-interface Landing {
-  location: { latitude: number; longitude: number; name: string; country: string | null };
-  elevation: number;
-}
-
-function fixLeafletIcon() {
-  // @ts-ignore
-  delete L.Icon.Default.prototype._getIconUrl;
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-  });
-}
-
-fixLeafletIcon();
-
-function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => void }) {
-  useMapEvents({
-    click: (e) => {
-      onClick(e.latlng.lat, e.latlng.lng);
-    },
-  });
-  return null;
 }
 
 function StarRating({ rating, onChange }: { rating: number | undefined; onChange: (rating: number) => void }) {
@@ -74,8 +40,8 @@ function ParkingLocationPicker({
   onChange,
   onRemove,
 }: {
-  location: { latitude: number; longitude: number; name: string; country: string | null } | undefined;
-  onChange: (location: { latitude: number; longitude: number; name: string; country: string | null }) => void;
+  location: ApiLocation | undefined;
+  onChange: (location: ApiLocation) => void;
   onRemove: () => void;
 }) {
   const defaultLoc = location || { latitude: 47.0, longitude: 10.0, name: "", country: "" };
@@ -115,14 +81,14 @@ export function SiteEditor({ site, onSave, onDelete, onCancel }: SiteEditorProps
   const { models } = useWeatherModels();
   const [name, setName] = useState(site.name);
   const [country, setCountry] = useState(site.country || "");
-  const [launches, setLaunches] = useState<Launch[]>(site.launches);
-  const [landings, setLandings] = useState<Landing[]>(site.landings);
+  const [launches, setLaunches] = useState<ApiLaunch[]>(site.launches);
+  const [landings, setLandings] = useState<ApiLanding[]>(site.landings);
   const [parkingLocation, setParkingLocation] = useState(site.parking_location);
   const [muteAlerts, setMuteAlerts] = useState(site.mute_alerts || false);
   const [rating, setRating] = useState(site.rating || 0);
   const [preferredWeatherModel, setPreferredWeatherModel] = useState(site.preferred_weather_model);
 
-  const handleLaunchChange = (index: number, launch: Launch) => {
+  const handleLaunchChange = (index: number, launch: ApiLaunch) => {
     const updated = [...launches];
     updated[index] = launch;
     setLaunches(updated);
@@ -132,7 +98,7 @@ export function SiteEditor({ site, onSave, onDelete, onCancel }: SiteEditorProps
     setLaunches(launches.filter((_, i) => i !== index));
   };
 
-  const handleLandingChange = (index: number, landing: Landing) => {
+  const handleLandingChange = (index: number, landing: ApiLanding) => {
     const updated = [...landings];
     updated[index] = landing;
     setLandings(updated);

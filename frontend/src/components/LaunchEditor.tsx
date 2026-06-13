@@ -1,48 +1,32 @@
 import { useState } from "react";
 import { CompassRose } from "./CompassRose";
 import { LocationPicker } from "./LocationPicker";
+import { ApiLaunch, ApiLocation } from "../hooks/useSites";
 import styles from "./LaunchEditor.module.css";
 
-interface Launch {
-  location: { latitude: number; longitude: number; name: string; country: string | null };
-  direction_degrees_start: number;
-  direction_degrees_stop: number;
-  elevation: number;
-  site_type: string;
-}
-
 interface LaunchEditorProps {
-  launch: Launch;
+  launch: ApiLaunch;
   index: number;
-  onChange: (index: number, launch: Launch) => void;
+  onChange: (index: number, launch: ApiLaunch) => void;
   onRemove: (index: number) => void;
 }
 
 export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditorProps) {
   const [isCollapsed, setIsCollapsed] = useState(true);
 
-  const handleChange = (field: string, value: any) => {
-    const updated = { ...launch };
-    if (field === "site_type") {
-      updated.site_type = value;
-    } else if (field === "name") {
-      updated.location = { ...updated.location, name: value };
-    } else if (field === "direction_start") {
-      updated.direction_degrees_start = parseFloat(value) || 0;
-    } else if (field === "direction_stop") {
-      updated.direction_degrees_stop = parseFloat(value) || 0;
-    }
-    onChange(index, updated);
+  const handleNameChange = (name: string) => {
+    onChange(index, { ...launch, location: { ...launch.location, name } });
+  };
+
+  const handleSiteTypeChange = (site_type: string) => {
+    onChange(index, { ...launch, site_type });
   };
 
   const handleDirectionChange = (start: number, stop: number) => {
     onChange(index, { ...launch, direction_degrees_start: start, direction_degrees_stop: stop });
   };
 
-  const handleLocationChange = (
-    location: { latitude: number; longitude: number; name: string; country: string | null },
-    elevation: number
-  ) => {
+  const handleLocationChange = (location: ApiLocation, elevation: number) => {
     onChange(index, { ...launch, location, elevation });
   };
 
@@ -75,7 +59,7 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
               <input
                 type="text"
                 value={launch.location.name}
-                onChange={(e) => handleChange("name", e.target.value)}
+                onChange={(e) => handleNameChange(e.target.value)}
                 placeholder="Launch name"
               />
             </div>
@@ -86,7 +70,7 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
               <label>Type:</label>
               <select
                 value={launch.site_type}
-                onChange={(e) => handleChange("site_type", e.target.value)}
+                onChange={(e) => handleSiteTypeChange(e.target.value)}
               >
                 <option value="Hang">Hang</option>
                 <option value="Winch">Winch</option>
