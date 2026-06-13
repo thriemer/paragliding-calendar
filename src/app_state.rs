@@ -3,6 +3,7 @@ use std::{env, sync::Arc};
 use anyhow::Result;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
+use reqwest_tracing::TracingMiddleware;
 
 use crate::{
     adapters::{
@@ -91,6 +92,7 @@ fn build_http_client() -> ClientWithMiddleware {
         )
         .build_with_max_retries(5);
     ClientBuilder::new(reqwest::Client::new())
+        .with(TracingMiddleware::default())
         .with(RetryTransientMiddleware::new_with_policy(retry_policy))
         .build()
 }

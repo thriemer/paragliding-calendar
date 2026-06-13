@@ -24,6 +24,7 @@ mod domain;
 mod telemetry;
 mod web;
 
+#[tracing::instrument(skip_all, fields(event_count = tracing::field::Empty))]
 async fn create_calender_entries(state: &AppState) -> Result<()> {
     let settings = match state.site_repo.get_settings().await? {
         Some(s) => s,
@@ -43,7 +44,7 @@ async fn create_calender_entries(state: &AppState) -> Result<()> {
     let mut cal = match GoogleCalendar::new(state.auth.clone(), state.cache.clone()).await {
         Ok(cal) => cal,
         Err(e) => {
-            tracing::error!("Failed to create Google Calendar: {}", e);
+            tracing::error!(error = ?e, "Failed to create Google Calendar");
             return Err(e);
         }
     };
@@ -66,7 +67,11 @@ async fn create_calender_entries(state: &AppState) -> Result<()> {
     let suggestions = state.planner.plan(&ctx, &cal).await?;
 
     if let Err(e) = cal.clear_calendar(&settings.calendar_name).await {
-        tracing::error!("Failed to clear calendar {}: {}", settings.calendar_name, e);
+        tracing::error!(
+            calendar = %settings.calendar_name,
+            error = ?e,
+            "Failed to clear calendar"
+        );
         return Err(e);
     }
 
@@ -74,12 +79,13 @@ async fn create_calender_entries(state: &AppState) -> Result<()> {
     for s in suggestions {
         let event = suggestion_to_event(s);
         if let Err(e) = cal.create_event(&settings.calendar_name, event).await {
-            tracing::error!("Failed to create event: {}", e);
+            tracing::error!(error = ?e, "Failed to create event");
             return Err(e);
         }
         event_counter += 1;
     }
 
+    tracing::Span::current().record("event_count", event_counter);
     tracing::info!(
         event_count = event_counter,
         calendar = %settings.calendar_name,
@@ -129,7 +135,7 @@ async fn main() -> Result<()> {
             loop {
                 interval.tick().await;
                 if let Err(e) = create_calender_entries(&job_state).await {
-                    tracing::error!("Failed to create calendar entries: {:?}", e);
+                    tracing::error!(error = ?e, "Failed to create calendar entries");
                 }
             }
         }

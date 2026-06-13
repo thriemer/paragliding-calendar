@@ -27,9 +27,9 @@ impl DhvParaglidingSiteProvider {
                     Ok(path) => path,
                     Err(err) => {
                         tracing::warn!(
-                            "Error while reading directory {:?}. load file. {:?}",
-                            dir,
-                            err
+                            dir = ?dir,
+                            error = ?err,
+                            "Error while reading directory"
                         );
                         return None;
                     }
@@ -39,14 +39,14 @@ impl DhvParaglidingSiteProvider {
                 match dhv_sites {
                     Ok(sites) => Some(sites),
                     Err(err) => {
-                        tracing::warn!("Error while loading flying sites. {:?}", err);
+                        tracing::warn!(error = ?err, "Error while loading flying sites");
                         None
                     }
                 }
             })
             .flatten()
             .collect();
-        tracing::info!("Loaded {} flying sites.", sites.len());
+        tracing::info!(count = sites.len(), "Loaded flying sites");
         Ok(DhvParaglidingSiteProvider { sites })
     }
 }

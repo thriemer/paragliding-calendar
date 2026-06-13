@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tower_http::limit::RequestBodyLimitLayer;
+use tracing::instrument;
 
 use crate::{
     adapters::{
@@ -72,6 +73,7 @@ impl From<UserSettings> for UserSettingsResponse {
     }
 }
 
+#[instrument(skip(state, query), fields(lat = query.latitude, lon = query.longitude))]
 async fn get_elevation(
     State(state): State<AppState>,
     Query(query): Query<ElevationQuery>,
@@ -84,6 +86,7 @@ async fn get_elevation(
     Ok(Json(ElevationResponse { elevation }))
 }
 
+#[instrument(skip(state, query), fields(name = %query.name))]
 async fn geocode(
     State(state): State<AppState>,
     Query(query): Query<GeocodeQuery>,
@@ -96,6 +99,7 @@ async fn geocode(
     Ok(Json(GeocodeResponse { results: locations }))
 }
 
+#[instrument(skip(state))]
 async fn get_settings(
     State(state): State<AppState>,
 ) -> Result<Json<UserSettingsResponse>, StatusCode> {
@@ -121,6 +125,7 @@ async fn get_settings(
     Ok(Json(settings))
 }
 
+#[instrument(skip(state, settings))]
 async fn save_settings(
     State(state): State<AppState>,
     Json(settings): Json<UserSettings>,
@@ -153,11 +158,13 @@ pub fn router() -> Router<AppState> {
         .route("/weather-models", get(get_weather_models))
 }
 
+#[instrument(skip(state))]
 async fn get_sites(State(state): State<AppState>) -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
     let sites = state.site_repo.fetch_all_sites().await;
     Ok(Json(sites))
 }
 
+#[instrument(skip(state, site), fields(site = %site.name))]
 async fn update_site(
     State(state): State<AppState>,
     Json(site): Json<ParaglidingSite>,
@@ -170,6 +177,7 @@ async fn update_site(
     Ok(StatusCode::OK)
 }
 
+#[instrument(skip(state), fields(site = %site_name))]
 async fn delete_site(
     State(state): State<AppState>,
     Path(site_name): Path<String>,
@@ -187,6 +195,7 @@ pub struct ImportResponse {
     pub imported: usize,
 }
 
+#[instrument(skip(state, body))]
 async fn import_sites(
     State(state): State<AppState>,
     body: Body,
@@ -196,14 +205,14 @@ async fn import_sites(
     let bytes = axum::body::to_bytes(body, 50 * 1024 * 1024)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to read request body: {:?}", e);
+            tracing::error!(error = ?e, "Failed to read request body");
             StatusCode::BAD_REQUEST
         })?;
 
-    tracing::info!("Read {} bytes from request", bytes.len());
+    tracing::info!(bytes = bytes.len(), "Read request body");
 
     let xml_content = String::from_utf8(bytes.to_vec()).map_err(|e| {
-        tracing::error!("Request body is not valid UTF-8: {:?}", e);
+        tracing::error!(error = ?e, "Request body is not valid UTF-8");
         StatusCode::BAD_REQUEST
     })?;
 
@@ -211,49 +220,50 @@ async fn import_sites(
 
     match dhv::parse_sites_from_xml(&xml_content) {
         Ok(sites) => {
-            tracing::info!("Parsed {} sites from XML", sites.len());
+            tracing::info!(parsed_sites = sites.len(), "Parsed sites from XML");
             for site in sites {
                 if let Err(e) = state.site_repo.save_site(site).await {
-                    tracing::warn!("Failed to save site: {}", e);
+                    tracing::warn!(error = ?e, "Failed to save site");
                 } else {
                     imported_count += 1;
                 }
             }
         }
         Err(e) => {
-            tracing::error!("Failed to parse XML: {:?}", e);
+            tracing::error!(error = ?e, "Failed to parse XML");
         }
     }
 
-    tracing::info!("Import complete: {} sites imported.", imported_count);
+    tracing::info!(imported = imported_count, "Import complete");
     Ok(Json(ImportResponse {
         imported: imported_count,
     }))
 }
 
+#[instrument(skip(body))]
 async fn analyze_flight(body: Body) -> Result<Json<flight_analytics::FlightAnalysis>, StatusCode> {
     tracing::info!("Starting flight analysis");
 
     let bytes = axum::body::to_bytes(body, 50 * 1024 * 1024)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to read request body: {:?}", e);
+            tracing::error!(error = ?e, "Failed to read request body");
             StatusCode::BAD_REQUEST
         })?;
 
-    tracing::info!("Read {} bytes from request", bytes.len());
+    tracing::info!(bytes = bytes.len(), "Read request body");
 
     let kml_content = String::from_utf8(bytes.to_vec()).map_err(|e| {
-        tracing::error!("Request body is not valid UTF-8: {:?}", e);
+        tracing::error!(error = ?e, "Request body is not valid UTF-8");
         StatusCode::BAD_REQUEST
     })?;
 
     let track = Track::from_kml(&kml_content).map_err(|e| {
-        tracing::error!("Failed to parse KML: {:?}", e);
+        tracing::error!(error = ?e, "Failed to parse KML");
         StatusCode::BAD_REQUEST
     })?;
 
-    tracing::info!("Parsed track with {} points", track.points.len());
+    tracing::info!(points = track.points.len(), "Parsed track");
 
     let analysis = flight_analytics::analyse_flight(&track);
     tracing::info!("Flight analysis complete");
@@ -266,6 +276,7 @@ struct WeatherModelsResponse {
     models: Vec<WeatherModel>,
 }
 
+#[instrument(skip(state))]
 async fn get_weather_models(State(state): State<AppState>) -> Json<WeatherModelsResponse> {
     Json(WeatherModelsResponse {
         models: state.weather.available_models(),

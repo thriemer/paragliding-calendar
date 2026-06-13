@@ -103,7 +103,7 @@ impl WebFlowAuthenticator {
                 .await
                 .context("Failed to send auth email")?;
 
-            tracing::info!("CSRF state for this auth session: {}", csrf_state);
+            let _ = csrf_state;
 
             for _ in 0..max_attempts {
                 tokio::time::sleep(Duration::from_secs(check_interval_secs)).await;
@@ -121,11 +121,6 @@ impl WebFlowAuthenticator {
     }
 
     pub async fn exchange_code(&self, code: &str) -> Result<StoredToken> {
-        tracing::info!(
-            "Exchanging code for token with redirect_uri: {}",
-            self.redirect_uri
-        );
-
         let token_response = self
             .client
             .exchange_code(AuthorizationCode::new(code.to_string()))
@@ -223,7 +218,7 @@ impl WebFlowAuthenticator {
                         return Ok(Some(access_token));
                     }
                     Err(e) => {
-                        tracing::error!("Failed to refresh token: {}", e);
+                        tracing::error!(error = ?e, "Failed to refresh token");
                     }
                 }
             }
@@ -356,7 +351,7 @@ impl CalendarProvider for GoogleCalendar {
                     let id = match self.get_id_for_name(n).await {
                         Ok(id) => Some(id),
                         Err(err) => {
-                            tracing::warn!("Cant get id for name {}. Error {:?}", n, err);
+                            tracing::warn!(name = %n, error = ?err, "Cant get id for calendar");
                             None
                         }
                     };
@@ -402,7 +397,7 @@ impl CalendarProvider for GoogleCalendar {
                     .await?;
 
                 self.cache
-                    .put(&cache_key, busy.clone(), Duration::from_hours(8))
+                    .put(&cache_key, busy.clone(), Duration::from_mins(5))
                     .await?;
                 busy
             }
@@ -424,10 +419,10 @@ impl CalendarProvider for GoogleCalendar {
                 .any(|tp| start < tp.end.unwrap() && end > tp.start.unwrap());
         }
         tracing::debug!(
-            "Range from {} - {} is {}",
-            start,
-            end,
-            if b { "busy" } else { "free" }
+            start = %start,
+            end = %end,
+            busy = b,
+            "Range busy/free check"
         );
         Ok(b)
     }
@@ -462,7 +457,7 @@ impl CalendarProvider for GoogleCalendar {
                             .await?;
                         counter += 1;
                     } else {
-                        tracing::warn!("Event {:#?} has no event_id", e);
+                        tracing::warn!(event = ?e, "Event has no event_id");
                     }
                 }
             }
@@ -473,7 +468,7 @@ impl CalendarProvider for GoogleCalendar {
             }
         }
 
-        tracing::info!("Cleared {} events", counter);
+        tracing::info!(cleared = counter, "Cleared events");
         Ok(())
     }
 
@@ -506,7 +501,7 @@ impl CalendarProvider for GoogleCalendar {
     #[instrument(skip(self), fields(calendar = %name))]
     async fn create_calendar(&mut self, name: &str) -> Result<()> {
         if self.get_calendar_names().await?.contains(&name.to_owned()) {
-            tracing::info!("Calendar {} already exists, Skipping creation", name);
+            tracing::info!(name = %name, "Calendar already exists, skipping creation");
             return Ok(());
         }
         let mut cal = google_calendar3::api::Calendar::default();

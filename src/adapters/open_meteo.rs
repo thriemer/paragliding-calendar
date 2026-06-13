@@ -45,7 +45,7 @@ impl WeatherProvider for OpenMeteoClient {
         self.cache
             .put(&key, forecast.clone(), Duration::from_hours(6u64))
             .await?;
-        tracing::info!("Weather fetch for {} was successful.", source.to_key());
+        tracing::debug!(location = %source.to_key(), "Weather fetch successful");
         Ok(forecast)
     }
 
@@ -164,10 +164,10 @@ async fn geocode_raw(location_name: &str) -> Result<Vec<Location>> {
         .map(|geocoding_result| geocoding_result.into())
         .collect();
 
-    tracing::info!(
-        "Geocoding found {} results for {}.",
-        geocoding_results.len(),
-        location_name
+    tracing::debug!(
+        count = geocoding_results.len(),
+        query = %location_name,
+        "Geocoding results returned"
     );
     Ok(geocoding_results)
 }

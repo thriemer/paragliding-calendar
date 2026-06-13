@@ -7,9 +7,7 @@ use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::{Protocol, WithExportConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::PeriodicReader;
-use tracing_subscriber::{
-    EnvFilter, Layer, Registry, fmt, layer::SubscriberExt, util::SubscriberInitExt,
-};
+use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub fn init_telemetry() -> Result<()> {
     let otel_endpoint = env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
@@ -20,10 +18,10 @@ pub fn init_telemetry() -> Result<()> {
         .map(|s| !s.is_empty())
         .unwrap_or(false)
     {
-        println!("Initializing OpenTelemetry for production");
+        eprintln!("Initializing OpenTelemetry for production");
         init_production_telemetry(otel_endpoint.unwrap(), service_name)?;
     } else {
-        println!("Initializing stdout logging for development");
+        eprintln!("Initializing stdout logging for development");
         init_development_logging();
     }
 
@@ -49,6 +47,7 @@ fn init_production_telemetry(otel_endpoint: String, service_name: String) -> Res
 
     let tracer = tracer_provider.tracer(service_name);
     global::set_tracer_provider(tracer_provider);
+    let trace_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
     // Metrics exporter
     let metrics_exporter = opentelemetry_otlp::MetricExporter::builder()
@@ -108,6 +107,7 @@ fn init_production_telemetry(otel_endpoint: String, service_name: String) -> Res
     // Initialize the tracing subscriber with the OpenTelemetry layer and the
     // Fmt layer.
     tracing_subscriber::registry()
+        .with(trace_layer)
         .with(otel_layer)
         .with(fmt_layer)
         .init();
@@ -115,7 +115,9 @@ fn init_production_telemetry(otel_endpoint: String, service_name: String) -> Res
 }
 
 fn init_development_logging() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
+        .with_env_filter(filter)
         .event_format(
             tracing_subscriber::fmt::format()
                 .with_file(true)

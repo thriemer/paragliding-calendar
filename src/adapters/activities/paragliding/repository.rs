@@ -49,13 +49,13 @@ impl ParaglidingSiteProvider for ParaglidingSiteRepository {
         let sites: Vec<ParaglidingSite> = match self.store.get_all_starting_with("site_").await {
             Ok(sites) => sites,
             Err(e) => {
-                tracing::error!("Failed to fetch sites from store: {}", e);
+                tracing::error!(error = ?e, "Failed to fetch sites from store");
                 return vec![];
             }
         };
 
         if sites.is_empty() {
-            tracing::warn!("No sites found in store");
+            tracing::info!("No sites found in store");
             return vec![];
         }
 
@@ -76,7 +76,7 @@ impl ParaglidingSiteProvider for ParaglidingSiteRepository {
             }
         }
 
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         results
     }
 
@@ -84,7 +84,7 @@ impl ParaglidingSiteProvider for ParaglidingSiteRepository {
         match self.store.get_all_starting_with("site_").await {
             Ok(sites) => sites,
             Err(e) => {
-                tracing::error!("Failed to fetch all sites from store: {}", e);
+                tracing::error!(error = ?e, "Failed to fetch all sites from store");
                 vec![]
             }
         }

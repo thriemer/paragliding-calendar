@@ -6,6 +6,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::ServeDir;
 use tower_http::timeout::TimeoutLayer;
+use tower_http::trace::TraceLayer;
 
 use crate::{adapters::http, app_state::AppState, config};
 
@@ -21,8 +22,8 @@ async fn oauth_callback(
             Ok("Authentication successful! You can close this window.".to_string())
         }
         Err(e) => {
-            tracing::error!("Failed to exchange code: {}", e);
-            Err(format!("Failed to exchange code: {}", e))
+            tracing::error!(error = ?e, "Failed to exchange code");
+            Err("Authentication failed".to_string())
         }
     }
 }
@@ -38,6 +39,7 @@ pub async fn run(state: AppState) {
         .route("/oauth/callback", get(oauth_callback))
         .nest("/api", http::router())
         .fallback_service(ServeDir::new("frontend/dist"))
+        .layer(TraceLayer::new_for_http())
         .layer(cors)
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
@@ -47,7 +49,7 @@ pub async fn run(state: AppState) {
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", config.port);
-    tracing::info!("Starting HTTP server on {}", addr);
+    tracing::info!(addr = %addr, "Starting HTTP server");
 
     #[cfg(feature = "tls")]
     {

@@ -41,7 +41,7 @@ impl ActivitySource for ParaglidingActivitySource {
         let mut out = Vec::new();
         for (site, _distance) in sites {
             if site.mute_alerts == Some(true) {
-                tracing::info!("Skipping muted site: {}", site.name);
+                tracing::debug!(site = %site.name, "Skipping muted site");
                 continue;
             }
             let Some(launch) = site.launches.first() else {

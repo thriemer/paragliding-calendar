@@ -45,7 +45,7 @@ pub async fn send_auth_link(url: &str) -> Result<()> {
 
     mailer.send(&email).context("Failed to send email")?;
 
-    tracing::info!("Sent authentication link email to {}", notification_email);
+    tracing::info!("Sent authentication link email");
 
     Ok(())
 }

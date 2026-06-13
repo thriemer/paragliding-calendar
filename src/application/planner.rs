@@ -4,6 +4,8 @@ use anyhow::Result;
 use chrono::{DateTime, Duration, TimeDelta, Utc};
 use futures::future;
 
+use tracing::{Span, instrument};
+
 use crate::domain::{
     activities::{ActivitySuggestion, PlanningContext, TimeWindow, Timing},
     ports::{ActivitySource, CalendarProvider, RoutingProvider},
@@ -22,6 +24,14 @@ impl Planner {
         Self { sources, routing }
     }
 
+    #[instrument(
+        skip_all,
+        fields(
+            horizon_days = (ctx.horizon.end - ctx.horizon.start).num_days(),
+            suggestions_in = tracing::field::Empty,
+            suggestions_out = tracing::field::Empty,
+        )
+    )]
     pub async fn plan<C: CalendarProvider + Send + Sync>(
         &self,
         ctx: &PlanningContext,
@@ -36,6 +46,7 @@ impl Planner {
                 Err(e) => tracing::warn!(error = %e, "activity source failed"),
             }
         }
+        let suggestions_in = raw.len();
 
         let mut out = Vec::new();
         for s in raw {
@@ -95,6 +106,9 @@ impl Planner {
                 (None, None) => std::cmp::Ordering::Equal,
             }
         });
+
+        Span::current().record("suggestions_in", suggestions_in);
+        Span::current().record("suggestions_out", out.len());
 
         Ok(out)
     }
