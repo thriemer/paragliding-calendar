@@ -19,7 +19,9 @@
         && !(lib.hasInfix "/dist/" path);
     };
 
-    npmDepsHash = "sha256-xV/aNbVFaihwUUE5v48qgH3Kx4wai69JL6haOOwbHR4=";
+    npmDepsHash = "sha256-/1dvwBdnhFlGQTIGIXpX2jfB0dSHPM64CC+tTrFApBk=";
+
+    npmFlags = ["--legacy-peer-deps"];
 
     nativeBuildInputs = [nodejs];
 
