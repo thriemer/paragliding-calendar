@@ -14,4 +14,5 @@ export const API = {
   weatherModels: api("/api/weather-models"),
   elevation: (lat: number, lng: number) => api(`/api/elevation?latitude=${lat}&longitude=${lng}`),
   flightAnalyze: api("/api/flights/analyze"),
+  calendarRefresh: api("/api/calendar/refresh"),
 } as const;

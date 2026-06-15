@@ -16,7 +16,7 @@ use crate::{
         google_calendar::GoogleCalendar,
     },
     app_state::AppState,
-    application::flight_analytics,
+    application::{calendar_job, flight_analytics},
     domain::{
         location::Location,
         paragliding::{ParaglidingSite, ParaglidingSiteProvider, UserSettings, flight::Track},
@@ -156,6 +156,17 @@ pub fn router() -> Router<AppState> {
         .route("/settings", get(get_settings))
         .route("/settings", put(save_settings))
         .route("/weather-models", get(get_weather_models))
+        .route("/calendar/refresh", post(trigger_calendar_job))
+}
+
+#[instrument(skip(state))]
+async fn trigger_calendar_job(State(state): State<AppState>) -> StatusCode {
+    tokio::spawn(async move {
+        if let Err(e) = calendar_job::run(&state).await {
+            tracing::error!(error = ?e, "Manual calendar job trigger failed");
+        }
+    });
+    StatusCode::ACCEPTED
 }
 
 #[instrument(skip(state))]

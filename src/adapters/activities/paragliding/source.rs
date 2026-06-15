@@ -27,7 +27,7 @@ impl ParaglidingActivitySource {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl ActivitySource for ParaglidingActivitySource {
     async fn suggest(&self, ctx: &PlanningContext) -> Result<Vec<ActivitySuggestion>> {
         let settings = self.site_repo.get_settings().await?.unwrap_or_default();

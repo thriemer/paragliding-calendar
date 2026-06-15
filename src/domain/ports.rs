@@ -10,7 +10,7 @@ use crate::domain::{
 };
 
 #[cfg_attr(test, mockall::automock)]
-#[async_trait(?Send)]
+#[async_trait]
 pub trait ActivitySource: Send + Sync {
     async fn suggest(&self, ctx: &PlanningContext) -> Result<Vec<ActivitySuggestion>>;
 }

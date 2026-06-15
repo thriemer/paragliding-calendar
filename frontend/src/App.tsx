@@ -4,6 +4,7 @@ import styles from "./styles/App.module.css";
 import { useSites, ApiSite } from "./hooks/useSites";
 import { useUpdateSite } from "./hooks/useUpdateSite";
 import { useSettings, UserSettings } from "./hooks/useSettings";
+import { useCalendarRefresh } from "./hooks/useCalendarRefresh";
 import { SitesMap } from "./components/SitesMap";
 import { FilterPanel, Filters } from "./components/FilterPanel";
 import { SiteEditor } from "./components/SiteEditor";
@@ -22,6 +23,8 @@ function App() {
   const { sites, loading: sitesLoading } = useSites();
   const { updateSite, deleteSite } = useUpdateSite();
   const { settings, updateSettings } = useSettings();
+  const { refresh: refreshCalendar, refreshing: calendarRefreshing, error: calendarRefreshError } =
+    useCalendarRefresh();
 
   const filteredSites = useMemo(() => {
     return sites.filter((site) => {
@@ -99,6 +102,16 @@ function App() {
           <button className="btn" onClick={() => setShowSettings(true)}>
             Settings
           </button>
+          <button
+            className="btn"
+            onClick={() => refreshCalendar()}
+            disabled={calendarRefreshing}
+          >
+            {calendarRefreshing ? "Refreshing…" : "Refresh Calendar"}
+          </button>
+          {calendarRefreshError && (
+            <div className={styles.sidebarError}>{calendarRefreshError}</div>
+          )}
           {sitesLoading ? null : (
             <>
               <FilterPanel
