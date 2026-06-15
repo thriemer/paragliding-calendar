@@ -1,9 +1,20 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import cesium from "vite-plugin-cesium";
+import { viteStaticCopy } from "vite-plugin-static-copy";
 
 export default defineConfig({
-  plugins: [react(), cesium()],
+  plugins: [
+    react(),
+    viteStaticCopy({
+      targets: [
+        {
+          src: "node_modules/cesium/Build/Cesium/{ThirdParty,Workers,Assets,Widgets}/**/*",
+          dest: "cesium",
+          rename: { stripBase: 4 },
+        },
+      ],
+    }),
+  ],
   define: {
     __API_BASE_PATH__: JSON.stringify(process.env.API_BASE_PATH || "/"),
   },
