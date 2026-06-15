@@ -1,8 +1,12 @@
 use anyhow::Result;
-use chrono::{Duration, Utc};
+use async_trait::async_trait;
+use chrono::{DateTime, Duration, Utc};
+use futures::future;
 
 use crate::{
-    adapters::google_calendar::GoogleCalendar,
+    adapters::{
+        google_calendar::GoogleCalendar, microsoft_calendar::MicrosoftCalendar,
+    },
     app_state::AppState,
     domain::{
         activities::{ActivitySuggestion, PlanningContext, TimeWindow, Timing},
@@ -30,13 +34,20 @@ pub async fn run(state: &AppState) -> Result<()> {
         "".to_string(),
     );
 
-    let mut cal = match GoogleCalendar::new(state.auth.clone(), state.cache.clone()).await {
+    let google = match GoogleCalendar::new(state.auth.clone(), state.cache.clone()).await {
         Ok(cal) => cal,
         Err(e) => {
             tracing::error!(error = ?e, "Failed to create Google Calendar");
             return Err(e);
         }
     };
+
+    let microsoft = state
+        .microsoft_auth
+        .as_ref()
+        .map(|auth| MicrosoftCalendar::new(auth.clone(), state.cache.clone()));
+
+    let mut cal = CombinedCalendar { google, microsoft };
 
     cal.create_calendar(&settings.calendar_name).await?;
 
@@ -82,6 +93,54 @@ pub async fn run(state: &AppState) -> Result<()> {
     );
 
     Ok(())
+}
+
+struct CombinedCalendar {
+    google: GoogleCalendar,
+    microsoft: Option<MicrosoftCalendar>,
+}
+
+#[async_trait]
+impl CalendarProvider for CombinedCalendar {
+    async fn is_busy(
+        &self,
+        calendars: &Vec<String>,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<bool> {
+        let google_fut = self.google.is_busy(calendars, start, end);
+        let microsoft_fut = async {
+            if let Some(ms) = self.microsoft.as_ref() {
+                match ms.is_busy(calendars, start, end).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "Microsoft is_busy failed; treating slot as free");
+                        false
+                    }
+                }
+            } else {
+                false
+            }
+        };
+        let (google_busy, microsoft_busy) = future::join(google_fut, microsoft_fut).await;
+        Ok(google_busy? || microsoft_busy)
+    }
+
+    async fn get_calendar_names(&self) -> Result<Vec<String>> {
+        self.google.get_calendar_names().await
+    }
+
+    async fn clear_calendar(&mut self, name: &str) -> Result<()> {
+        self.google.clear_calendar(name).await
+    }
+
+    async fn create_event(&mut self, calendar: &str, event: CalendarEvent) -> Result<()> {
+        self.google.create_event(calendar, event).await
+    }
+
+    async fn create_calendar(&mut self, name: &str) -> Result<()> {
+        self.google.create_calendar(name).await
+    }
 }
 
 fn suggestion_to_event(s: ActivitySuggestion) -> CalendarEvent {

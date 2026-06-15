@@ -28,6 +28,29 @@ async fn oauth_callback(
     }
 }
 
+async fn microsoft_oauth_callback(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<String, String> {
+    let code = params.get("code").ok_or("Missing code parameter")?;
+
+    let auth = state
+        .microsoft_auth
+        .as_ref()
+        .ok_or("Microsoft auth is not configured on this server")?;
+
+    match auth.exchange_code(code).await {
+        Ok(_token) => {
+            tracing::info!("Successfully exchanged Microsoft code for token");
+            Ok("Microsoft authentication successful! You can close this window.".to_string())
+        }
+        Err(e) => {
+            tracing::error!(error = ?e, "Failed to exchange Microsoft code");
+            Err("Microsoft authentication failed".to_string())
+        }
+    }
+}
+
 pub async fn run(state: AppState) {
     let config = config::WebConfig::load().unwrap();
     let cors = CorsLayer::new()
@@ -37,6 +60,7 @@ pub async fn run(state: AppState) {
 
     let app = Router::new()
         .route("/oauth/callback", get(oauth_callback))
+        .route("/oauth/microsoft/callback", get(microsoft_oauth_callback))
         .nest("/api", http::router())
         .fallback_service(ServeDir::new("frontend/dist"))
         .layer(TraceLayer::new_for_http())

@@ -13,6 +13,7 @@ use crate::{
         cache::PersistentCache,
         google_calendar::WebFlowAuthenticator,
         graphhopper::Routing,
+        microsoft_calendar::O365Authenticator,
         open_meteo::OpenMeteoClient,
         store::PersistentStore,
     },
@@ -27,6 +28,7 @@ pub struct AppState {
     pub http: ClientWithMiddleware,
     pub site_repo: Arc<ParaglidingSiteRepository>,
     pub auth: Arc<WebFlowAuthenticator>,
+    pub microsoft_auth: Option<Arc<O365Authenticator>>,
     pub routing: Arc<dyn RoutingProvider>,
     pub weather: Arc<dyn WeatherProvider>,
     pub geo: Arc<dyn GeoProvider>,
@@ -55,8 +57,26 @@ impl AppState {
             cache.clone(),
         ));
 
-        let routing: Arc<dyn RoutingProvider> =
-            Arc::new(Routing::new(cache.clone(), http.clone()));
+        let microsoft_auth = env::var("MICROSOFT_CLIENT_ID").ok().map(|ms_client_id| {
+            let ms_client_secret = env::var("MICROSOFT_CLIENT_SECRET")
+                .expect("MICROSOFT_CLIENT_SECRET required when MICROSOFT_CLIENT_ID is set");
+            let ms_tenant_id = env::var("MICROSOFT_TENANT_ID")
+                .expect("MICROSOFT_TENANT_ID required when MICROSOFT_CLIENT_ID is set");
+            let ms_redirect_uri = env::var("MICROSOFT_OAUTH_REDIRECT_URL").unwrap_or_else(|_| {
+                "https://linus-x1.bangus-firefighter.ts.net:8080/oauth/microsoft/callback"
+                    .to_string()
+            });
+            tracing::info!("Found microsoft Client ID {}", ms_client_id);
+            Arc::new(O365Authenticator::new(
+                ms_client_id,
+                ms_client_secret,
+                ms_tenant_id,
+                ms_redirect_uri,
+                cache.clone(),
+            ))
+        });
+
+        let routing: Arc<dyn RoutingProvider> = Arc::new(Routing::new(cache.clone(), http.clone()));
 
         let open_meteo = Arc::new(OpenMeteoClient::new(cache.clone()));
         let weather: Arc<dyn WeatherProvider> = open_meteo.clone();
@@ -64,9 +84,10 @@ impl AppState {
 
         let site_repo = Arc::new(ParaglidingSiteRepository::new(store.clone()));
 
-        let paragliding_source: Arc<dyn ActivitySource> = Arc::new(
-            ParaglidingActivitySource::new(site_repo.clone(), weather.clone()),
-        );
+        let paragliding_source: Arc<dyn ActivitySource> = Arc::new(ParaglidingActivitySource::new(
+            site_repo.clone(),
+            weather.clone(),
+        ));
         let planner = Arc::new(Planner::new(vec![paragliding_source], routing.clone()));
 
         Ok(Self {
@@ -75,6 +96,7 @@ impl AppState {
             http,
             site_repo,
             auth,
+            microsoft_auth,
             routing,
             weather,
             geo,

@@ -40,6 +40,7 @@ pub struct WebFlowAuthenticator {
     client: BasicClient,
     redirect_uri: String,
     cache: Arc<PersistentCache>,
+    auth_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -73,6 +74,7 @@ impl WebFlowAuthenticator {
             client,
             redirect_uri,
             cache,
+            auth_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -91,6 +93,14 @@ impl WebFlowAuthenticator {
     }
 
     pub async fn wait_for_authentication(&self) -> Result<String> {
+        let _guard = self.auth_lock.lock().await;
+
+        if let Ok(Some(token)) = self.cache.get::<StoredToken>(TOKEN_CACHE_KEY).await {
+            if token.expiry > Utc::now().timestamp() {
+                return Ok(token.access_token);
+            }
+        }
+
         let two_days_secs = 2 * 24 * 60 * 60;
         let check_interval_secs = 10u64;
         let max_attempts = two_days_secs / check_interval_secs;
@@ -260,6 +270,7 @@ impl Clone for WebFlowAuthenticator {
             client: self.client.clone(),
             redirect_uri: self.redirect_uri.clone(),
             cache: self.cache.clone(),
+            auth_lock: self.auth_lock.clone(),
         }
     }
 }

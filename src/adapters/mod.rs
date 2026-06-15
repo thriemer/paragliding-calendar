@@ -4,5 +4,6 @@ pub mod email;
 pub mod google_calendar;
 pub mod graphhopper;
 pub mod http;
+pub mod microsoft_calendar;
 pub mod open_meteo;
 pub mod store;

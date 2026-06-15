@@ -49,3 +49,34 @@ pub async fn send_auth_link(url: &str) -> Result<()> {
 
     Ok(())
 }
+
+pub async fn send_microsoft_auth_link(url: &str) -> Result<()> {
+    let notification_email =
+        env::var("NOTIFICATION_EMAIL").context("Missing NOTIFICATION_EMAIL env var")?;
+    let gmail_address = env::var("GMAIL_ADDRESS").context("Missing GMAIL_ADDRESS env var")?;
+
+    let email = Message::builder()
+        .from(
+            format!("TravelAI <{}>", gmail_address)
+                .parse()
+                .context("Failed to parse from address")?,
+        )
+        .to(
+            notification_email
+                .parse()
+                .context("Failed to parse to address")?,
+        )
+        .subject("Microsoft 365 Calendar Authentication Link")
+        .body(format!(
+            "Click the following link to authenticate with Microsoft 365 Calendar:\n\n{}\n\nAfter clicking, grant permissions and you'll be redirected back.",
+            url
+        ))?;
+
+    let mailer = create_mailer()?;
+
+    mailer.send(&email).context("Failed to send email")?;
+
+    tracing::info!("Sent Microsoft 365 authentication link email");
+
+    Ok(())
+}
