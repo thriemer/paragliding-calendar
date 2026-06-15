@@ -10,6 +10,7 @@ import styles from "./SiteEditor.module.css";
 
 interface SiteEditorProps {
   site: ApiSite;
+  defaultCenter: [number, number];
   onSave: (updatedSite: ApiSite) => void;
   onDelete?: (siteName: string) => void;
   onCancel: () => void;
@@ -77,7 +78,7 @@ function ParkingLocationPicker({
   );
 }
 
-export function SiteEditor({ site, onSave, onDelete, onCancel }: SiteEditorProps) {
+export function SiteEditor({ site, defaultCenter, onSave, onDelete, onCancel }: SiteEditorProps) {
   const { models } = useWeatherModels();
   const [name, setName] = useState(site.name);
   const [country, setCountry] = useState(site.country || "");
@@ -109,8 +110,8 @@ export function SiteEditor({ site, onSave, onDelete, onCancel }: SiteEditorProps
   };
 
   const addLaunch = () => {
-    const defaultLat = launches[0]?.location.latitude || 47.0;
-    const defaultLng = launches[0]?.location.longitude || 10.0;
+    const defaultLat = launches[0]?.location.latitude || defaultCenter[0];
+    const defaultLng = launches[0]?.location.longitude || defaultCenter[1];
     setLaunches([
       ...launches,
       {
@@ -124,8 +125,8 @@ export function SiteEditor({ site, onSave, onDelete, onCancel }: SiteEditorProps
   };
 
   const addLanding = () => {
-    const defaultLat = landings[0]?.location.latitude || 47.0;
-    const defaultLng = landings[0]?.location.longitude || 10.0;
+    const defaultLat = landings[0]?.location.latitude || defaultCenter[0];
+    const defaultLng = landings[0]?.location.longitude || defaultCenter[1];
     setLandings([
       ...landings,
       {
@@ -218,8 +219,8 @@ export function SiteEditor({ site, onSave, onDelete, onCancel }: SiteEditorProps
           />
         ) : (
           <button className="btn btn-small" onClick={() => setParkingLocation({
-            latitude: launches[0]?.location.latitude || 47.0,
-            longitude: launches[0]?.location.longitude || 10.0,
+            latitude: launches[0]?.location.latitude || defaultCenter[0],
+            longitude: launches[0]?.location.longitude || defaultCenter[1],
             name: "",
             country: country || null,
           })}>

@@ -38,6 +38,14 @@ function App() {
     });
   }, [sites, filters]);
 
+  const defaultCenter = useMemo<[number, number]>(() => {
+    if (mapView) return mapView.center;
+    if (settings && settings.location_latitude && settings.location_longitude) {
+      return [settings.location_latitude, settings.location_longitude];
+    }
+    return [47.0, 10.0];
+  }, [mapView, settings]);
+
   const handleSiteClick = (site: ApiSite) => {
     setSelectedSite(site);
   };
@@ -144,6 +152,7 @@ function App() {
           <SiteEditor
             key={selectedSite.name || "new"}
             site={selectedSite}
+            defaultCenter={defaultCenter}
             onSave={handleSaveSite}
             onDelete={selectedSite.name ? handleDeleteSite : undefined}
             onCancel={() => setSelectedSite(null)}

@@ -45,6 +45,7 @@ function renderEditor(site: ApiSite, opts: {
     <Wrapper>
       <SiteEditor
         site={site}
+        defaultCenter={[47.0, 10.0]}
         onSave={opts.onSave ?? (() => {})}
         onDelete={opts.onDelete}
         onCancel={opts.onCancel ?? (() => {})}
@@ -133,6 +134,7 @@ describe("SiteEditor", () => {
       <Wrapper>
         <SiteEditor
           site={sampleSite}
+          defaultCenter={[47.0, 10.0]}
           onSave={() => {}}
           onDelete={() => {}}
           onCancel={() => {}}
