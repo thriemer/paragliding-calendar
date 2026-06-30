@@ -4,15 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::location::Location;
 
-pub trait ParaglidingSiteProvider {
-    async fn fetch_all_sites(&self) -> Vec<ParaglidingSite>;
-    async fn fetch_launches_within_radius(
-        &self,
-        center: &Location,
-        radius_km: f64,
-    ) -> Vec<(ParaglidingSite, f64)>;
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParaglidingSite {
     pub name: String,

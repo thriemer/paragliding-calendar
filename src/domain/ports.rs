@@ -3,11 +3,25 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 
 use crate::domain::{
-    activities::{ActivitySuggestion, PlanningContext},
+    activities::{ActivitySuggestion, Plan, PlanningContext, TimeWindow},
     calendar::CalendarEvent,
     location::Location,
+    paragliding::ParaglidingSite,
     weather::{WeatherForecast, WeatherModel},
 };
+
+pub struct SolverInput {
+    pub candidates: Vec<ActivitySuggestion>,
+    pub origin: Location,
+    pub free_slots: Vec<TimeWindow>,
+    pub num_alternatives: usize,
+}
+
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait WeekSolver: Send + Sync {
+    async fn solve(&self, input: SolverInput) -> Result<Vec<Plan>>;
+}
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
@@ -39,7 +53,7 @@ pub trait RoutingProvider: Send + Sync {
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub trait CalendarProvider {
+pub trait CalendarProvider: Send + Sync {
     async fn is_busy(
         &self,
         calendars: &Vec<String>,
@@ -47,9 +61,9 @@ pub trait CalendarProvider {
         end: DateTime<Utc>,
     ) -> Result<bool>;
     async fn get_calendar_names(&self) -> Result<Vec<String>>;
-    async fn clear_calendar(&mut self, name: &str) -> Result<()>;
-    async fn create_event(&mut self, calendar: &str, event: CalendarEvent) -> Result<()>;
-    async fn create_calendar(&mut self, name: &str) -> Result<()>;
+    async fn clear_calendar(&self, name: &str) -> Result<()>;
+    async fn create_event(&self, calendar: &str, event: CalendarEvent) -> Result<()>;
+    async fn create_calendar(&self, name: &str) -> Result<()>;
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -58,4 +72,13 @@ pub trait GeoProvider: Send + Sync {
     async fn geocode(&self, location_name: &str) -> Result<Vec<Location>>;
 
     async fn fetch_elevation(&self, latitude: f64, longitude: f64) -> Result<f64>;
+}
+
+pub trait ParaglidingSiteProvider {
+    async fn fetch_all_sites(&self) -> Vec<ParaglidingSite>;
+    async fn fetch_launches_within_radius(
+        &self,
+        center: &Location,
+        radius_km: f64,
+    ) -> Vec<(ParaglidingSite, f64)>;
 }

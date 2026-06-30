@@ -1,0 +1,63 @@
+use anyhow::Result;
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use futures::future;
+
+use crate::{
+    adapters::{google_calendar::GoogleCalendar, microsoft_calendar::MicrosoftCalendar},
+    domain::{calendar::CalendarEvent, ports::CalendarProvider},
+};
+
+pub struct CombinedCalendar {
+    google: GoogleCalendar,
+    microsoft: Option<MicrosoftCalendar>,
+}
+
+impl CombinedCalendar {
+    pub fn new(google: GoogleCalendar, microsoft: Option<MicrosoftCalendar>) -> Self {
+        Self { google, microsoft }
+    }
+}
+
+#[async_trait]
+impl CalendarProvider for CombinedCalendar {
+    async fn is_busy(
+        &self,
+        calendars: &Vec<String>,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<bool> {
+        let google_fut = self.google.is_busy(calendars, start, end);
+        let microsoft_fut = async {
+            if let Some(ms) = self.microsoft.as_ref() {
+                match ms.is_busy(calendars, start, end).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "Microsoft is_busy failed; treating slot as free");
+                        false
+                    }
+                }
+            } else {
+                false
+            }
+        };
+        let (google_busy, microsoft_busy) = future::join(google_fut, microsoft_fut).await;
+        Ok(google_busy? || microsoft_busy)
+    }
+
+    async fn get_calendar_names(&self) -> Result<Vec<String>> {
+        self.google.get_calendar_names().await
+    }
+
+    async fn clear_calendar(&self, name: &str) -> Result<()> {
+        self.google.clear_calendar(name).await
+    }
+
+    async fn create_event(&self, calendar: &str, event: CalendarEvent) -> Result<()> {
+        self.google.create_event(calendar, event).await
+    }
+
+    async fn create_calendar(&self, name: &str) -> Result<()> {
+        self.google.create_calendar(name).await
+    }
+}

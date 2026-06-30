@@ -1,9 +1,7 @@
-use std::env;
-
 use anyhow::Result;
 use tokio::time;
 
-use crate::app_state::AppState;
+use crate::{app_state::AppState, config::AppConfig};
 
 mod adapters;
 mod app_state;
@@ -23,12 +21,9 @@ async fn main() -> Result<()> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    let db_path = env::var("XDG_DATA_HOME")
-        .ok()
-        .or(env::var("CACHE_DIRECTORY").ok())
-        .expect("Cache environment variable not set.");
-    let db = fjall::Database::builder(&db_path).open()?;
-    let state = AppState::new(&db)?;
+    let cfg = AppConfig::from_env()?;
+    let db = fjall::Database::builder(&cfg.db_path).open()?;
+    let state = AppState::new(&db, &cfg)?;
 
     let job_state = state.clone();
     tokio::join!(

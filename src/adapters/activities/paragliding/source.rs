@@ -7,9 +7,8 @@ use chrono::Duration;
 use crate::{
     adapters::activities::paragliding::{repository::ParaglidingSiteRepository, site_evaluator},
     domain::{
-        activities::{ActivityKind, ActivitySuggestion, PlanningContext, TimeWindow, Timing},
-        paragliding::ParaglidingSiteProvider,
-        ports::{ActivitySource, WeatherProvider},
+        activities::{ActivityKind, ActivitySuggestion, PlanningContext, Score, TimeWindow, Timing},
+        ports::{ActivitySource, ParaglidingSiteProvider, WeatherProvider},
     },
 };
 
@@ -69,6 +68,22 @@ impl ActivitySource for ParaglidingActivitySource {
             let eval = site_evaluator::evaluate_site(&site, &forecast).await;
             for day in eval.daily_summaries {
                 for range in day.ranges {
+                    let range_scores: Vec<&site_evaluator::HourlyScore> = day
+                        .hourly_scores
+                        .iter()
+                        .filter(|h| h.timestamp >= range.start && h.timestamp <= range.end)
+                        .collect();
+
+                    let total_score: f32 = range_scores.iter().map(|h| h.score).sum();
+                    let num_hours = range_scores.len() as f32;
+                    let hourly_average = if num_hours > 0.0 {
+                        total_score / num_hours
+                    } else {
+                        0.0
+                    };
+                    let reasons: Vec<String> =
+                        range_scores.iter().map(|h| h.reason.clone()).collect();
+
                     out.push(ActivitySuggestion {
                         kind: ActivityKind::Paragliding,
                         location: launch.location.clone(),
@@ -81,7 +96,11 @@ impl ActivitySource for ParaglidingActivitySource {
                         },
                         title: site.name.clone(),
                         description: String::new(),
-                        score: None,
+                        score: Some(Score {
+                            value: total_score,
+                            hourly_average,
+                            reasons,
+                        }),
                     });
                 }
             }
@@ -264,6 +283,9 @@ mod tests {
         assert_eq!(window.start, day + chrono::Duration::hours(10));
         assert_eq!(window.end, day + chrono::Duration::hours(14));
         assert_eq!(out[0].title, "S");
+        let score = out[0].score.as_ref().expect("expected a score");
+        assert!((score.value - 4.91).abs() < 0.1, "expected score ~4.91, got {}", score.value);
+        assert_eq!(score.reasons.len(), 5, "expected one reason per hour");
     }
 
     #[tokio::test]

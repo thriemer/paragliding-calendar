@@ -11,16 +11,13 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tracing::instrument;
 
 use crate::{
-    adapters::{
-        activities::paragliding::dhv,
-        google_calendar::GoogleCalendar,
-    },
+    adapters::activities::paragliding::dhv,
     app_state::AppState,
     application::{calendar_job, flight_analytics},
     domain::{
         location::Location,
-        paragliding::{ParaglidingSite, ParaglidingSiteProvider, UserSettings, flight::Track},
-        ports::CalendarProvider,
+        paragliding::{ParaglidingSite, UserSettings, flight::Track},
+        ports::ParaglidingSiteProvider,
         weather::WeatherModel,
     },
 };
@@ -103,11 +100,8 @@ async fn geocode(
 async fn get_settings(
     State(state): State<AppState>,
 ) -> Result<Json<UserSettingsResponse>, StatusCode> {
-    let cal = GoogleCalendar::new(state.auth.clone(), state.cache.clone())
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let calendars = cal
+    let calendars = state
+        .calendar
         .get_calendar_names()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

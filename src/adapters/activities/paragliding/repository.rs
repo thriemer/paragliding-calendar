@@ -6,7 +6,8 @@ use crate::{
     adapters::store::PersistentStore,
     domain::{
         location::Location,
-        paragliding::{ParaglidingSite, ParaglidingSiteProvider, UserSettings},
+        paragliding::{ParaglidingSite, UserSettings},
+        ports::ParaglidingSiteProvider,
     },
 };
 

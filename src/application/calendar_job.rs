@@ -1,19 +1,13 @@
 use anyhow::Result;
-use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
-use futures::future;
+use chrono::{Duration, Utc};
 
 use crate::{
-    adapters::{
-        google_calendar::GoogleCalendar, microsoft_calendar::MicrosoftCalendar,
-    },
     app_state::AppState,
     domain::{
-        activities::{ActivitySuggestion, PlanningContext, TimeWindow, Timing},
+        activities::{PlanningContext, ScheduledActivity, TimeWindow},
         calendar::CalendarEvent,
         location::Location,
         paragliding::UserSettings,
-        ports::CalendarProvider,
     },
 };
 
@@ -34,21 +28,7 @@ pub async fn run(state: &AppState) -> Result<()> {
         "".to_string(),
     );
 
-    let google = match GoogleCalendar::new(state.auth.clone(), state.cache.clone()).await {
-        Ok(cal) => cal,
-        Err(e) => {
-            tracing::error!(error = ?e, "Failed to create Google Calendar");
-            return Err(e);
-        }
-    };
-
-    let microsoft = state
-        .microsoft_auth
-        .as_ref()
-        .map(|auth| MicrosoftCalendar::new(auth.clone(), state.cache.clone()));
-
-    let mut cal = CombinedCalendar { google, microsoft };
-
+    let cal = state.calendar.as_ref();
     cal.create_calendar(&settings.calendar_name).await?;
 
     let mut conflict_calendars = cal.get_calendar_names().await?;
@@ -64,7 +44,7 @@ pub async fn run(state: &AppState) -> Result<()> {
         conflict_calendars,
     };
 
-    let suggestions = state.planner.plan(&ctx, &cal).await?;
+    let plans = state.planner.plan(&ctx, cal).await?;
 
     if let Err(e) = cal.clear_calendar(&settings.calendar_name).await {
         tracing::error!(
@@ -76,13 +56,15 @@ pub async fn run(state: &AppState) -> Result<()> {
     }
 
     let mut event_counter = 0;
-    for s in suggestions {
-        let event = suggestion_to_event(s);
-        if let Err(e) = cal.create_event(&settings.calendar_name, event).await {
-            tracing::error!(error = ?e, "Failed to create event");
-            return Err(e);
+    for plan in plans {
+        for a in plan.items {
+            let event = activity_to_event(a);
+            if let Err(e) = cal.create_event(&settings.calendar_name, event).await {
+                tracing::error!(error = ?e, "Failed to create event");
+                return Err(e);
+            }
+            event_counter += 1;
         }
-        event_counter += 1;
     }
 
     tracing::Span::current().record("event_count", event_counter);
@@ -95,65 +77,13 @@ pub async fn run(state: &AppState) -> Result<()> {
     Ok(())
 }
 
-struct CombinedCalendar {
-    google: GoogleCalendar,
-    microsoft: Option<MicrosoftCalendar>,
-}
-
-#[async_trait]
-impl CalendarProvider for CombinedCalendar {
-    async fn is_busy(
-        &self,
-        calendars: &Vec<String>,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
-    ) -> Result<bool> {
-        let google_fut = self.google.is_busy(calendars, start, end);
-        let microsoft_fut = async {
-            if let Some(ms) = self.microsoft.as_ref() {
-                match ms.is_busy(calendars, start, end).await {
-                    Ok(b) => b,
-                    Err(e) => {
-                        tracing::warn!(error = ?e, "Microsoft is_busy failed; treating slot as free");
-                        false
-                    }
-                }
-            } else {
-                false
-            }
-        };
-        let (google_busy, microsoft_busy) = future::join(google_fut, microsoft_fut).await;
-        Ok(google_busy? || microsoft_busy)
-    }
-
-    async fn get_calendar_names(&self) -> Result<Vec<String>> {
-        self.google.get_calendar_names().await
-    }
-
-    async fn clear_calendar(&mut self, name: &str) -> Result<()> {
-        self.google.clear_calendar(name).await
-    }
-
-    async fn create_event(&mut self, calendar: &str, event: CalendarEvent) -> Result<()> {
-        self.google.create_event(calendar, event).await
-    }
-
-    async fn create_calendar(&mut self, name: &str) -> Result<()> {
-        self.google.create_calendar(name).await
-    }
-}
-
-fn suggestion_to_event(s: ActivitySuggestion) -> CalendarEvent {
-    let (start, end) = match s.timing {
-        Timing::Flexible { window, .. } => (window.start, window.end),
-        Timing::Fixed { start, end } => (start, end),
-    };
+fn activity_to_event(a: ScheduledActivity) -> CalendarEvent {
     CalendarEvent {
-        title: s.title.clone(),
-        start_time: start,
-        end_time: end,
+        title: a.title.clone(),
+        start_time: a.start,
+        end_time: a.end,
         is_all_day: false,
-        location: Some(s.title),
+        location: Some(a.title),
         body: Some(format!("Last updated (Utc): {}", Utc::now())),
     }
 }

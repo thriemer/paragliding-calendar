@@ -16,9 +16,70 @@ impl WebConfig {
             .unwrap_or(8080);
 
         Ok(WebConfig {
-            port: port,
+            port,
             #[cfg(feature = "tls")]
             tls_config_path: (env::var("TLS_CERT_PATH")?, env::var("TLS_KEY_PATH")?),
+        })
+    }
+}
+
+pub struct GoogleOAuthConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_uri: String,
+}
+
+pub struct MicrosoftOAuthConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    pub tenant_id: String,
+    pub redirect_uri: String,
+}
+
+pub struct AppConfig {
+    pub db_path: String,
+    pub google: GoogleOAuthConfig,
+    pub microsoft: Option<MicrosoftOAuthConfig>,
+}
+
+impl AppConfig {
+    pub fn from_env() -> Result<Self> {
+        let db_path = env::var("XDG_DATA_HOME")
+            .ok()
+            .or_else(|| env::var("CACHE_DIRECTORY").ok())
+            .ok_or_else(|| anyhow::anyhow!("XDG_DATA_HOME or CACHE_DIRECTORY must be set"))?;
+
+        let google = GoogleOAuthConfig {
+            client_id: env::var("GOOGLE_CLIENT_ID")
+                .map_err(|_| anyhow::anyhow!("Missing GOOGLE_CLIENT_ID"))?,
+            client_secret: env::var("GOOGLE_CLIENT_SECRET")
+                .map_err(|_| anyhow::anyhow!("Missing GOOGLE_CLIENT_SECRET"))?,
+            redirect_uri: env::var("OAUTH_REDIRECT_URL").unwrap_or_else(|_| {
+                "https://linus-x1.bangus-firefighter.ts.net:8080/oauth/callback".to_string()
+            }),
+        };
+
+        let microsoft = env::var("MICROSOFT_CLIENT_ID").ok().map(|client_id| {
+            let client_secret = env::var("MICROSOFT_CLIENT_SECRET")
+                .expect("MICROSOFT_CLIENT_SECRET required when MICROSOFT_CLIENT_ID is set");
+            let tenant_id = env::var("MICROSOFT_TENANT_ID")
+                .expect("MICROSOFT_TENANT_ID required when MICROSOFT_CLIENT_ID is set");
+            let redirect_uri = env::var("MICROSOFT_OAUTH_REDIRECT_URL").unwrap_or_else(|_| {
+                "https://linus-x1.bangus-firefighter.ts.net:8080/oauth/microsoft/callback"
+                    .to_string()
+            });
+            MicrosoftOAuthConfig {
+                client_id,
+                client_secret,
+                tenant_id,
+                redirect_uri,
+            }
+        });
+
+        Ok(Self {
+            db_path,
+            google,
+            microsoft,
         })
     }
 }

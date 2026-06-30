@@ -34,6 +34,19 @@ pub enum Timing {
 #[derive(Debug, Clone)]
 pub struct Score {
     pub value: f32,
+    /// Average score per hour over the full window.
+    ///
+    /// Used to prorate [`ScheduledActivity::fun`] when the solver places a
+    /// flexible activity for less than its full window.  This gives the
+    /// ranker the correct incentive: a 5‑hour window with sum=5.0 and a
+    /// 2‑hour window with sum=2.0 both get hourly_average=1.0, so they
+    /// contribute the same amount per scheduled hour.
+    ///
+    /// **Future option:** if the average loses too much information (e.g.
+    /// the best hours cluster in one part of the window), store a
+    /// `Vec<f32>` of per‑hour scores and compute the exact sum over the
+    /// actually‑used time range instead.
+    pub hourly_average: f32,
     pub reasons: Vec<String>,
 }
 
@@ -52,6 +65,24 @@ pub struct PlanningContext {
     pub home: Location,
     pub horizon: TimeWindow,
     pub conflict_calendars: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScheduledActivity {
+    pub kind: ActivityKind,
+    pub location: Location,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    pub title: String,
+    pub description: String,
+    pub fun: f32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Plan {
+    pub items: Vec<ScheduledActivity>,
+    pub total_fun: f32,
+    pub total_drive: Duration,
 }
 
 #[cfg(test)]

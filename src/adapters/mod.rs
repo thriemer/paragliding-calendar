@@ -1,5 +1,6 @@
 pub mod activities;
 pub mod cache;
+pub mod combined_calendar;
 pub mod email;
 pub mod google_calendar;
 pub mod graphhopper;

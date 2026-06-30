@@ -7,9 +7,8 @@ use tracing;
 
 use crate::domain::{
     location::Location,
-    paragliding::{
-        ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, ParaglidingSiteProvider, SiteType,
-    },
+    paragliding::{ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, SiteType},
+    ports::ParaglidingSiteProvider,
 };
 use tracing::instrument;
 

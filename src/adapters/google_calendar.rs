@@ -284,7 +284,7 @@ pub struct GoogleCalendar {
 }
 
 impl GoogleCalendar {
-    pub async fn new(
+    pub fn new(
         auth: Arc<WebFlowAuthenticator>,
         cache: Arc<PersistentCache>,
     ) -> Result<Self> {
@@ -439,7 +439,7 @@ impl CalendarProvider for GoogleCalendar {
     }
 
     #[instrument(skip(self), fields(calendar = %name))]
-    async fn clear_calendar(&mut self, name: &str) -> anyhow::Result<()> {
+    async fn clear_calendar(&self, name: &str) -> anyhow::Result<()> {
         let calendar_id = self.get_id_for_name(name).await?;
         let mut page_token: Option<String> = None;
         let mut counter = 0;
@@ -484,7 +484,7 @@ impl CalendarProvider for GoogleCalendar {
     }
 
     #[instrument(skip(self), fields(calendar = %calendar))]
-    async fn create_event(&mut self, calendar: &str, event: CalendarEvent) -> Result<()> {
+    async fn create_event(&self, calendar: &str, event: CalendarEvent) -> Result<()> {
         let id = self.get_id_for_name(calendar).await?;
         self.hub
             .events()
@@ -510,7 +510,7 @@ impl CalendarProvider for GoogleCalendar {
     }
 
     #[instrument(skip(self), fields(calendar = %name))]
-    async fn create_calendar(&mut self, name: &str) -> Result<()> {
+    async fn create_calendar(&self, name: &str) -> Result<()> {
         if self.get_calendar_names().await?.contains(&name.to_owned()) {
             tracing::info!(name = %name, "Calendar already exists, skipping creation");
             return Ok(());

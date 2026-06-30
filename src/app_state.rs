@@ -1,4 +1,4 @@
-use std::{env, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::Result;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -11,14 +11,18 @@ use crate::{
             repository::ParaglidingSiteRepository, source::ParaglidingActivitySource,
         },
         cache::PersistentCache,
-        google_calendar::WebFlowAuthenticator,
+        combined_calendar::CombinedCalendar,
+        google_calendar::{GoogleCalendar, WebFlowAuthenticator},
         graphhopper::Routing,
-        microsoft_calendar::O365Authenticator,
+        microsoft_calendar::{MicrosoftCalendar, O365Authenticator},
         open_meteo::OpenMeteoClient,
         store::PersistentStore,
     },
-    application::Planner,
-    domain::ports::{ActivitySource, GeoProvider, RoutingProvider, WeatherProvider},
+    application::{Planner, solvers::GreedyDiversitySolver},
+    config::AppConfig,
+    domain::ports::{
+        ActivitySource, CalendarProvider, GeoProvider, RoutingProvider, WeatherProvider, WeekSolver,
+    },
 };
 
 #[derive(Clone)]
@@ -32,11 +36,13 @@ pub struct AppState {
     pub routing: Arc<dyn RoutingProvider>,
     pub weather: Arc<dyn WeatherProvider>,
     pub geo: Arc<dyn GeoProvider>,
+    pub calendar: Arc<dyn CalendarProvider>,
+    pub solver: Arc<dyn WeekSolver>,
     pub planner: Arc<Planner>,
 }
 
 impl AppState {
-    pub fn new(db: &fjall::Database) -> Result<Self> {
+    pub fn new(db: &fjall::Database, cfg: &AppConfig) -> Result<Self> {
         let cache_ks = db.keyspace("cache", fjall::KeyspaceCreateOptions::default)?;
         let cache = Arc::new(PersistentCache::from_keyspace(cache_ks));
 
@@ -45,33 +51,20 @@ impl AppState {
 
         let http = build_http_client();
 
-        let client_id = env::var("GOOGLE_CLIENT_ID").expect("Missing GOOGLE_CLIENT_ID");
-        let client_secret = env::var("GOOGLE_CLIENT_SECRET").expect("Missing GOOGLE_CLIENT_SECRET");
-        let redirect_uri = env::var("OAUTH_REDIRECT_URL").unwrap_or_else(|_| {
-            "https://linus-x1.bangus-firefighter.ts.net:8080/oauth/callback".to_string()
-        });
         let auth = Arc::new(WebFlowAuthenticator::new(
-            client_id,
-            client_secret,
-            redirect_uri,
+            cfg.google.client_id.clone(),
+            cfg.google.client_secret.clone(),
+            cfg.google.redirect_uri.clone(),
             cache.clone(),
         ));
 
-        let microsoft_auth = env::var("MICROSOFT_CLIENT_ID").ok().map(|ms_client_id| {
-            let ms_client_secret = env::var("MICROSOFT_CLIENT_SECRET")
-                .expect("MICROSOFT_CLIENT_SECRET required when MICROSOFT_CLIENT_ID is set");
-            let ms_tenant_id = env::var("MICROSOFT_TENANT_ID")
-                .expect("MICROSOFT_TENANT_ID required when MICROSOFT_CLIENT_ID is set");
-            let ms_redirect_uri = env::var("MICROSOFT_OAUTH_REDIRECT_URL").unwrap_or_else(|_| {
-                "https://linus-x1.bangus-firefighter.ts.net:8080/oauth/microsoft/callback"
-                    .to_string()
-            });
-            tracing::info!("Found microsoft Client ID {}", ms_client_id);
+        let microsoft_auth = cfg.microsoft.as_ref().map(|ms| {
+            tracing::info!("Found microsoft Client ID {}", ms.client_id);
             Arc::new(O365Authenticator::new(
-                ms_client_id,
-                ms_client_secret,
-                ms_tenant_id,
-                ms_redirect_uri,
+                ms.client_id.clone(),
+                ms.client_secret.clone(),
+                ms.tenant_id.clone(),
+                ms.redirect_uri.clone(),
                 cache.clone(),
             ))
         });
@@ -88,7 +81,18 @@ impl AppState {
             site_repo.clone(),
             weather.clone(),
         ));
-        let planner = Arc::new(Planner::new(vec![paragliding_source], routing.clone()));
+        let solver: Arc<dyn WeekSolver> = Arc::new(GreedyDiversitySolver::new(routing.clone()));
+        let planner = Arc::new(Planner::new(
+            vec![paragliding_source],
+            solver.clone(),
+        ));
+
+        let google_cal = GoogleCalendar::new(auth.clone(), cache.clone())?;
+        let microsoft_cal = microsoft_auth
+            .as_ref()
+            .map(|a| MicrosoftCalendar::new(a.clone(), cache.clone()));
+        let calendar: Arc<dyn CalendarProvider> =
+            Arc::new(CombinedCalendar::new(google_cal, microsoft_cal));
 
         Ok(Self {
             cache,
@@ -100,6 +104,8 @@ impl AppState {
             routing,
             weather,
             geo,
+            calendar,
+            solver,
             planner,
         })
     }

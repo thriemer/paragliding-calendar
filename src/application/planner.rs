@@ -7,36 +7,42 @@ use futures::future;
 use tracing::{Span, instrument};
 
 use crate::domain::{
-    activities::{ActivitySuggestion, PlanningContext, TimeWindow, Timing},
-    ports::{ActivitySource, CalendarProvider, RoutingProvider},
+    activities::{ActivitySuggestion, Plan, PlanningContext, TimeWindow, Timing},
+    ports::{ActivitySource, CalendarProvider, SolverInput, WeekSolver},
 };
 
 pub struct Planner {
     sources: Vec<Arc<dyn ActivitySource>>,
-    routing: Arc<dyn RoutingProvider>,
+    solver: Arc<dyn WeekSolver>,
+    pub num_alternatives: usize,
 }
 
 impl Planner {
     pub fn new(
         sources: Vec<Arc<dyn ActivitySource>>,
-        routing: Arc<dyn RoutingProvider>,
+        solver: Arc<dyn WeekSolver>,
     ) -> Self {
-        Self { sources, routing }
+        Self {
+            sources,
+            solver,
+            num_alternatives: 2,
+        }
     }
 
     #[instrument(
         skip_all,
         fields(
             horizon_days = (ctx.horizon.end - ctx.horizon.start).num_days(),
-            suggestions_in = tracing::field::Empty,
-            suggestions_out = tracing::field::Empty,
+            candidates_in = tracing::field::Empty,
+            candidates_out = tracing::field::Empty,
+            plans = tracing::field::Empty,
         )
     )]
-    pub async fn plan<C: CalendarProvider + Send + Sync>(
+    pub async fn plan(
         &self,
         ctx: &PlanningContext,
-        calendar: &C,
-    ) -> Result<Vec<ActivitySuggestion>> {
+        calendar: &dyn CalendarProvider,
+    ) -> Result<Vec<Plan>> {
         let per_source = future::join_all(self.sources.iter().map(|s| s.suggest(ctx))).await;
 
         let mut raw: Vec<ActivitySuggestion> = Vec::new();
@@ -46,78 +52,43 @@ impl Planner {
                 Err(e) => tracing::warn!(error = %e, "activity source failed"),
             }
         }
-        let suggestions_in = raw.len();
+        let candidates_in = raw.len();
 
-        let mut out = Vec::new();
+        let mut candidates: Vec<ActivitySuggestion> = Vec::new();
         for s in raw {
             match &s.timing {
-                Timing::Fixed { start, end } => {
-                    let busy = calendar
-                        .is_busy(&ctx.conflict_calendars, *start, *end)
-                        .await
-                        .unwrap_or(false);
-                    if !busy {
-                        out.push(s);
-                    }
-                }
-                Timing::Flexible {
-                    window,
-                    min_duration,
-                } => {
-                    let sub_windows =
-                        slice_by_calendar(*window, &ctx.conflict_calendars, calendar).await;
-                    if sub_windows.is_empty() {
-                        continue;
-                    }
-
-                    let travel = self
-                        .routing
-                        .get_travel_time(&ctx.home, &s.location)
-                        .await?;
-
-                    for w in sub_windows {
-                        let adjusted = TimeWindow {
-                            start: w.start + travel,
-                            end: w.end - travel,
-                        };
-                        if adjusted.end > adjusted.start
-                            && adjusted.duration() >= *min_duration
-                        {
-                            out.push(ActivitySuggestion {
-                                timing: Timing::Flexible {
-                                    window: adjusted,
-                                    min_duration: *min_duration,
-                                },
-                                ..s.clone()
-                            });
-                        }
+                Timing::Fixed { .. } => candidates.push(s),
+                Timing::Flexible { window, min_duration } => {
+                    if window.duration() >= *min_duration {
+                        candidates.push(s);
                     }
                 }
             }
         }
 
-        out.sort_by(|a, b| {
-            let av = a.score.as_ref().map(|s| s.value);
-            let bv = b.score.as_ref().map(|s| s.value);
-            match (av, bv) {
-                (Some(x), Some(y)) => y.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Equal),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            }
-        });
+        let free_slots = slice_by_calendar(ctx.horizon, &ctx.conflict_calendars, calendar).await;
 
-        Span::current().record("suggestions_in", suggestions_in);
-        Span::current().record("suggestions_out", out.len());
+        let input = SolverInput {
+            candidates,
+            origin: ctx.home.clone(),
+            free_slots,
+            num_alternatives: self.num_alternatives,
+        };
+        let candidates_out = input.candidates.len();
+        let plans = self.solver.solve(input).await?;
 
-        Ok(out)
+        Span::current().record("candidates_in", candidates_in);
+        Span::current().record("candidates_out", candidates_out);
+        Span::current().record("plans", plans.len());
+
+        Ok(plans)
     }
 }
 
-async fn slice_by_calendar<C: CalendarProvider + Send + Sync>(
+async fn slice_by_calendar(
     window: TimeWindow,
     conflict_calendars: &Vec<String>,
-    calendar: &C,
+    calendar: &dyn CalendarProvider,
 ) -> Vec<TimeWindow> {
     let hour = TimeDelta::hours(1);
     let mut hours: Vec<DateTime<Utc>> = Vec::new();
@@ -170,10 +141,15 @@ fn run_to_window(run: &[DateTime<Utc>]) -> Option<TimeWindow> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{
-        activities::{ActivityKind, Score},
-        location::Location,
-        ports::{MockActivitySource, MockCalendarProvider, MockRoutingProvider},
+    use crate::{
+        application::solvers::GreedyDiversitySolver,
+        domain::{
+            activities::{ActivityKind, Score},
+            location::Location,
+            ports::{
+                MockActivitySource, MockCalendarProvider, MockRoutingProvider, RoutingProvider,
+            },
+        },
     };
     use chrono::{TimeZone, Timelike};
 
@@ -201,6 +177,7 @@ mod tests {
     }
 
     fn fixed_suggestion(start_hour: u32, end_hour: u32, score: Option<f32>) -> ActivitySuggestion {
+        let duration_hours = (end_hour - start_hour).max(1) as f32;
         ActivitySuggestion {
             kind: ActivityKind::Paragliding,
             location: site_loc(),
@@ -212,12 +189,14 @@ mod tests {
             description: String::new(),
             score: score.map(|v| Score {
                 value: v,
+                hourly_average: v / duration_hours,
                 reasons: vec![],
             }),
         }
     }
 
     fn flexible_suggestion(start_hour: u32, end_hour: u32) -> ActivitySuggestion {
+        let window_hours = (end_hour - start_hour).max(1) as f32;
         ActivitySuggestion {
             kind: ActivityKind::Paragliding,
             location: site_loc(),
@@ -230,7 +209,11 @@ mod tests {
             },
             title: format!("flex-{start_hour}-{end_hour}"),
             description: String::new(),
-            score: None,
+            score: Some(Score {
+                value: 0.5,
+                hourly_average: 0.5 / window_hours,
+                reasons: vec![],
+            }),
         }
     }
 
@@ -254,160 +237,101 @@ mod tests {
         Arc::new(src)
     }
 
+    fn solver(routing: Arc<dyn RoutingProvider>) -> Arc<dyn WeekSolver> {
+        Arc::new(GreedyDiversitySolver::new(routing))
+    }
+
+    fn activities_in(plan: &Plan) -> Vec<&str> {
+        plan.items.iter().map(|a| a.title.as_str()).collect()
+    }
+
     #[tokio::test]
-    async fn fixed_timing_dropped_when_busy() {
+    async fn fixed_dropped_when_calendar_busy() {
+        let routing = fixed_travel();
         let planner = Planner::new(
             vec![source_with(vec![fixed_suggestion(10, 12, None)])],
-            fixed_travel(),
+            solver(routing),
         );
         let mut cal = MockCalendarProvider::new();
         cal.expect_is_busy().returning(|_, _, _| Ok(true));
 
-        let out = planner.plan(&ctx(), &cal).await.unwrap();
-        assert!(out.is_empty());
+        let plans = planner.plan(&ctx(), &cal).await.unwrap();
+        assert_eq!(plans.len(), 2);
+        assert!(activities_in(&plans[0]).is_empty());
     }
 
     #[tokio::test]
-    async fn fixed_timing_kept_when_free() {
+    async fn fixed_kept_when_calendar_free() {
+        let routing = fixed_travel();
         let planner = Planner::new(
             vec![source_with(vec![fixed_suggestion(10, 12, None)])],
-            fixed_travel(),
+            solver(routing),
         );
         let cal = always_free_calendar();
 
-        let out = planner.plan(&ctx(), &cal).await.unwrap();
-        assert_eq!(out.len(), 1);
-        assert!(matches!(out[0].timing, Timing::Fixed { .. }));
+        let plans = planner.plan(&ctx(), &cal).await.unwrap();
+        assert_eq!(activities_in(&plans[0]).len(), 1);
     }
 
     #[tokio::test]
-    async fn flexible_dropped_when_fully_busy() {
+    async fn flexible_dropped_when_window_below_min_duration() {
+        let routing = fixed_travel();
         let planner = Planner::new(
-            vec![source_with(vec![flexible_suggestion(10, 16)])],
-            fixed_travel(),
-        );
-        let mut cal = MockCalendarProvider::new();
-        cal.expect_is_busy().returning(|_, _, _| Ok(true));
-
-        let out = planner.plan(&ctx(), &cal).await.unwrap();
-        assert!(out.is_empty());
-    }
-
-    #[tokio::test]
-    async fn flexible_kept_with_travel_time_eaten_from_both_ends() {
-        let planner = Planner::new(
-            vec![source_with(vec![flexible_suggestion(10, 16)])],
-            fixed_travel(),
+            vec![source_with(vec![flexible_suggestion(10, 11)])],
+            solver(routing),
         );
         let cal = always_free_calendar();
 
-        let out = planner.plan(&ctx(), &cal).await.unwrap();
-        assert_eq!(out.len(), 1);
-        let Timing::Flexible { window, .. } = &out[0].timing else {
-            panic!("expected Flexible");
-        };
-        assert_eq!(window.start, ts(10) + Duration::minutes(30));
-        assert_eq!(window.end, ts(16) - Duration::minutes(30));
+        let plans = planner.plan(&ctx(), &cal).await.unwrap();
+        assert!(activities_in(&plans[0]).is_empty(), "1h window < 2h min_duration");
     }
 
     #[tokio::test]
-    async fn flexible_dropped_when_remaining_window_below_min_duration() {
-        let planner = Planner::new(
-            vec![source_with(vec![flexible_suggestion(10, 12)])],
-            fixed_travel(),
-        );
-        let cal = always_free_calendar();
-
-        let out = planner.plan(&ctx(), &cal).await.unwrap();
-        assert!(out.is_empty(), "2h window minus 60m travel < 2h min_duration");
-    }
-
-    #[tokio::test]
-    async fn flexible_kept_when_remaining_window_equals_min_duration_exactly() {
+    async fn flexible_kept_when_window_equals_min_after_travel() {
+        let routing = fixed_travel();
         let planner = Planner::new(
             vec![source_with(vec![flexible_suggestion(10, 13)])],
-            fixed_travel(),
+            solver(routing),
         );
         let cal = always_free_calendar();
 
-        let out = planner.plan(&ctx(), &cal).await.unwrap();
-        assert_eq!(
-            out.len(),
-            1,
-            "3h window - 60m travel = 2h, which meets min_duration (inclusive)",
-        );
+        let plans = planner.plan(&ctx(), &cal).await.unwrap();
+        assert_eq!(activities_in(&plans[0]).len(), 1);
     }
 
     #[tokio::test]
-    async fn flexible_dropped_when_travel_eats_entire_window() {
-        let mut routing = MockRoutingProvider::new();
-        routing
-            .expect_get_travel_time()
-            .returning(|_, _| Ok(Duration::hours(1)));
+    async fn two_diverse_plans_returned() {
+        let routing = fixed_travel();
         let planner = Planner::new(
-            vec![source_with(vec![flexible_suggestion(10, 12)])],
-            Arc::new(routing),
+            vec![source_with(vec![
+                fixed_suggestion(10, 12, Some(0.9)),
+                fixed_suggestion(14, 16, Some(0.5)),
+            ])],
+            solver(routing),
         );
         let cal = always_free_calendar();
 
-        let out = planner.plan(&ctx(), &cal).await.unwrap();
-        assert!(
-            out.is_empty(),
-            "2h window - 60m travel each side = adjusted.end == adjusted.start; nothing left to fly",
-        );
+        let plans = planner.plan(&ctx(), &cal).await.unwrap();
+        assert_eq!(plans.len(), 2);
     }
 
     #[tokio::test]
     async fn slice_by_calendar_busy_check_window_is_centered_on_each_hour() {
         let mut cal = MockCalendarProvider::new();
         cal.expect_is_busy().returning(|_, start, end| {
-            assert_eq!(
-                end - start,
-                Duration::hours(1),
-                "is_busy window must be a full hour (start + 30m to end - 30m around each ts)",
-            );
-            assert_eq!(
-                (start + Duration::minutes(30)).minute(),
-                0,
-                "the window must center on hour boundaries (start = t - 30m)",
-            );
+            assert_eq!(end - start, Duration::hours(1));
+            assert_eq!((start + Duration::minutes(30)).minute(), 0);
             Ok(false)
         });
 
-        let window = TimeWindow {
-            start: ts(10),
-            end: ts(12),
-        };
+        let window = TimeWindow { start: ts(10), end: ts(12) };
         let _ = slice_by_calendar(window, &vec![], &cal).await;
-    }
-
-    #[tokio::test]
-    async fn sort_orders_by_score_descending_with_none_last() {
-        let planner = Planner::new(
-            vec![source_with(vec![
-                fixed_suggestion(10, 12, Some(0.5)),
-                fixed_suggestion(13, 15, None),
-                fixed_suggestion(16, 18, Some(0.9)),
-            ])],
-            fixed_travel(),
-        );
-        let cal = always_free_calendar();
-
-        let out = planner.plan(&ctx(), &cal).await.unwrap();
-        assert_eq!(out.len(), 3);
-        assert_eq!(out[0].score.as_ref().map(|s| s.value), Some(0.9));
-        assert_eq!(out[1].score.as_ref().map(|s| s.value), Some(0.5));
-        assert!(out[2].score.is_none());
     }
 
     #[tokio::test]
     async fn slice_by_calendar_returns_one_window_when_all_free() {
         let cal = always_free_calendar();
-        let window = TimeWindow {
-            start: ts(10),
-            end: ts(15),
-        };
-
+        let window = TimeWindow { start: ts(10), end: ts(15) };
         let out = slice_by_calendar(window, &vec![], &cal).await;
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].start, ts(10));
@@ -421,10 +345,7 @@ mod tests {
             Ok((start + Duration::minutes(30)).hour() == 12)
         });
 
-        let window = TimeWindow {
-            start: ts(10),
-            end: ts(14),
-        };
+        let window = TimeWindow { start: ts(10), end: ts(14) };
         let out = slice_by_calendar(window, &vec![], &cal).await;
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].start, ts(10));
@@ -437,11 +358,7 @@ mod tests {
     async fn slice_by_calendar_returns_empty_when_all_busy() {
         let mut cal = MockCalendarProvider::new();
         cal.expect_is_busy().returning(|_, _, _| Ok(true));
-
-        let window = TimeWindow {
-            start: ts(10),
-            end: ts(15),
-        };
+        let window = TimeWindow { start: ts(10), end: ts(15) };
         let out = slice_by_calendar(window, &vec![], &cal).await;
         assert!(out.is_empty());
     }

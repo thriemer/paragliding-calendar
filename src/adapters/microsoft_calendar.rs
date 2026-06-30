@@ -372,15 +372,15 @@ impl CalendarProvider for MicrosoftCalendar {
         Ok(Vec::new())
     }
 
-    async fn clear_calendar(&mut self, _name: &str) -> Result<()> {
+    async fn clear_calendar(&self, _name: &str) -> Result<()> {
         Err(anyhow!("MicrosoftCalendar is read-only"))
     }
 
-    async fn create_event(&mut self, _calendar: &str, _event: CalendarEvent) -> Result<()> {
+    async fn create_event(&self, _calendar: &str, _event: CalendarEvent) -> Result<()> {
         Err(anyhow!("MicrosoftCalendar is read-only"))
     }
 
-    async fn create_calendar(&mut self, _name: &str) -> Result<()> {
+    async fn create_calendar(&self, _name: &str) -> Result<()> {
         Err(anyhow!("MicrosoftCalendar is read-only"))
     }
 }
