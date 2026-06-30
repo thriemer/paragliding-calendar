@@ -4,22 +4,24 @@ use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use chrono::Duration;
 use rand::RngExt;
-use reqwest_middleware::ClientWithMiddleware;
+use reqwest::{StatusCode, Client};
 use serde::Deserialize;
 use tracing::instrument;
 
 use crate::{
-    adapters::cache::PersistentCache,
+    adapters::{cache::PersistentCache, routing_error::RoutingError},
     domain::{location::Location, ports::RoutingProvider},
 };
 
+const MAX_RETRIES: u32 = 3;
+
 pub struct Routing {
     cache: Arc<PersistentCache>,
-    http: ClientWithMiddleware,
+    http: Client,
 }
 
 impl Routing {
-    pub fn new(cache: Arc<PersistentCache>, http: ClientWithMiddleware) -> Self {
+    pub fn new(cache: Arc<PersistentCache>, http: Client) -> Self {
         Self { cache, http }
     }
 
@@ -37,15 +39,67 @@ impl Routing {
             destination.longitude,
             env::var("GRAPHHOPPER_API_KEY").context("Missing GRAPHHOPPER_API_KEY env var")?
         );
-        let response = self.http.get(url).send().await?;
-        let response: ApiResponse = response.json().await?;
 
-        response
-            .paths
-            .get(0)
-            .map(|path| path.time / 1000)
-            .ok_or(anyhow!("No paths in response"))
+        let mut last_error: Option<anyhow::Error> = None;
+        for attempt in 0..MAX_RETRIES {
+            let result = self.http.get(&url).send().await;
+            match result {
+                Ok(response) => {
+                    let status = response.status();
+                    if status == StatusCode::TOO_MANY_REQUESTS {
+                        let headers = response.headers().clone();
+                        let body = response.text().await.unwrap_or_default();
+                        if body.contains("Minutely") {
+                            let wait = parse_retry_after(&headers)
+                                .unwrap_or(StdDuration::from_secs(60));
+                            tracing::warn!(
+                                attempt,
+                                wait_ms = wait.as_millis(),
+                                "GraphHopper rate limited, retrying after Retry-After"
+                            );
+                            tokio::time::sleep(wait).await;
+                            last_error = Some(RoutingError::RateLimitExceeded(body).into());
+                            continue;
+                        }
+                        return Err(RoutingError::DailyQuotaExhausted(body).into());
+                    }
+                    if !status.is_success() {
+                        let body = response.text().await.unwrap_or_default();
+                        return Err(anyhow!("GraphHopper returned {}: {}", status, body));
+                    }
+                    let parsed: ApiResponse = response.json().await?;
+                    return parsed
+                        .paths
+                        .get(0)
+                        .map(|path| path.time / 1000)
+                        .ok_or(anyhow!("No paths in response"));
+                }
+                Err(err) => {
+                    tracing::warn!(attempt, error = ?err, "GraphHopper request failed");
+                    last_error = Some(err.into());
+                    tokio::time::sleep(StdDuration::from_secs(2u64.saturating_pow(attempt + 1)))
+                        .await;
+                }
+            }
+        }
+
+        Err(last_error
+            .unwrap_or(anyhow!("GraphHopper request failed after {MAX_RETRIES} retries")))
     }
+}
+
+fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<StdDuration> {
+    let value = headers.get("Retry-After")?.to_str().ok()?;
+    if let Ok(secs) = value.parse::<u64>() {
+        return Some(StdDuration::from_secs(secs));
+    }
+    if let Ok(when) = chrono::DateTime::parse_from_rfc2822(value) {
+        let now = chrono::Utc::now();
+        let target = when.with_timezone(&chrono::Utc);
+        let secs = (target - now).num_seconds().max(0) as u64;
+        return Some(StdDuration::from_secs(secs));
+    }
+    None
 }
 
 #[async_trait]

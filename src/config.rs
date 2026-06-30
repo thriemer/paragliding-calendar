@@ -38,6 +38,7 @@ pub struct MicrosoftOAuthConfig {
 
 pub struct AppConfig {
     pub db_path: String,
+    pub brouter_base_url: String,
     pub google: GoogleOAuthConfig,
     pub microsoft: Option<MicrosoftOAuthConfig>,
 }
@@ -48,6 +49,9 @@ impl AppConfig {
             .ok()
             .or_else(|| env::var("CACHE_DIRECTORY").ok())
             .ok_or_else(|| anyhow::anyhow!("XDG_DATA_HOME or CACHE_DIRECTORY must be set"))?;
+
+        let brouter_base_url =
+            env::var("BROUTER_BASE_URL").map_err(|_| anyhow::anyhow!("Missing BROUTER_BASE_URL"))?;
 
         let google = GoogleOAuthConfig {
             client_id: env::var("GOOGLE_CLIENT_ID")
@@ -78,6 +82,7 @@ impl AppConfig {
 
         Ok(Self {
             db_path,
+            brouter_base_url,
             google,
             microsoft,
         })

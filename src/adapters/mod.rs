@@ -1,10 +1,13 @@
 pub mod activities;
+pub mod brouter;
 pub mod cache;
 pub mod combined_calendar;
 pub mod email;
+pub mod fallback_routing;
 pub mod google_calendar;
 pub mod graphhopper;
 pub mod http;
 pub mod microsoft_calendar;
 pub mod open_meteo;
+pub mod routing_error;
 pub mod store;
