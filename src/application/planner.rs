@@ -188,8 +188,8 @@ mod tests {
             title: format!("fixed-{start_hour}-{end_hour}"),
             description: String::new(),
             score: score.map(|v| Score {
-                value: v,
-                hourly_average: v / duration_hours,
+                window_start: ts(start_hour),
+                hourly: vec![v / duration_hours; duration_hours as usize],
                 reasons: vec![],
             }),
         }
@@ -210,8 +210,8 @@ mod tests {
             title: format!("flex-{start_hour}-{end_hour}"),
             description: String::new(),
             score: Some(Score {
-                value: 0.5,
-                hourly_average: 0.5 / window_hours,
+                window_start: ts(start_hour),
+                hourly: vec![0.5 / window_hours; window_hours as usize],
                 reasons: vec![],
             }),
         }
@@ -225,8 +225,9 @@ mod tests {
 
     fn fixed_travel() -> Arc<dyn RoutingProvider> {
         let mut r = MockRoutingProvider::new();
-        r.expect_get_travel_time()
-            .returning(|_, _| Ok(Duration::minutes(30)));
+        r.expect_travel_time_matrix().returning(|locs| {
+            Ok(vec![vec![Duration::minutes(30); locs.len()]; locs.len()])
+        });
         Arc::new(r)
     }
 

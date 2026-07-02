@@ -39,7 +39,7 @@ impl FallbackRoutingProvider {
         let cooldown = now + seconds_until_midnight;
         self.cooldown_until.store(cooldown, Ordering::Relaxed);
         tracing::warn!(
-            "GraphHopper daily quota exhausted, falling back to BRouter until UTC midnight"
+            "GraphHopper daily quota exhausted, falling back to Valhalla until UTC midnight"
         );
     }
 }
@@ -53,7 +53,7 @@ impl RoutingProvider for FallbackRoutingProvider {
         destination: &Location,
     ) -> Result<chrono::Duration> {
         if self.is_in_cooldown() {
-            tracing::debug!("GraphHopper in cooldown, using BRouter directly");
+            tracing::debug!("GraphHopper in cooldown, using Valhalla directly");
             return self.fallback.get_travel_time(source, destination).await;
         }
 
@@ -68,9 +68,40 @@ impl RoutingProvider for FallbackRoutingProvider {
                     }
                     tracing::warn!(
                         error = ?err,
-                        "GraphHopper routing failed, falling back to BRouter"
+                        "GraphHopper routing failed, falling back to Valhalla"
                     );
                     self.fallback.get_travel_time(source, destination).await
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
+    #[instrument(skip(self, locations))]
+    async fn travel_time_matrix(&self, locations: &[Location]) -> Result<Vec<Vec<chrono::Duration>>> {
+        if self.is_in_cooldown() {
+            tracing::debug!("GraphHopper in cooldown, using Valhalla matrix directly");
+            return self.fallback.travel_time_matrix(locations).await;
+        }
+
+        match self.primary.travel_time_matrix(locations).await {
+            Ok(matrix) => Ok(matrix),
+            Err(err) => {
+                if err.downcast_ref::<RoutingError>().is_some() {
+                    // Quota exhaustion and matrix-unavailable are both effectively "GraphHopper
+                    // won't serve this today" — cool down so we don't re-hit it every solve.
+                    if matches!(
+                        err.downcast_ref::<RoutingError>(),
+                        Some(RoutingError::DailyQuotaExhausted(_) | RoutingError::MatrixUnavailable(_))
+                    ) {
+                        self.set_cooldown_until_midnight();
+                    }
+                    tracing::warn!(
+                        error = ?err,
+                        "GraphHopper matrix failed, falling back to Valhalla"
+                    );
+                    self.fallback.travel_time_matrix(locations).await
                 } else {
                     Err(err)
                 }

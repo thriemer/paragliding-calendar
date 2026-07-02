@@ -6,14 +6,25 @@ use chrono::Duration;
 use rand::RngExt;
 use reqwest::{StatusCode, Client};
 use serde::Deserialize;
+use serde_json::json;
 use tracing::instrument;
 
 use crate::{
-    adapters::{cache::PersistentCache, routing_error::RoutingError},
+    adapters::{
+        cache::PersistentCache,
+        routing_error::RoutingError,
+        routing_matrix::{
+            FetchPlan, assemble_from_cache, cache_pairs, fill_from_blocks, fill_unroutable,
+            finalize, plan_fetch,
+        },
+    },
     domain::{location::Location, ports::RoutingProvider},
 };
 
 const MAX_RETRIES: u32 = 3;
+/// GraphHopper's matrix add-on caps points per request (free tier: 5). Larger matrices are
+/// tiled into ≤5-per-side blocks so we stay under the limit instead of getting a 400.
+const MAX_MATRIX_POINTS: usize = 5;
 
 pub struct Routing {
     cache: Arc<PersistentCache>,
@@ -86,6 +97,71 @@ impl Routing {
         Err(last_error
             .unwrap_or(anyhow!("GraphHopper request failed after {MAX_RETRIES} retries")))
     }
+
+    /// One `/matrix` request for a `sources × targets` block. Result is indexed
+    /// `[source][target]`; cells may be null (unroutable) — represented as `None`. Maps
+    /// 429/quota bodies to `RoutingError` so the caller can fall back, mirroring
+    /// `get_travel_time_call`.
+    async fn matrix_call(
+        &self,
+        sources: &[Location],
+        targets: &[Location],
+    ) -> Result<Vec<Vec<Option<u64>>>> {
+        let key = env::var("GRAPHHOPPER_API_KEY").context("Missing GRAPHHOPPER_API_KEY env var")?;
+        let url = format!("https://graphhopper.com/api/1/matrix?key={key}");
+        // GraphHopper points are [lon, lat].
+        let pts = |ls: &[Location]| ls.iter().map(|l| [l.longitude, l.latitude]).collect::<Vec<_>>();
+        let body = json!({
+            "from_points": pts(sources),
+            "to_points": pts(targets),
+            "out_arrays": ["times"],
+            "profile": "car",
+            "fail_fast": false,
+        });
+        tracing::debug!(s = sources.len(), t = targets.len(), "Calling the GraphHopper matrix API");
+
+        let response = self.http.post(&url).json(&body).send().await?;
+        let status = response.status();
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            let body = response.text().await.unwrap_or_default();
+            if body.contains("Minutely") {
+                return Err(RoutingError::RateLimitExceeded(body).into());
+            }
+            return Err(RoutingError::DailyQuotaExhausted(body).into());
+        }
+        if !status.is_success() {
+            // Matrix is a paid add-on with per-plan point limits (e.g. free tier caps at 5
+            // points → 400). Treat any matrix failure as "GraphHopper can't serve this" so
+            // the fallback provider routes to Valhalla instead of failing the plan.
+            let body = response.text().await.unwrap_or_default();
+            return Err(RoutingError::MatrixUnavailable(format!("HTTP {status}: {body}")).into());
+        }
+
+        let parsed: MatrixResponse = response.json().await?;
+        Ok(parsed.times)
+    }
+
+    /// `matrix_call` split into ≤`MAX_MATRIX_POINTS`-per-side blocks and stitched back into
+    /// the full `sources × targets` grid, keeping every request within GraphHopper's point cap.
+    async fn matrix_tiled(
+        &self,
+        sources: &[Location],
+        targets: &[Location],
+    ) -> Result<Vec<Vec<Option<u64>>>> {
+        let mut out = vec![vec![None; targets.len()]; sources.len()];
+        for (sb, s_chunk) in sources.chunks(MAX_MATRIX_POINTS).enumerate() {
+            for (tb, t_chunk) in targets.chunks(MAX_MATRIX_POINTS).enumerate() {
+                let block = self.matrix_call(s_chunk, t_chunk).await?;
+                let (s_off, t_off) = (sb * MAX_MATRIX_POINTS, tb * MAX_MATRIX_POINTS);
+                for (r, row) in block.into_iter().enumerate() {
+                    for (c, cell) in row.into_iter().enumerate() {
+                        out[s_off + r][t_off + c] = cell;
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
 }
 
 fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<StdDuration> {
@@ -128,6 +204,29 @@ impl RoutingProvider for Routing {
             .await?;
         Ok(Duration::seconds(seconds as i64))
     }
+
+    #[instrument(skip(self, locations))]
+    async fn travel_time_matrix(&self, locations: &[Location]) -> Result<Vec<Vec<Duration>>> {
+        let (mut secs, missing) = assemble_from_cache(&self.cache, locations).await?;
+        match plan_fetch(&missing, locations.len()) {
+            FetchPlan::None => {}
+            FetchPlan::Full => {
+                let block = self.matrix_tiled(locations, locations).await?;
+                for &(i, j) in &missing {
+                    secs[i][j] = block[i][j];
+                }
+            }
+            FetchPlan::Incremental { cover } => {
+                let cover_locs: Vec<Location> = cover.iter().map(|&i| locations[i].clone()).collect();
+                let block_cover_all = self.matrix_tiled(&cover_locs, locations).await?;
+                let block_all_cover = self.matrix_tiled(locations, &cover_locs).await?;
+                fill_from_blocks(&mut secs, &missing, &cover, &block_cover_all, &block_all_cover);
+            }
+        }
+        fill_unroutable(self, locations, &mut secs, &missing).await?;
+        cache_pairs(&self.cache, locations, &missing, &secs).await?;
+        Ok(finalize(&secs))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,4 +237,23 @@ struct PathResponse {
 #[derive(Debug, Deserialize)]
 struct ApiResponse {
     paths: Vec<PathResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MatrixResponse {
+    times: Vec<Vec<Option<u64>>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_matrix_times() {
+        // Trimmed /matrix response: 2x2 times (seconds), one unroutable cell (null).
+        let body = r#"{ "times": [[0, 600], [null, 0]] }"#;
+        let parsed: MatrixResponse = serde_json::from_str(body).unwrap();
+        assert_eq!(parsed.times[0][1], Some(600));
+        assert_eq!(parsed.times[1][0], None);
+    }
 }

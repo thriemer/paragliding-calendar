@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -9,6 +10,27 @@ use crate::domain::{
     location::Location,
     ports::{RoutingProvider, SolverInput, WeekSolver},
 };
+
+/// Pairwise drive times over the deduped `{origin} ∪ {candidate locations}` set, fetched
+/// once per solve via the routing matrix so placement is pure lookups.
+struct DriveMatrix {
+    index: HashMap<String, usize>,
+    times: Vec<Vec<Duration>>,
+}
+
+impl DriveMatrix {
+    fn get(&self, from: &Location, to: &Location) -> Duration {
+        let (fk, tk) = (from.to_key(), to.to_key());
+        if fk == tk {
+            return Duration::zero();
+        }
+        match (self.index.get(&fk), self.index.get(&tk)) {
+            (Some(&i), Some(&j)) => self.times[i][j],
+            // Every location the solver queries is in the set by construction.
+            _ => Duration::zero(),
+        }
+    }
+}
 
 pub struct GreedyDiversitySolver {
     routing: Arc<dyn RoutingProvider>,
@@ -24,16 +46,40 @@ impl GreedyDiversitySolver {
             buffer_between_items: Duration::minutes(15),
         }
     }
+
+    /// Dedup origin + candidate locations by `to_key()` and fetch the full matrix once.
+    async fn build_matrix(&self, input: &SolverInput) -> Result<DriveMatrix> {
+        let mut index: HashMap<String, usize> = HashMap::new();
+        let mut locs: Vec<Location> = Vec::new();
+        for loc in std::iter::once(&input.origin)
+            .chain(input.candidates.iter().map(|c| &c.location))
+        {
+            index.entry(loc.to_key()).or_insert_with(|| {
+                locs.push(loc.clone());
+                locs.len() - 1
+            });
+        }
+
+        let times = if locs.len() > 1 {
+            self.routing.travel_time_matrix(&locs).await?
+        } else {
+            vec![vec![Duration::zero(); locs.len()]; locs.len()]
+        };
+        Ok(DriveMatrix { index, times })
+    }
 }
 
 #[async_trait]
 impl WeekSolver for GreedyDiversitySolver {
     async fn solve(&self, input: SolverInput) -> Result<Vec<Plan>> {
+        // One matrix fetch up front warms every pair; placement below is pure lookups.
+        let matrix = self.build_matrix(&input).await?;
+
         let mut plans = Vec::with_capacity(input.num_alternatives);
         let mut used_keys: Vec<(ActivityKind, String)> = Vec::new();
 
         for _ in 0..input.num_alternatives {
-            let plan = build_plan(self, &input, &used_keys).await?;
+            let plan = build_plan(self, &input, &used_keys, &matrix);
             for a in &plan.items {
                 used_keys.push((a.kind, a.location.to_key()));
             }
@@ -44,35 +90,20 @@ impl WeekSolver for GreedyDiversitySolver {
     }
 }
 
-async fn drive(
-    routing: &dyn RoutingProvider,
-    from: &Location,
-    to: &Location,
-) -> Result<Duration> {
-    if from.to_key() == to.to_key() {
-        return Ok(Duration::zero());
-    }
-    // ponytail: routing adapter caches per-pair with a 1-week TTL,
-    // so first call hits the API and subsequent calls are free.
-    routing.get_travel_time(from, to).await
-}
-
-async fn build_plan(
+fn build_plan(
     cfg: &GreedyDiversitySolver,
     input: &SolverInput,
     used_keys: &[(ActivityKind, String)],
-) -> Result<Plan> {
-    let routing = cfg.routing.as_ref();
-
+    matrix: &DriveMatrix,
+) -> Plan {
     let mut ranked: Vec<(f32, usize)> = Vec::with_capacity(input.candidates.len());
     for (i, c) in input.candidates.iter().enumerate() {
         let key = (c.kind, c.location.to_key());
         if used_keys.iter().any(|k| *k == key) {
             continue;
         }
-        let fun = c.score.as_ref().map(|s| s.value).unwrap_or(0.0);
-        let drive_min =
-            drive(routing, &input.origin, &c.location).await?.num_minutes() as f32 * 2.0;
+        let fun = c.score.as_ref().map(|s| s.total()).unwrap_or(0.0);
+        let drive_min = matrix.get(&input.origin, &c.location).num_minutes() as f32 * 2.0;
         let cost = -fun + cfg.drive_weight * drive_min;
         ranked.push((cost, i));
     }
@@ -83,7 +114,7 @@ async fn build_plan(
         let c = &input.candidates[idx];
         let placed = match &c.timing {
             Timing::Fixed { start, end } => place_fixed(
-                routing,
+                matrix,
                 *start,
                 *end,
                 &c.location,
@@ -91,13 +122,12 @@ async fn build_plan(
                 &input.origin,
                 &input.free_slots,
                 cfg.buffer_between_items,
-            )
-            .await?,
+            ),
             Timing::Flexible {
                 window,
                 min_duration,
             } => place_flexible(
-                routing,
+                matrix,
                 *window,
                 *min_duration,
                 &c.location,
@@ -105,13 +135,14 @@ async fn build_plan(
                 &input.origin,
                 &input.free_slots,
                 cfg.buffer_between_items,
-            )
-            .await?,
+            ),
         };
         if let Some((start, end)) = placed {
-            let actual_hours = ((end - start).num_minutes() as f32) / 60.0;
-            let avg = c.score.as_ref().map(|s| s.hourly_average).unwrap_or(0.0);
-            let fun = avg * actual_hours;
+            let fun = c
+                .score
+                .as_ref()
+                .map(|s| s.fun_between(start, end))
+                .unwrap_or(0.0);
             items.push(ScheduledActivity {
                 kind: c.kind,
                 location: c.location.clone(),
@@ -126,17 +157,17 @@ async fn build_plan(
     }
 
     let total_fun: f32 = items.iter().map(|a| a.fun).sum();
-    let total_drive = compute_total_drive(routing, &items, &input.origin).await?;
+    let total_drive = compute_total_drive(matrix, &items, &input.origin);
 
-    Ok(Plan {
+    Plan {
         items,
         total_fun,
         total_drive,
-    })
+    }
 }
 
-async fn place_fixed(
-    routing: &dyn RoutingProvider,
+fn place_fixed(
+    matrix: &DriveMatrix,
     cand_start: DateTime<Utc>,
     cand_end: DateTime<Utc>,
     cand_loc: &Location,
@@ -144,7 +175,7 @@ async fn place_fixed(
     home: &Location,
     free_slots: &[TimeWindow],
     buffer: Duration,
-) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>> {
+) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
     let mut prev: Option<&ScheduledActivity> = None;
     let mut next: Option<&ScheduledActivity> = None;
     for a in placed {
@@ -157,41 +188,41 @@ async fn place_fixed(
                 next = Some(a);
             }
         } else {
-            return Ok(None);
+            return None;
         }
     }
 
     let prev_loc = prev.map(|a| &a.location).unwrap_or(home);
     let next_loc = next.map(|a| &a.location).unwrap_or(home);
 
-    let drive_in = drive(routing, prev_loc, cand_loc).await?;
-    let drive_out = drive(routing, cand_loc, next_loc).await?;
+    let drive_in = matrix.get(prev_loc, cand_loc);
+    let drive_out = matrix.get(cand_loc, next_loc);
     let phys_start = cand_start - drive_in;
     let phys_end = cand_end + drive_out;
 
     if let Some(a) = prev
         && phys_start < a.end + buffer
     {
-        return Ok(None);
+        return None;
     }
     if let Some(a) = next
         && phys_end + buffer > a.start
     {
-        return Ok(None);
+        return None;
     }
 
     let in_free = free_slots
         .iter()
         .any(|fs| fs.start <= phys_start && fs.end >= phys_end);
     if !in_free {
-        return Ok(None);
+        return None;
     }
 
-    Ok(Some((cand_start, cand_end)))
+    Some((cand_start, cand_end))
 }
 
-async fn place_flexible(
-    routing: &dyn RoutingProvider,
+fn place_flexible(
+    matrix: &DriveMatrix,
     window: TimeWindow,
     min_duration: Duration,
     cand_loc: &Location,
@@ -199,7 +230,7 @@ async fn place_flexible(
     home: &Location,
     free_slots: &[TimeWindow],
     buffer: Duration,
-) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>> {
+) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
     for fs in free_slots {
         let mut in_fs: Vec<&ScheduledActivity> = placed
             .iter()
@@ -218,13 +249,13 @@ async fn place_flexible(
                 (home, fs.end)
             };
 
-            let drive_in = drive(routing, prev_loc, cand_loc).await?;
-            let drive_out = drive(routing, cand_loc, next_loc).await?;
+            let drive_in = matrix.get(prev_loc, cand_loc);
+            let drive_out = matrix.get(cand_loc, next_loc);
             let activity_start_min = (phys_lower + drive_in).max(window.start);
             let activity_end_max = (phys_upper - drive_out).min(window.end);
 
             if activity_end_max - activity_start_min >= min_duration {
-                return Ok(Some((activity_start_min, activity_end_max)));
+                return Some((activity_start_min, activity_end_max));
             }
 
             if i < in_fs.len() {
@@ -234,22 +265,22 @@ async fn place_flexible(
             }
         }
     }
-    Ok(None)
+    None
 }
 
-async fn compute_total_drive(
-    routing: &dyn RoutingProvider,
+fn compute_total_drive(
+    matrix: &DriveMatrix,
     items: &[ScheduledActivity],
     home: &Location,
-) -> Result<Duration> {
+) -> Duration {
     let mut total = Duration::zero();
     let mut prev: &Location = home;
     for a in items {
-        total = total + drive(routing, prev, &a.location).await?;
+        total = total + matrix.get(prev, &a.location);
         prev = &a.location;
     }
-    total = total + drive(routing, prev, home).await?;
-    Ok(total)
+    total = total + matrix.get(prev, home);
+    total
 }
 
 // ponytail: skipped 2-opt repair pass; add when greedy ordering misses obvious
@@ -299,18 +330,31 @@ mod tests {
             title: format!("flex-{}-{start_h}-{end_h}", loc.name),
             description: String::new(),
             score: Some(Score {
-                value: fun,
-                hourly_average: fun / window_hours,
+                window_start: ts(start_h),
+                hourly: vec![fun / window_hours; window_hours as usize],
                 reasons: vec![],
             }),
         }
     }
 
-    fn constant_routing(minutes: i64) -> Arc<dyn RoutingProvider> {
+    /// Mock whose matrix is filled by a per-pair function of (from, to).
+    fn matrix_routing(
+        f: impl Fn(&Location, &Location) -> Duration + Send + Sync + 'static,
+    ) -> Arc<dyn RoutingProvider> {
+        let f = Arc::new(f);
         let mut r = MockRoutingProvider::new();
-        r.expect_get_travel_time()
-            .returning(move |_, _| Ok(Duration::minutes(minutes)));
+        r.expect_travel_time_matrix().returning(move |locs| {
+            let f = f.clone();
+            Ok(locs
+                .iter()
+                .map(|a| locs.iter().map(|b| f(a, b)).collect())
+                .collect())
+        });
         Arc::new(r)
+    }
+
+    fn constant_routing(minutes: i64) -> Arc<dyn RoutingProvider> {
+        matrix_routing(move |_, _| Duration::minutes(minutes))
     }
 
     #[tokio::test]
@@ -397,22 +441,17 @@ mod tests {
 
     #[tokio::test]
     async fn back_to_back_nearby_sites_skip_returning_home() {
-        let mut r = MockRoutingProvider::new();
         let home_key = home().to_key();
-        let a_key = site_a().to_key();
-        let b_key = site_b().to_key();
-        r.expect_get_travel_time().returning(move |from, to| {
+        let routing = matrix_routing(move |from, to| {
             let f = from.to_key();
             let t = to.to_key();
-            if (f == a_key && t == b_key) || (f == b_key && t == a_key) {
-                Ok(Duration::minutes(15))
-            } else if f == home_key || t == home_key {
-                Ok(Duration::hours(2))
+            if f == home_key || t == home_key {
+                Duration::hours(2)
             } else {
-                Ok(Duration::minutes(15))
+                Duration::minutes(15)
             }
         });
-        let solver = GreedyDiversitySolver::new(Arc::new(r));
+        let solver = GreedyDiversitySolver::new(routing);
         let input = SolverInput {
             candidates: vec![
                 flex(site_a(), ActivityKind::Paragliding, 8, 10, 0.9),

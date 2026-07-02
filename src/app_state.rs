@@ -10,12 +10,10 @@ use crate::{
         activities::paragliding::{
             repository::ParaglidingSiteRepository, source::ParaglidingActivitySource,
         },
-        brouter::BRouter,
         cache::PersistentCache,
         combined_calendar::CombinedCalendar,
-        fallback_routing::FallbackRoutingProvider,
+        crow_flies::CrowFlies,
         google_calendar::{GoogleCalendar, WebFlowAuthenticator},
-        graphhopper::Routing as GraphHopperRouting,
         microsoft_calendar::{MicrosoftCalendar, O365Authenticator},
         open_meteo::OpenMeteoClient,
         store::PersistentStore,
@@ -71,17 +69,7 @@ impl AppState {
             ))
         });
 
-        let graphhopper: Arc<dyn RoutingProvider> = Arc::new(GraphHopperRouting::new(
-            cache.clone(),
-            reqwest::Client::new(),
-        ));
-        let brouter: Arc<dyn RoutingProvider> = Arc::new(BRouter::new(
-            cfg.brouter_base_url.clone(),
-            cache.clone(),
-            http.clone(),
-        ));
-        let routing: Arc<dyn RoutingProvider> =
-            Arc::new(FallbackRoutingProvider::new(graphhopper, brouter));
+        let routing: Arc<dyn RoutingProvider> = Arc::new(CrowFlies::new());
 
         let open_meteo = Arc::new(OpenMeteoClient::new(cache.clone()));
         let weather: Arc<dyn WeatherProvider> = open_meteo.clone();

@@ -33,21 +33,36 @@ pub enum Timing {
 
 #[derive(Debug, Clone)]
 pub struct Score {
-    pub value: f32,
-    /// Average score per hour over the full window.
-    ///
-    /// Used to prorate [`ScheduledActivity::fun`] when the solver places a
-    /// flexible activity for less than its full window.  This gives the
-    /// ranker the correct incentive: a 5‑hour window with sum=5.0 and a
-    /// 2‑hour window with sum=2.0 both get hourly_average=1.0, so they
-    /// contribute the same amount per scheduled hour.
-    ///
-    /// **Future option:** if the average loses too much information (e.g.
-    /// the best hours cluster in one part of the window), store a
-    /// `Vec<f32>` of per‑hour scores and compute the exact sum over the
-    /// actually‑used time range instead.
-    pub hourly_average: f32,
+    /// Clock time of the first hourly bucket (`hourly[0]` covers
+    /// `[window_start, window_start + 1h)`).
+    pub window_start: DateTime<Utc>,
+    /// Score per clock hour, index 0 = the window's first hour.
+    pub hourly: Vec<f32>,
     pub reasons: Vec<String>,
+}
+
+impl Score {
+    /// Total score = Σ hourly. Used for ranking.
+    pub fn total(&self) -> f32 {
+        self.hourly.iter().sum()
+    }
+
+    /// Fun earned by occupying `[start, end]`, summing the covered hourly
+    /// buckets and pro-rating partial hours. Bucket `i` covers
+    /// `[window_start + i h, window_start + (i+1) h)`, keyed off the window
+    /// origin the `Score` carries — callers pass only the placed span.
+    pub fn fun_between(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> f32 {
+        let mut fun = 0.0;
+        for (i, &s) in self.hourly.iter().enumerate() {
+            let bucket_start = self.window_start + Duration::hours(i as i64);
+            let bucket_end = bucket_start + Duration::hours(1);
+            let lo = start.max(bucket_start);
+            let hi = end.min(bucket_end);
+            let overlap = (hi - lo).num_seconds().max(0) as f32 / 3600.0;
+            fun += s * overlap;
+        }
+        fun
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -103,5 +118,39 @@ mod tests {
         let t = Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap();
         let w = TimeWindow { start: t, end: t };
         assert_eq!(w.duration(), Duration::zero());
+    }
+
+    fn score(window_start: DateTime<Utc>, hourly: Vec<f32>) -> Score {
+        Score {
+            window_start,
+            hourly,
+            reasons: vec![],
+        }
+    }
+
+    #[test]
+    fn total_is_sum_of_hourly() {
+        let ws = Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap();
+        assert_eq!(score(ws, vec![1.0, 2.0, 3.0]).total(), 6.0);
+    }
+
+    #[test]
+    fn fun_between_prorates_partial_hour() {
+        let ws = Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap();
+        let s = score(ws, vec![2.0, 2.0]);
+        // Occupy the first 30 minutes of bucket 0 → half of 2.0.
+        let fun = s.fun_between(ws, ws + Duration::minutes(30));
+        assert!((fun - 1.0).abs() < 1e-6, "got {fun}");
+    }
+
+    #[test]
+    fn fun_between_rewards_the_good_hours() {
+        let ws = Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap();
+        let s = score(ws, vec![0.0, 10.0]); // bad hour then good hour
+        let bad = s.fun_between(ws, ws + Duration::hours(1));
+        let good = s.fun_between(ws + Duration::hours(1), ws + Duration::hours(2));
+        assert!(good > bad, "good {good} should beat bad {bad}");
+        assert_eq!(bad, 0.0);
+        assert_eq!(good, 10.0);
     }
 }

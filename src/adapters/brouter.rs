@@ -48,7 +48,7 @@ impl BRouter {
             destination.longitude,
             destination.latitude,
         );
-        tracing::debug!(url = %url, "Calling the BRouter API");
+        tracing::info!(url = %url, "Calling the BRouter API");
 
         let response = self.http.get(&url).send().await.map_err(|e| {
             anyhow!("Failed to send BRouter request to {url}: {e}")

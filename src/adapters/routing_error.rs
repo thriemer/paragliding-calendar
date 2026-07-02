@@ -7,4 +7,7 @@ pub enum RoutingError {
 
     #[error("GraphHopper daily quota exhausted: {0}")]
     DailyQuotaExhausted(String),
+
+    #[error("GraphHopper matrix unavailable on this subscription: {0}")]
+    MatrixUnavailable(String),
 }
