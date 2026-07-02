@@ -108,6 +108,27 @@ describe("App", () => {
     );
   });
 
+  // Regression: mapView.center comes from Leaflet's getCenter() and must be
+  // normalized to a [lat, lng] tuple, otherwise a new site's first launch
+  // gets undefined coordinates.
+  test("adding a launch to a new site uses the map view as its location", async () => {
+    renderApp();
+    await waitFor(() => expect(screen.queryByText(/Loading sites/)).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Create New Site" }));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Create Site" })).toBeTruthy(),
+    );
+    // First "+ Add" button belongs to the Launches section.
+    fireEvent.click(screen.getAllByRole("button", { name: "+ Add" })[0]!);
+    // Expand the new launch to render its LocationPicker.
+    fireEvent.click(screen.getByText("Launch 1 (Hang)"));
+    const pickers = screen
+      .getAllByTestId("map-container")
+      .map((el) => JSON.parse(el.getAttribute("data-center")!));
+    // The mocked map reports center {lat: 47, lng: 10}.
+    expect(pickers).toContainEqual([47, 10]);
+  });
+
   test("Cancel closes the SiteEditor", async () => {
     renderApp();
     await waitFor(() => expect(screen.queryByText(/Loading sites/)).toBeNull());

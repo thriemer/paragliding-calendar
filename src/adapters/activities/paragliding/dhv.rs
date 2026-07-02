@@ -1,59 +1,13 @@
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use quick_xml::de::from_str;
 use serde::Deserialize;
-use tracing;
 
 use crate::domain::{
     location::Location,
     paragliding::{ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, SiteType},
-    ports::ParaglidingSiteProvider,
 };
-use tracing::instrument;
-
-pub struct DhvParaglidingSiteProvider {
-    sites: Vec<ParaglidingSite>,
-}
-
-impl DhvParaglidingSiteProvider {
-    #[instrument(skip_all)]
-    pub fn new(dir: PathBuf) -> anyhow::Result<Self> {
-        let paths = fs::read_dir(&dir)?;
-        let sites: Vec<ParaglidingSite> = paths
-            .filter_map(|p| {
-                let path = match p {
-                    Ok(path) => path,
-                    Err(err) => {
-                        tracing::warn!(
-                            dir = ?dir,
-                            error = ?err,
-                            "Error while reading directory"
-                        );
-                        return None;
-                    }
-                };
-
-                let dhv_sites: anyhow::Result<Vec<ParaglidingSite>> = load_sites(path.path());
-                match dhv_sites {
-                    Ok(sites) => Some(sites),
-                    Err(err) => {
-                        tracing::warn!(error = ?err, "Error while loading flying sites");
-                        None
-                    }
-                }
-            })
-            .flatten()
-            .collect();
-        tracing::info!(count = sites.len(), "Loaded flying sites");
-        Ok(DhvParaglidingSiteProvider { sites })
-    }
-}
-
-fn load_sites(xml_path: PathBuf) -> anyhow::Result<Vec<ParaglidingSite>> {
-    let xml_content = fs::read_to_string(xml_path)?;
-    parse_sites_from_xml(&xml_content)
-}
 
 pub fn parse_sites_from_xml(xml_content: &str) -> anyhow::Result<Vec<ParaglidingSite>> {
     let dhv_xml: DHVXml = from_str(xml_content)?;
@@ -66,43 +20,7 @@ pub fn parse_sites_from_xml(xml_content: &str) -> anyhow::Result<Vec<Paragliding
     Ok(sites)
 }
 
-impl ParaglidingSiteProvider for DhvParaglidingSiteProvider {
-    #[instrument(skip_all, fields(center_lat = %center.latitude, center_lon = %center.longitude, radius_km = radius_km))]
-    async fn fetch_launches_within_radius(
-        &self,
-        center: &Location,
-        radius_km: f64,
-    ) -> Vec<(ParaglidingSite, f64)> {
-        let mut results = Vec::new();
-
-        for site in &self.sites {
-            // Find the closest launch to the center point
-            let mut min_distance = f64::INFINITY;
-
-            for launch in &site.launches {
-                let distance = center.distance_to(&launch.location);
-                if distance < min_distance {
-                    min_distance = distance;
-                }
-            }
-
-            // Include site if any launch is within radius
-            if min_distance <= radius_km {
-                results.push((site.clone(), min_distance));
-            }
-        }
-
-        // Sort by distance (closest first)
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        results
-    }
-
-    async fn fetch_all_sites(&self) -> Vec<ParaglidingSite> {
-        self.sites.clone()
-    }
-}
-
-/// DHV XML structure for deserialization
+/// DHV XML structure for deserialization. Unmapped XML elements are ignored by serde.
 #[derive(Debug, Deserialize)]
 pub struct DHVXml {
     #[serde(rename = "FlyingSites")]
@@ -117,18 +35,10 @@ pub struct DHVFlyingSites {
 
 #[derive(Debug, Deserialize)]
 pub struct DHVFlyingSite {
-    #[serde(rename = "SiteID")]
-    pub site_id: String,
     #[serde(rename = "SiteName")]
     pub site_name: String,
     #[serde(rename = "SiteCountry")]
     pub site_country: Option<String>,
-    #[serde(rename = "SiteType")]
-    pub site_type: Option<String>,
-    #[serde(rename = "HeightDifferenceMax")]
-    pub height_difference_max: Option<f64>,
-    #[serde(rename = "SiteUrl")]
-    pub site_url: Option<String>,
     #[serde(rename = "Location")]
     pub locations: Vec<DHVLocation>,
 }
@@ -143,26 +53,10 @@ pub struct DHVLocation {
     pub location_type: Option<u8>, // 1 = launch, 2 = landing
     #[serde(rename = "Altitude")]
     pub altitude: Option<f64>,
-    #[serde(rename = "Directions")]
-    pub directions: Option<String>,
     #[serde(rename = "DirectionsText")]
     pub directions_text: Option<String>,
-    #[serde(rename = "TowingHeight1")]
-    pub towing_height1: Option<f64>,
-    #[serde(rename = "TowingHeight2")]
-    pub towing_height2: Option<f64>,
     #[serde(rename = "TowingLength")]
     pub towing_length: Option<f64>,
-    #[serde(rename = "AccessByCar")]
-    pub access_by_car: Option<bool>,
-    #[serde(rename = "AccessByFoot")]
-    pub access_by_foot: Option<bool>,
-    #[serde(rename = "AccessByPublicTransport")]
-    pub access_by_public_transport: Option<bool>,
-    #[serde(rename = "Hanggliding")]
-    pub hanggliding: Option<bool>,
-    #[serde(rename = "Paragliding")]
-    pub paragliding: Option<bool>,
 }
 
 impl DHVLocation {
@@ -185,11 +79,11 @@ impl DHVLocation {
             SiteType::Hang
         }
     }
-    pub fn get_location(&self, country: String) -> Result<Location, String> {
+    pub fn get_location(&self, country: String) -> Result<Location> {
         let parts: Vec<&str> = self.coordinates.split(',').collect();
 
         if parts.len() != 2 {
-            return Err(format!(
+            return Err(anyhow!(
                 "Expected format 'longitude,latitude', got '{}'",
                 self.coordinates
             ));
@@ -198,12 +92,12 @@ impl DHVLocation {
         let longitude = parts[0]
             .trim()
             .parse::<f64>()
-            .map_err(|e| format!("Invalid longitude '{}': {}", parts[0], e))?;
+            .map_err(|e| anyhow!("Invalid longitude '{}': {}", parts[0], e))?;
 
         let latitude = parts[1]
             .trim()
             .parse::<f64>()
-            .map_err(|e| format!("Invalid latitude '{}': {}", parts[1], e))?;
+            .map_err(|e| anyhow!("Invalid latitude '{}': {}", parts[1], e))?;
 
         Ok(Location {
             latitude,
@@ -291,6 +185,68 @@ fn parse_direction_text_to_degrees(text: &str) -> Option<f64> {
     }
 }
 
+impl From<DHVFlyingSite> for ParaglidingSite {
+    fn from(value: DHVFlyingSite) -> Self {
+        let country = value.site_country.clone().unwrap_or_default();
+        let launches = value
+            .locations
+            .iter()
+            .filter(|site| site.is_launch())
+            .flat_map(|launch| {
+                let ranges = launch.get_launch_ranges();
+                let location = match launch.get_location(country.clone()) {
+                    Ok(loc) => loc,
+                    Err(e) => {
+                        tracing::warn!(site = %value.site_name, error = %e, "skipping launch with bad coordinates");
+                        return Vec::new();
+                    }
+                };
+                let elevation = launch.altitude.unwrap_or(0.0);
+                ranges
+                    .into_iter()
+                    .map(|(start, stop)| ParaglidingLaunch {
+                        site_type: launch.get_type(),
+                        location: location.clone(),
+                        direction_degrees_start: start,
+                        direction_degrees_stop: stop,
+                        elevation,
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let landings = value
+            .locations
+            .iter()
+            .filter(|site| !site.is_launch())
+            .filter_map(|landing| {
+                let location = landing
+                    .get_location(country.clone())
+                    .map_err(|e| {
+                        tracing::warn!(site = %value.site_name, error = %e, "skipping landing with bad coordinates");
+                    })
+                    .ok()?;
+                Some(ParaglidingLanding {
+                    location,
+                    elevation: landing.altitude.unwrap_or(0.0),
+                })
+            })
+            .collect();
+
+        ParaglidingSite {
+            name: value.site_name,
+            launches,
+            landings,
+            country: value.site_country,
+            data_source: "DHV".into(),
+            parking_location: None,
+            mute_alerts: None,
+            rating: None,
+            preferred_weather_model: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,16 +283,8 @@ mod tests {
             coordinates: "13.0,50.0".into(),
             location_type: Some(1),
             altitude: Some(500.0),
-            directions: None,
             directions_text: Some(text.into()),
-            towing_height1: None,
-            towing_height2: None,
             towing_length: None,
-            access_by_car: None,
-            access_by_foot: None,
-            access_by_public_transport: None,
-            hanggliding: None,
-            paragliding: Some(true),
         }
     }
 
@@ -403,67 +351,5 @@ mod tests {
         assert_eq!(launch.direction_degrees_start, 135.0);
         assert_eq!(launch.direction_degrees_stop, 180.0);
         assert_eq!(launch.elevation, 500.0);
-    }
-}
-
-impl From<DHVFlyingSite> for ParaglidingSite {
-    fn from(value: DHVFlyingSite) -> Self {
-        let country = value.site_country.clone().unwrap_or_default();
-        let launches = value
-            .locations
-            .iter()
-            .filter(|site| site.is_launch())
-            .flat_map(|launch| {
-                let ranges = launch.get_launch_ranges();
-                let location = match launch.get_location(country.clone()) {
-                    Ok(loc) => loc,
-                    Err(e) => {
-                        tracing::warn!(site = %value.site_name, error = %e, "skipping launch with bad coordinates");
-                        return Vec::new();
-                    }
-                };
-                let elevation = launch.altitude.unwrap_or(0.0);
-                ranges
-                    .into_iter()
-                    .map(|(start, stop)| ParaglidingLaunch {
-                        site_type: launch.get_type(),
-                        location: location.clone(),
-                        direction_degrees_start: start,
-                        direction_degrees_stop: stop,
-                        elevation,
-                    })
-                    .collect()
-            })
-            .collect();
-
-        let landings = value
-            .locations
-            .iter()
-            .filter(|site| !site.is_launch())
-            .filter_map(|landing| {
-                let location = landing
-                    .get_location(country.clone())
-                    .map_err(|e| {
-                        tracing::warn!(site = %value.site_name, error = %e, "skipping landing with bad coordinates");
-                    })
-                    .ok()?;
-                Some(ParaglidingLanding {
-                    location,
-                    elevation: landing.altitude.unwrap_or(0.0),
-                })
-            })
-            .collect();
-
-        ParaglidingSite {
-            name: value.site_name,
-            launches,
-            landings,
-            country: value.site_country,
-            data_source: "DHV".into(),
-            parking_location: None,
-            mute_alerts: None,
-            rating: None,
-            preferred_weather_model: None,
-        }
     }
 }

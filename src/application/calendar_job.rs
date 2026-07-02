@@ -163,7 +163,7 @@ fn activity_to_event(a: ScheduledActivity) -> CalendarEvent {
         end_time: a.end,
         is_all_day: false,
         location: Some(a.title),
-        body: Some(format!("Last updated (Utc): {}", Utc::now())),
+        body: Some(format!("{}\n\nLast updated (Utc): {}", a.description, Utc::now())),
         color_id: None,
     }
 }

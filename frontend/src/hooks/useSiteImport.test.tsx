@@ -41,8 +41,7 @@ describe("useSiteImport", () => {
     (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: false,
       status: 400,
-      json: async () => ({ message: "bad xml" }),
-      text: async () => "",
+      text: async () => '{"message":"bad xml"}',
     });
     const { wrapper } = makeWrapper();
     const { result } = renderHook(() => useSiteImport(), { wrapper });

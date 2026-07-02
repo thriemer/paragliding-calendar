@@ -19,20 +19,14 @@ interface LocationPickerProps {
 }
 
 export function LocationPicker({ location, elevation, onChange }: LocationPickerProps) {
-  const [pickLat, setPickLat] = useState(location.latitude);
-  const [pickLng, setPickLng] = useState(location.longitude);
-  const [pickElev, setPickElev] = useState(elevation);
   const [loadingElevation, setLoadingElevation] = useState(false);
 
   const updateLocation = async (lat: number, lng: number) => {
-    setPickLat(lat);
-    setPickLng(lng);
     const newLocation = { ...location, latitude: lat, longitude: lng };
-    onChange(newLocation, pickElev);
+    onChange(newLocation, elevation);
     setLoadingElevation(true);
     try {
       const data = await fetchJson<ElevationResponse>(API.elevation(lat, lng));
-      setPickElev(data.elevation);
       onChange(newLocation, data.elevation);
     } catch (error) {
       console.error("Failed to fetch elevation:", error);
@@ -45,7 +39,7 @@ export function LocationPicker({ location, elevation, onChange }: LocationPicker
     updateLocation(lat, lng);
   };
 
-  const handleMarkerDrag = (e: L.LeafletMouseEvent) => {
+  const handleMarkerDrag = (e: L.DragEndEvent) => {
     const { lat, lng } = e.target.getLatLng();
     updateLocation(lat, lng);
   };
@@ -54,7 +48,7 @@ export function LocationPicker({ location, elevation, onChange }: LocationPicker
     <div className={styles.locationPicker}>
       <div className={styles.mapContainer}>
         <MapContainer
-          center={[pickLat, pickLng]}
+          center={[location.latitude, location.longitude]}
           zoom={13}
           zoomControl={false}
           style={{ height: "150px", width: "180px" }}
@@ -65,7 +59,7 @@ export function LocationPicker({ location, elevation, onChange }: LocationPicker
           />
           <MapClickHandler onClick={handleMapClick} />
           <Marker
-            position={[pickLat, pickLng]}
+            position={[location.latitude, location.longitude]}
             draggable={true}
             eventHandlers={{
               dragend: handleMarkerDrag,
@@ -77,7 +71,7 @@ export function LocationPicker({ location, elevation, onChange }: LocationPicker
         {loadingElevation ? (
           <span className={styles.elevationLoading}>Loading...</span>
         ) : (
-          <span>Elevation: {Math.round(pickElev)}m</span>
+          <span>Elevation: {Math.round(elevation)}m</span>
         )}
       </div>
     </div>

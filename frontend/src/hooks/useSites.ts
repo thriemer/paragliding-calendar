@@ -9,12 +9,14 @@ export interface ApiLocation {
   country: string | null;
 }
 
+export type SiteType = "Hang" | "Winch";
+
 export interface ApiLaunch {
   location: ApiLocation;
   direction_degrees_start: number;
   direction_degrees_stop: number;
   elevation: number;
-  site_type: string;
+  site_type: SiteType;
 }
 
 export interface ApiLanding {

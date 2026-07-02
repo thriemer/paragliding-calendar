@@ -84,7 +84,7 @@ describe("CompassRose rendering", () => {
 describe("CompassRose interaction", () => {
   // SVG center is (70,70). Start handle at 0° = (70, 10) (N), stop handle at 90° = (130, 70) (E).
   // Three circles render in order: [0] background, [1] start handle, [2] stop handle.
-  // Handlers live on the <svg>, so mousemove must be fired on the svg.
+  // Handlers live on the <svg>, so pointermove must be fired on the svg.
   function getHandles(container: HTMLElement) {
     const svg = container.querySelector("svg")!;
     const all = container.querySelectorAll("circle");
@@ -98,8 +98,8 @@ describe("CompassRose interaction", () => {
     );
     const { svg, startCircle } = getHandles(container);
 
-    fireEvent.mouseDown(startCircle, { clientX: 70, clientY: 10 });
-    fireEvent.mouseMove(svg, { clientX: 140, clientY: 70 });
+    fireEvent.pointerDown(startCircle, { clientX: 70, clientY: 10 });
+    fireEvent.pointerMove(svg, { clientX: 140, clientY: 70 });
 
     expect(onChange).toHaveBeenCalled();
     const last = onChange.mock.calls.at(-1)!;
@@ -114,8 +114,8 @@ describe("CompassRose interaction", () => {
     );
     const { svg, stopCircle } = getHandles(container);
 
-    fireEvent.mouseDown(stopCircle, { clientX: 130, clientY: 70 });
-    fireEvent.mouseMove(svg, { clientX: 70, clientY: 10 });
+    fireEvent.pointerDown(stopCircle, { clientX: 130, clientY: 70 });
+    fireEvent.pointerMove(svg, { clientX: 70, clientY: 10 });
 
     expect(onChange).toHaveBeenCalled();
     const last = onChange.mock.calls.at(-1)!;
@@ -124,28 +124,28 @@ describe("CompassRose interaction", () => {
     expect(last[1] === 0 || Math.abs(last[1] - 360) < 1).toBe(true);
   });
 
-  test("mouse move without prior mousedown does not fire onChange", () => {
+  test("pointer move without prior pointerdown does not fire onChange", () => {
     const onChange = vi.fn();
     const { container } = render(
       <CompassRose startDegrees={0} stopDegrees={90} onChange={onChange} />,
     );
     const { svg } = getHandles(container);
-    fireEvent.mouseMove(svg, { clientX: 140, clientY: 70 });
+    fireEvent.pointerMove(svg, { clientX: 140, clientY: 70 });
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  test("mouseUp on SVG stops further drag updates", () => {
+  test("pointerUp on SVG stops further drag updates", () => {
     const onChange = vi.fn();
     const { container } = render(
       <CompassRose startDegrees={0} stopDegrees={90} onChange={onChange} />,
     );
     const { svg, startCircle } = getHandles(container);
-    fireEvent.mouseDown(startCircle, { clientX: 70, clientY: 10 });
-    fireEvent.mouseMove(svg, { clientX: 140, clientY: 70 });
+    fireEvent.pointerDown(startCircle, { clientX: 70, clientY: 10 });
+    fireEvent.pointerMove(svg, { clientX: 140, clientY: 70 });
     const callsAfterFirstMove = onChange.mock.calls.length;
     expect(callsAfterFirstMove).toBeGreaterThan(0);
-    fireEvent.mouseUp(svg);
-    fireEvent.mouseMove(svg, { clientX: 70, clientY: 130 });
+    fireEvent.pointerUp(svg);
+    fireEvent.pointerMove(svg, { clientX: 70, clientY: 130 });
     expect(onChange.mock.calls.length).toBe(callsAfterFirstMove);
   });
 
@@ -158,7 +158,7 @@ describe("CompassRose interaction", () => {
     );
     const { svg } = getHandles(container);
     // (100, 18) is at ~30°, closer to start (0°) than stop (90°).
-    fireEvent.mouseDown(svg, { clientX: 100, clientY: 18 });
+    fireEvent.pointerDown(svg, { clientX: 100, clientY: 18 });
     expect(onChange).toHaveBeenCalled();
     const last = onChange.mock.calls.at(-1)!;
     expect(last[0]).toBeCloseTo(30, 0);
@@ -172,7 +172,7 @@ describe("CompassRose interaction", () => {
     );
     const { svg } = getHandles(container);
     // (122, 40) is at ~60°, closer to stop (90°) than start (0°).
-    fireEvent.mouseDown(svg, { clientX: 122, clientY: 40 });
+    fireEvent.pointerDown(svg, { clientX: 122, clientY: 40 });
     expect(onChange).toHaveBeenCalled();
     const last = onChange.mock.calls.at(-1)!;
     expect(last[0]).toBe(0);
@@ -189,7 +189,7 @@ describe("CompassRose interaction", () => {
     const { svg } = getHandles(container);
     // 355° position: x = 70 + 60*cos(deg2rad(355)) ≈ 70 + 60*(-0.087) ≈ 64.8
     //                y = 70 + 60*sin(deg2rad(355)) ≈ 70 + 60*(-0.996) ≈ 10.2
-    fireEvent.mouseDown(svg, { clientX: 65, clientY: 10 });
+    fireEvent.pointerDown(svg, { clientX: 65, clientY: 10 });
     expect(onChange).toHaveBeenCalled();
     const last = onChange.mock.calls.at(-1)!;
     // Start moved, stop unchanged.
@@ -203,8 +203,8 @@ describe("CompassRose interaction", () => {
       <CompassRose startDegrees={0} stopDegrees={90} onChange={onChange} />,
     );
     const { svg } = getHandles(container);
-    fireEvent.mouseDown(svg, { clientX: 100, clientY: 18 }); // ~30°, picks start
-    fireEvent.mouseMove(svg, { clientX: 122, clientY: 40 }); // ~60°
+    fireEvent.pointerDown(svg, { clientX: 100, clientY: 18 }); // ~30°, picks start
+    fireEvent.pointerMove(svg, { clientX: 122, clientY: 40 }); // ~60°
     // Even though 60° is closer to stop in absolute terms, the active handle is start —
     // and drag should keep moving start, not switch handles mid-drag.
     const last = onChange.mock.calls.at(-1)!;

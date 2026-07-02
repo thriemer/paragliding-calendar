@@ -99,3 +99,12 @@
   display: flex;
   gap: 10px;
 }
+
+.error {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: #fdecea;
+  color: #c62828;
+  border-radius: 4px;
+  font-size: 14px;
+}

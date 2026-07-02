@@ -20,19 +20,12 @@ pub struct DailySummary {
     pub date: NaiveDate,
     pub hourly_scores: Vec<HourlyScore>,
     pub ranges: Vec<FlyableRange>,
-    pub total_flyable_hours: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct FlyableRange {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
-}
-
-impl FlyableRange {
-    pub fn is_at_least(&self, d: Duration) -> bool {
-        (self.end - self.start) >= d
-    }
 }
 
 impl DailySummary {
@@ -244,7 +237,7 @@ pub async fn evaluate_site(
             });
         }
 
-        let mut daily_summary = calculate_daily_summary(date, hourly_scores);
+        let mut daily_summary = DailySummary { date, hourly_scores, ranges: vec![] };
         daily_summary.calculate_flyable_time_ranges();
         daily_summaries.push(daily_summary);
     }
@@ -281,17 +274,6 @@ fn split_forecast_by_days(forecast: WeatherForecast) -> Vec<WeatherForecast> {
             }
         })
         .collect()
-}
-
-fn calculate_daily_summary(date: NaiveDate, hourly_scores: Vec<HourlyScore>) -> DailySummary {
-    let total_flyable_hours = hourly_scores.iter().filter(|h| h.is_flyable).count();
-
-    DailySummary {
-        date,
-        hourly_scores,
-        total_flyable_hours,
-        ranges: vec![],
-    }
 }
 
 #[cfg(test)]
@@ -346,7 +328,7 @@ mod tests {
             precipitation: 0.0,
             cloud_cover: 0,
             pressure: 1013.0,
-            visibility: 10.0,
+            visibility: Some(10.0),
             description: String::new(),
         }
     }
@@ -380,24 +362,6 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(wind_direction_in_sector(wind, start, stop), expected);
-    }
-
-    // --- FlyableRange tests (unchanged) ---
-
-    #[rstest]
-    #[case(Duration::hours(1), Duration::hours(2), false)]
-    #[case(Duration::hours(2), Duration::hours(2), true)]
-    #[case(Duration::hours(3), Duration::hours(2), true)]
-    fn flyable_range_is_at_least_is_inclusive(
-        #[case] range_len: Duration,
-        #[case] threshold: Duration,
-        #[case] expected: bool,
-    ) {
-        let r = FlyableRange {
-            start: ts(10),
-            end: ts(10) + range_len,
-        };
-        assert_eq!(r.is_at_least(threshold), expected);
     }
 
     // --- ridge_wind_score tests ---
@@ -592,7 +556,7 @@ mod tests {
         let l = launch(0.0, 360.0, SiteType::Hang);
         let w = weather(ts(12));
         let (score, _) = score_hour(&w, &l);
-        assert_eq!(score > 0.0, true);
+        assert!(score > 0.0);
     }
 
     // --- max_wind_ms conversion ---
@@ -648,7 +612,6 @@ mod tests {
             date: ts(0).date_naive(),
             hourly_scores: scores,
             ranges: vec![],
-            total_flyable_hours: 0,
         }
     }
 

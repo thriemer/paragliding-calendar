@@ -1,9 +1,9 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { FilterPanel } from "./FilterPanel";
-import type { ApiSite } from "../hooks/useSites";
+import type { ApiSite, SiteType } from "../hooks/useSites";
 
-const site = (name: string, types: string[]): ApiSite => ({
+const site = (name: string, types: SiteType[]): ApiSite => ({
   name,
   country: "DE",
   launches: types.map((site_type) => ({
@@ -41,7 +41,8 @@ describe("FilterPanel", () => {
   });
 
   test("filters out empty site types", () => {
-    const sites = [site("A", ["Hang", ""])];
+    // Deliberately malformed data: the panel must drop empty site types.
+    const sites = [site("A", ["Hang", "" as SiteType])];
     render(
       <FilterPanel filters={{ siteType: "" }} onFilterChange={() => {}} sites={sites} />,
     );

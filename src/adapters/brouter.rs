@@ -1,3 +1,5 @@
+#![allow(dead_code)] // ponytail: routing stack not wired into AppState yet (CrowFlies stands in); kept per owner's call.
+
 use std::{sync::Arc, time::Duration as StdDuration};
 
 use anyhow::{Result, anyhow};
@@ -72,8 +74,7 @@ impl BRouter {
         })?;
 
         let total_time = parsed
-            .features
-            .get(0)
+            .features.first()
             .ok_or(anyhow!("No features in BRouter response for {url}"))?
             .properties
             .total_time

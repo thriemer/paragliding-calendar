@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
-use reqwest_tracing::TracingMiddleware;
 
 use crate::{
     adapters::{
@@ -27,9 +24,6 @@ use crate::{
 
 #[derive(Clone)]
 pub struct AppState {
-    pub cache: Arc<PersistentCache>,
-    pub store: Arc<PersistentStore>,
-    pub http: ClientWithMiddleware,
     pub site_repo: Arc<ParaglidingSiteRepository>,
     pub auth: Arc<WebFlowAuthenticator>,
     pub microsoft_auth: Option<Arc<O365Authenticator>>,
@@ -37,7 +31,6 @@ pub struct AppState {
     pub weather: Arc<dyn WeatherProvider>,
     pub geo: Arc<dyn GeoProvider>,
     pub calendar: Arc<dyn CalendarProvider>,
-    pub solver: Arc<dyn WeekSolver>,
     pub planner: Arc<Planner>,
 }
 
@@ -48,8 +41,6 @@ impl AppState {
 
         let store_ks = db.keyspace("store", fjall::KeyspaceCreateOptions::default)?;
         let store = Arc::new(PersistentStore::from_keyspace(store_ks));
-
-        let http = build_http_client();
 
         let auth = Arc::new(WebFlowAuthenticator::new(
             cfg.google.client_id.clone(),
@@ -96,9 +87,6 @@ impl AppState {
             Arc::new(CombinedCalendar::new(google_cal, microsoft_cal));
 
         Ok(Self {
-            cache,
-            store,
-            http,
             site_repo,
             auth,
             microsoft_auth,
@@ -106,22 +94,7 @@ impl AppState {
             weather,
             geo,
             calendar,
-            solver,
             planner,
         })
     }
-}
-
-fn build_http_client() -> ClientWithMiddleware {
-    let retry_policy = ExponentialBackoff::builder()
-        .base(3)
-        .retry_bounds(
-            std::time::Duration::from_secs(10),
-            std::time::Duration::from_mins(30),
-        )
-        .build_with_max_retries(5);
-    ClientBuilder::new(reqwest::Client::new())
-        .with(TracingMiddleware::default())
-        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-        .build()
 }

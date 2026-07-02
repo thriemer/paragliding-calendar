@@ -77,6 +77,11 @@ impl ActivitySource for ParaglidingActivitySource {
                     let hourly: Vec<f32> = range_scores.iter().map(|h| h.score).collect();
                     let reasons: Vec<String> =
                         range_scores.iter().map(|h| h.reason.clone()).collect();
+                    let score = Score {
+                        window_start: range.start,
+                        hourly,
+                        reasons,
+                    };
 
                     out.push(ActivitySuggestion {
                         kind: ActivityKind::Paragliding,
@@ -84,17 +89,17 @@ impl ActivitySource for ParaglidingActivitySource {
                         timing: Timing::Flexible {
                             window: TimeWindow {
                                 start: range.start,
-                                end: range.end,
+                                // `range.end` is the *start* of the last flyable hour; the
+                                // window stays open until that hour is over.
+                                end: range.end + Duration::hours(1),
                             },
                             min_duration,
                         },
                         title: site.name.clone(),
-                        description: String::new(),
-                        score: Some(Score {
-                            window_start: range.start,
-                            hourly,
-                            reasons,
-                        }),
+                        // Per-hour scoring reasons ride along and end up in the calendar
+                        // event body, so the event explains *why* the site is flyable.
+                        description: score.reasons.join("\n"),
+                        score: Some(score),
                     });
                 }
             }
@@ -181,7 +186,7 @@ mod tests {
             precipitation: 0.0,
             cloud_cover: 0,
             pressure: 1013.0,
-            visibility: 10.0,
+            visibility: Some(10.0),
             description: String::new(),
         }
     }
@@ -275,7 +280,8 @@ mod tests {
         };
         let day = Utc.with_ymd_and_hms(2026, 6, 13, 0, 0, 0).unwrap();
         assert_eq!(window.start, day + chrono::Duration::hours(10));
-        assert_eq!(window.end, day + chrono::Duration::hours(14));
+        // Hours 10..=14 are flyable, so the window closes when hour 14 ends.
+        assert_eq!(window.end, day + chrono::Duration::hours(15));
         assert_eq!(out[0].title, "S");
         let score = out[0].score.as_ref().expect("expected a score");
         assert!((score.total() - 4.91).abs() < 0.1, "expected score ~4.91, got {}", score.total());

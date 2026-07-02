@@ -14,6 +14,7 @@ interface SiteEditorProps {
   onSave: (updatedSite: ApiSite) => void;
   onDelete?: (siteName: string) => void;
   onCancel: () => void;
+  error?: string | null;
 }
 
 function StarRating({ rating, onChange }: { rating: number | undefined; onChange: (rating: number) => void }) {
@@ -45,21 +46,17 @@ function ParkingLocationPicker({
   onChange: (location: ApiLocation) => void;
   onRemove: () => void;
 }) {
-  const defaultLoc = location || { latitude: 47.0, longitude: 10.0, name: "", country: "" };
-  const [lat, setLat] = useState(defaultLoc.latitude);
-  const [lng, setLng] = useState(defaultLoc.longitude);
+  const loc = location || { latitude: 47.0, longitude: 10.0, name: "", country: "" };
 
   const handleMapClick = (newLat: number, newLng: number) => {
-    setLat(newLat);
-    setLng(newLng);
-    onChange({ ...defaultLoc, latitude: newLat, longitude: newLng });
+    onChange({ ...loc, latitude: newLat, longitude: newLng });
   };
 
   return (
     <div className={styles.parkingPicker}>
       <div className={styles.miniMap}>
         <MapContainer
-          center={[lat, lng]}
+          center={[loc.latitude, loc.longitude]}
           zoom={13}
           style={{ height: "120px", width: "100%" }}
         >
@@ -68,7 +65,7 @@ function ParkingLocationPicker({
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           <MapClickHandler onClick={handleMapClick} />
-          <Marker position={[lat, lng]} />
+          <Marker position={[loc.latitude, loc.longitude]} />
         </MapContainer>
       </div>
       <button className="btn btn-small btn-danger" onClick={onRemove}>
@@ -78,7 +75,7 @@ function ParkingLocationPicker({
   );
 }
 
-export function SiteEditor({ site, defaultCenter, onSave, onDelete, onCancel }: SiteEditorProps) {
+export function SiteEditor({ site, defaultCenter, onSave, onDelete, onCancel, error }: SiteEditorProps) {
   const { models } = useWeatherModels();
   const [name, setName] = useState(site.name);
   const [country, setCountry] = useState(site.country || "");
@@ -260,6 +257,8 @@ export function SiteEditor({ site, defaultCenter, onSave, onDelete, onCancel }: 
           />
         ))}
       </div>
+
+      {error && <div className={styles.error}>{error}</div>}
 
       <div className={styles.actions}>
         {onDelete && (

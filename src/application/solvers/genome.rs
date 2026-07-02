@@ -107,7 +107,7 @@ fn walk_segment(
     for (i, gene) in genes.iter().enumerate() {
         match &gene.action {
             GeneAction::Wait => {
-                time = time + map_duration(gene.duration, Duration::zero(), span);
+                time += map_duration(gene.duration, Duration::zero(), span);
             }
             GeneAction::Do(act) => {
                 // Drive-out to the resolved end boundary (a pinned commitment, or the chosen
@@ -291,10 +291,6 @@ mod tests {
     fn ts(h: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 6, 13, h, 0, 0).unwrap()
     }
-    fn ts_m(h: u32, m: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 6, 13, h, m, 0).unwrap()
-    }
-
     fn matrix_routing(
         f: impl Fn(&Location, &Location) -> Duration + Send + Sync + 'static,
     ) -> Arc<dyn RoutingProvider> {

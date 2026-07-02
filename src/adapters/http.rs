@@ -270,7 +270,10 @@ async fn analyze_flight(body: Body) -> Result<Json<flight_analytics::FlightAnaly
 
     tracing::info!(points = track.points.len(), "Parsed track");
 
-    let analysis = flight_analytics::analyse_flight(&track);
+    let analysis = flight_analytics::analyse_flight(&track).map_err(|e| {
+        tracing::warn!(error = ?e, "Flight analysis failed");
+        StatusCode::BAD_REQUEST
+    })?;
     tracing::info!("Flight analysis complete");
 
     Ok(Json(analysis))

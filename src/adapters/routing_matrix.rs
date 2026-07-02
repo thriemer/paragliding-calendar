@@ -1,3 +1,5 @@
+#![allow(dead_code)] // ponytail: routing stack not wired into AppState yet (CrowFlies stands in); kept per owner's call.
+
 //! Shared helpers for provider matrix endpoints: per-pair cache key/TTL, cache-first
 //! assembly, and incremental fetch planning so only the new pairs hit the provider.
 

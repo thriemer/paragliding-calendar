@@ -86,10 +86,10 @@ pub fn compute_total_drive(
     for (_day, locs) in by_day {
         let mut prev: &Location = home;
         for loc in locs {
-            total = total + matrix.get(prev, loc);
+            total += matrix.get(prev, loc);
             prev = loc;
         }
-        total = total + matrix.get(prev, home);
+        total += matrix.get(prev, home);
     }
     total
 }
@@ -123,9 +123,12 @@ pub fn partition_segments(
 ) -> Vec<Segment> {
     let mut segments = Vec::new();
     for fs in free_slots {
+        // Non-strict: the planner subtracts events from the free slots, so a commitment never
+        // overlaps a slot — it *touches* the slot edge. Touching must still pin the boundary
+        // (drive-out reservation to the meeting, and departing from it afterwards).
         let mut overlapping: Vec<&ScheduledActivity> = fixed
             .iter()
-            .filter(|c| c.start < fs.end && c.end > fs.start)
+            .filter(|c| c.start <= fs.end && c.end >= fs.start)
             .collect();
         overlapping.sort_by_key(|c| c.start);
 
@@ -241,6 +244,23 @@ mod tests {
         assert_eq!((segs[1].start, segs[1].end), (ts(13), ts(18)));
         assert_eq!(segs[1].start_loc.as_ref().unwrap().name, "Office");
         assert!(segs[1].end_loc.is_none());
+    }
+
+    #[test]
+    fn adjacent_commitment_pins_boundary_like_the_planner_produces() {
+        // The planner subtracts events from free slots, so the commitment sits exactly in the
+        // gap: [8,12] + meeting [12,13] + [13,18]. Touching must pin like overlapping does.
+        let slots = vec![
+            TimeWindow { start: ts(8), end: ts(12) },
+            TimeWindow { start: ts(13), end: ts(18) },
+        ];
+        let segs =
+            partition_segments(&slots, &[commitment(12, 13, Some(loc("Office")))], &loc("Home"));
+        assert_eq!(segs.len(), 2);
+        assert_eq!((segs[0].start, segs[0].end), (ts(8), ts(12)));
+        assert_eq!(segs[0].end_loc.as_ref().unwrap().name, "Office");
+        assert_eq!((segs[1].start, segs[1].end), (ts(13), ts(18)));
+        assert_eq!(segs[1].start_loc.as_ref().unwrap().name, "Office");
     }
 
     #[test]

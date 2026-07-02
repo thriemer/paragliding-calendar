@@ -213,10 +213,20 @@ fn greedy_seed(
             Some(i) => i,
             None => continue,
         };
+        // Titles are not unique — one site yields a same-titled suggestion per day/flyable
+        // range — so also require the candidate's own timing to contain the placed span.
         let Some(act) = input
             .candidates
             .iter()
-            .find(|c| c.title == item.title)
+            .find(|c| {
+                c.title == item.title
+                    && match &c.timing {
+                        Timing::Flexible { window, .. } => {
+                            window.start <= item.start && item.end <= window.end
+                        }
+                        Timing::Fixed { start, end } => *start == item.start && *end == item.end,
+                    }
+            })
             .cloned()
             .map(Arc::new)
         else {
@@ -404,15 +414,14 @@ fn pick_alternatives(pop: &[Individual], num: usize) -> Vec<Plan> {
 
     // Ordered candidate indices into `pop`: best-fun of front 0, then every front by crowding desc.
     let mut order: Vec<usize> = Vec::new();
-    if let Some(front0) = fronts.first() {
-        if let Some(&best) = front0.iter().max_by(|&&a, &&b| {
+    if let Some(front0) = fronts.first()
+        && let Some(&best) = front0.iter().max_by(|&&a, &&b| {
             pop[a].plan.total_fun.total_cmp(&pop[b].plan.total_fun).then_with(|| {
                 pop[b].plan.total_drive.num_seconds().cmp(&pop[a].plan.total_drive.num_seconds())
             })
         }) {
             order.push(best);
         }
-    }
     for front in &fronts {
         let cd = crowding(front, pop);
         let mut idx: Vec<usize> = (0..front.len()).collect();
@@ -486,7 +495,7 @@ fn mutate(
     rate: f32,
     rng: &mut StdRng,
 ) {
-    let mut hit = |rng: &mut StdRng| rng.random_range(0.0..1.0) < rate;
+    let hit = |rng: &mut StdRng| rng.random_range(0.0..1.0) < rate;
 
     for seg in genome.segments.iter_mut() {
         for gene in seg.iter_mut() {
@@ -666,6 +675,25 @@ mod tests {
             .map(|p| ((p.total_fun * 100.0) as i64, p.total_drive.num_seconds()))
             .collect();
         assert!(distinct.len() >= 2, "expected spread, got {distinct:?}");
+    }
+
+    #[tokio::test]
+    async fn greedy_seed_distinguishes_same_titled_windows() {
+        // One site → several same-titled suggestions (per flyable range). The seed must map
+        // each greedy placement back onto the candidate whose window contains it.
+        let routing = constant_routing(0);
+        let cands = vec![
+            flex(site("A", 50.75), 8, 12, 0.9),
+            flex(site("A", 50.75), 13, 18, 0.8),
+        ];
+        let input = base_input(cands, 1);
+        let matrix = build_matrix(routing.as_ref(), &input).await.unwrap();
+        let segments = partition_segments(&input.free_slots, &input.fixed, &input.origin);
+        let overnight_pool = overnight_candidates(&input.origin);
+
+        let genome = greedy_seed(&routing, &input, &matrix, &segments, &overnight_pool);
+        let plan = decode(&genome, &input, &matrix);
+        assert_eq!(plan.items.len(), 2, "both same-titled windows must survive the seed round-trip");
     }
 
     #[tokio::test]

@@ -20,9 +20,9 @@ function App() {
   const [selectedSite, setSelectedSite] = useState<ApiSite | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [mapView, setMapView] = useState<{ center: [number, number]; zoom: number } | null>(null);
-  const { sites, loading: sitesLoading } = useSites();
-  const { updateSite, deleteSite } = useUpdateSite();
-  const { settings, updateSettings } = useSettings();
+  const { sites, loading: sitesLoading, error: sitesError } = useSites();
+  const { updateSite, deleteSite, error: siteSaveError } = useUpdateSite();
+  const { settings, updateSettings, error: settingsError } = useSettings();
   const { refresh: refreshCalendar, refreshing: calendarRefreshing, error: calendarRefreshError } =
     useCalendarRefresh();
 
@@ -132,7 +132,9 @@ function App() {
           )}
         </aside>
         <main className={styles.mainContent}>
-          {sitesLoading ? (
+          {sitesError ? (
+            <p>Failed to load sites: {sitesError}</p>
+          ) : sitesLoading ? (
             <p>Loading sites...</p>
           ) : (
             <div className={styles.mapContainer}>
@@ -156,6 +158,7 @@ function App() {
             onSave={handleSaveSite}
             onDelete={selectedSite.name ? handleDeleteSite : undefined}
             onCancel={() => setSelectedSite(null)}
+            error={siteSaveError}
           />
         </div>
       )}
@@ -164,6 +167,7 @@ function App() {
           settings={settings}
           onSave={handleSaveSettings}
           onCancel={() => setShowSettings(false)}
+          error={settingsError}
         />
       )}
     </div>

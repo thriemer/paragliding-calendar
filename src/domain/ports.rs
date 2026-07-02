@@ -76,16 +76,10 @@ pub trait RoutingProvider: Send + Sync {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait CalendarProvider: Send + Sync {
-    async fn is_busy(
-        &self,
-        calendars: &Vec<String>,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
-    ) -> Result<bool>;
     /// Concrete events in `[start, end]` across `calendars`, expanded from recurrences.
     async fn get_events(
         &self,
-        calendars: &Vec<String>,
+        calendars: &[String],
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<CalendarEvent>>;

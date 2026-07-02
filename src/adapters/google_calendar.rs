@@ -1,19 +1,12 @@
-use std::{
-    hash::{DefaultHasher, Hash, Hasher},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
-use chrono::{DateTime, Datelike, NaiveTime, Utc};
+use chrono::{DateTime, NaiveTime, Utc};
 use google_apis_common::GetToken;
 use google_calendar3::{
     CalendarHub,
-    api::{
-        CalendarList, Event, EventDateTime, FreeBusyRequest, FreeBusyRequestItem,
-        Scope,
-    },
+    api::{CalendarList, Event, EventDateTime, Scope},
 };
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
@@ -31,6 +24,9 @@ use crate::{
 // v2: bumped when `calendar.events.readonly` was added — cached v1 tokens lack the scope and
 // would 403 on events.list forever, so we ignore them and force the prompt=consent re-auth.
 const TOKEN_CACHE_KEY: &str = "calendar_token_v2";
+/// Latest CSRF `state` sent out by `wait_for_authentication`; only the most recent auth email
+/// is valid. Verified by the OAuth callback before exchanging the code.
+const CSRF_STATE_KEY: &str = "calendar_oauth_csrf_state";
 
 const SCOPES: [&str; 4] = [
     "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
@@ -97,10 +93,10 @@ impl WebFlowAuthenticator {
     pub async fn wait_for_authentication(&self) -> Result<String> {
         let _guard = self.auth_lock.lock().await;
 
-        if let Ok(Some(token)) = self.cache.get::<StoredToken>(TOKEN_CACHE_KEY).await {
-            if token.expiry > Utc::now().timestamp() {
-                return Ok(token.access_token);
-            }
+        if let Ok(Some(token)) = self.cache.get::<StoredToken>(TOKEN_CACHE_KEY).await
+            && token.expiry > Utc::now().timestamp()
+        {
+            return Ok(token.access_token);
         }
 
         let two_days_secs = 2 * 24 * 60 * 60;
@@ -109,27 +105,36 @@ impl WebFlowAuthenticator {
 
         loop {
             let (auth_url, csrf_state) = self.build_authorization_url();
+            self.cache
+                .put(CSRF_STATE_KEY, csrf_state, Duration::from_secs(two_days_secs))
+                .await?;
 
             tracing::info!("Sending authentication URL via email");
             email::send_auth_link(&auth_url)
                 .await
                 .context("Failed to send auth email")?;
 
-            let _ = csrf_state;
-
             for _ in 0..max_attempts {
                 tokio::time::sleep(Duration::from_secs(check_interval_secs)).await;
 
-                if let Ok(Some(token)) = self.cache.get::<StoredToken>(TOKEN_CACHE_KEY).await {
-                    if token.expiry > Utc::now().timestamp() {
-                        tracing::info!("User authenticated successfully");
-                        return Ok(token.access_token);
-                    }
+                if let Ok(Some(token)) = self.cache.get::<StoredToken>(TOKEN_CACHE_KEY).await
+                    && token.expiry > Utc::now().timestamp()
+                {
+                    tracing::info!("User authenticated successfully");
+                    return Ok(token.access_token);
                 }
             }
 
             tracing::warn!("User did not authenticate within 2 days, sending new email");
         }
+    }
+
+    /// True iff `state` matches the most recently issued auth link (older emails go stale).
+    pub async fn verify_csrf_state(&self, state: &str) -> bool {
+        matches!(
+            self.cache.get::<String>(CSRF_STATE_KEY).await,
+            Ok(Some(expected)) if expected == state
+        )
     }
 
     pub async fn exchange_code(&self, code: &str) -> Result<StoredToken> {
@@ -221,7 +226,7 @@ impl WebFlowAuthenticator {
             }
 
             if let Some(ref refresh_token) = token.refresh_token {
-                match self.refresh_token(&refresh_token).await {
+                match self.refresh_token(refresh_token).await {
                     Ok(new_token) => {
                         let access_token = new_token.access_token.clone();
                         self.cache
@@ -256,10 +261,7 @@ impl GetToken for WebFlowAuthenticator {
         Box::pin(async move {
             match this.get_token_internal().await {
                 Ok(token) => Ok(token),
-                Err(e) => Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
+                Err(e) => Err(Box::new(std::io::Error::other(e.to_string()))
                     as Box<dyn std::error::Error + Send + Sync>),
             }
         })
@@ -351,99 +353,9 @@ impl GoogleCalendar {
 #[async_trait]
 impl CalendarProvider for GoogleCalendar {
     #[instrument(skip(self))]
-    async fn is_busy(
-        &self,
-        calendars: &Vec<String>,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
-    ) -> Result<bool> {
-        let items = futures::future::join_all(
-            calendars
-                .iter()
-                .map(async |n| {
-                    let id = match self.get_id_for_name(n).await {
-                        Ok(id) => Some(id),
-                        Err(err) => {
-                            tracing::warn!(name = %n, error = ?err, "Cant get id for calendar");
-                            None
-                        }
-                    };
-                    FreeBusyRequestItem { id }
-                })
-                .collect::<Vec<_>>(),
-        )
-        .await;
-
-        let start_weekday = start.weekday().num_days_from_monday() as u64;
-        let end_weekday = end.weekday().num_days_from_monday() as u64;
-        let week_start_datetime = start.date_naive().and_time(NaiveTime::MIN).and_utc()
-            - Duration::from_hours(24u64 * start_weekday);
-        let week_end_datetime = end
-            .date_naive()
-            .and_time(NaiveTime::from_hms_opt(23, 59, 59).unwrap())
-            .and_utc()
-            + Duration::from_hours(24u64 * (7u64 - end_weekday));
-
-        let mut hasher = DefaultHasher::new();
-        calendars.hash(&mut hasher);
-        week_start_datetime.hash(&mut hasher);
-        week_end_datetime.hash(&mut hasher);
-        let cache_key = format!("Calendar_free_busy_hash_{}", hasher.finish());
-
-        let busy = {
-            if let Some(busy) = self.cache.get(&cache_key).await? {
-                busy
-            } else {
-                let (_, busy) = self
-                    .hub
-                    .freebusy()
-                    .query(FreeBusyRequest {
-                        items: Some(items.clone()),
-                        time_min: Some(week_start_datetime),
-                        time_max: Some(week_end_datetime),
-                        group_expansion_max: None,
-                        calendar_expansion_max: None,
-                        time_zone: None,
-                    })
-                    .add_scope(Scope::Freebusy)
-                    .doit()
-                    .await?;
-
-                self.cache
-                    .put(&cache_key, busy.clone(), Duration::from_mins(5))
-                    .await?;
-                busy
-            }
-        };
-
-        let mut b: bool = false;
-
-        if let Some(freebusy) = busy.calendars {
-            b = items
-                .iter()
-                .filter_map(|i| i.id.clone())
-                .filter_map(|i| {
-                    if let Some(fb) = freebusy.get(&i) {
-                        return fb.busy.clone();
-                    }
-                    None
-                })
-                .flatten()
-                .any(|tp| start < tp.end.unwrap() && end > tp.start.unwrap());
-        }
-        tracing::debug!(
-            start = %start,
-            end = %end,
-            busy = b,
-            "Range busy/free check"
-        );
-        Ok(b)
-    }
-
-    #[instrument(skip(self))]
     async fn get_events(
         &self,
-        calendars: &Vec<String>,
+        calendars: &[String],
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<CalendarEvent>> {
@@ -571,8 +483,10 @@ impl CalendarProvider for GoogleCalendar {
             tracing::info!(name = %name, "Calendar already exists, skipping creation");
             return Ok(());
         }
-        let mut cal = google_calendar3::api::Calendar::default();
-        cal.summary = Some(name.into());
+        let cal = google_calendar3::api::Calendar {
+            summary: Some(name.into()),
+            ..Default::default()
+        };
         let (_, cal) = self
             .hub
             .calendars()
@@ -593,14 +507,15 @@ impl CalendarProvider for GoogleCalendar {
 
 impl From<CalendarEvent> for Event {
     fn from(value: CalendarEvent) -> Self {
-        let mut event = Event::default();
-        event.summary = Some(value.title);
-        event.start = Some(to_event_time(value.start_time));
-        event.end = Some(to_event_time(value.end_time));
-        event.location = value.location;
-        event.description = value.body;
-        event.color_id = value.color_id;
-        event
+        Event {
+            summary: Some(value.title),
+            start: Some(to_event_time(value.start_time)),
+            end: Some(to_event_time(value.end_time)),
+            location: value.location,
+            description: value.body,
+            color_id: value.color_id,
+            ..Default::default()
+        }
     }
 }
 
@@ -650,11 +565,12 @@ mod tests {
     use chrono::{NaiveDate, TimeZone};
 
     fn timed(summary: &str) -> Event {
-        let mut e = Event::default();
-        e.summary = Some(summary.into());
-        e.start = Some(to_event_time(Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap()));
-        e.end = Some(to_event_time(Utc.with_ymd_and_hms(2026, 6, 13, 11, 0, 0).unwrap()));
-        e
+        Event {
+            summary: Some(summary.into()),
+            start: Some(to_event_time(Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap())),
+            end: Some(to_event_time(Utc.with_ymd_and_hms(2026, 6, 13, 11, 0, 0).unwrap())),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -680,18 +596,20 @@ mod tests {
 
     #[test]
     fn all_day_event_expands_to_full_day_span() {
-        let mut e = Event::default();
-        e.summary = Some("holiday".into());
-        e.start = Some(EventDateTime {
-            date: Some(NaiveDate::from_ymd_opt(2026, 6, 13).unwrap()),
-            date_time: None,
-            time_zone: None,
-        });
-        e.end = Some(EventDateTime {
-            date: Some(NaiveDate::from_ymd_opt(2026, 6, 14).unwrap()),
-            date_time: None,
-            time_zone: None,
-        });
+        let e = Event {
+            summary: Some("holiday".into()),
+            start: Some(EventDateTime {
+                date: Some(NaiveDate::from_ymd_opt(2026, 6, 13).unwrap()),
+                date_time: None,
+                time_zone: None,
+            }),
+            end: Some(EventDateTime {
+                date: Some(NaiveDate::from_ymd_opt(2026, 6, 14).unwrap()),
+                date_time: None,
+                time_zone: None,
+            }),
+            ..Default::default()
+        };
         let ce = to_calendar_event(e).unwrap();
         assert!(ce.is_all_day);
         assert_eq!(ce.start_time, Utc.with_ymd_and_hms(2026, 6, 13, 0, 0, 0).unwrap());

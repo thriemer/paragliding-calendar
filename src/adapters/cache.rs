@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use fjall::{Iter, Keyspace};
+use fjall::Keyspace;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::task;
 
@@ -73,33 +73,6 @@ impl PersistentCache {
         }
     }
 
-    pub async fn get_all_starting_with<T: DeserializeOwned + Send + 'static>(
-        &self,
-        key: &str,
-    ) -> Result<Vec<T>> {
-        let store = self.store.clone();
-        let key_bytes = key.as_bytes().to_vec();
-        let maybe_bytes: Iter = task::spawn_blocking(move || store.prefix(key_bytes)).await?;
-        let result = maybe_bytes
-            .filter_map(|pair| pair.value().ok())
-            .filter_map(|bytes| {
-                let entry: postcard::Result<StoredEntry<T>> = postcard::from_bytes(&bytes);
-                let entry = entry.ok()?;
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
-
-                if now < entry.expires_at {
-                    Some(entry.value)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<T>>();
-        Ok(result)
-    }
-
     pub async fn remove(&self, key: &str) -> Result<()> {
         let key = key.as_bytes().to_vec();
         let store = self.store.clone();
@@ -153,35 +126,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_all_starting_with_filters_expired_entries() {
-        let (_dir, cache) = fresh_cache();
-        cache
-            .put("fresh_a", 1u32, Duration::from_secs(60))
-            .await
-            .unwrap();
-        cache
-            .put("fresh_b", 2u32, Duration::from_millis(100))
-            .await
-            .unwrap();
-        tokio::time::sleep(Duration::from_millis(1100)).await;
-
-        let values: Vec<u32> = cache.get_all_starting_with("fresh_").await.unwrap();
-        assert_eq!(values, vec![1u32]);
-    }
-
-    #[tokio::test]
     async fn zero_ttl_treats_entry_as_already_expired() {
         let (_dir, cache) = fresh_cache();
         cache.put("k", 42u32, Duration::ZERO).await.unwrap();
         let got: Option<u32> = cache.get("k").await.unwrap();
         assert!(got.is_none(), "expires_at == now should be expired (strict <)");
-
-        cache
-            .put("z", 7u32, Duration::ZERO)
-            .await
-            .unwrap();
-        let bulk: Vec<u32> = cache.get_all_starting_with("z").await.unwrap();
-        assert!(bulk.is_empty());
     }
 
     #[tokio::test]

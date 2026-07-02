@@ -1,8 +1,9 @@
+use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 
 use crate::domain::paragliding::flight::{
-    AngularVelocity, BearingVelocity, Distance, ScalarVelocity, Track, TrackPoint,
+    BearingVelocity, Distance, ScalarVelocity, Track, TrackPoint,
 };
 
 #[derive(Serialize)]
@@ -42,15 +43,21 @@ pub struct FlightAnalysis {
     pub total_elevation_gain: String,
 }
 
-pub fn analyse_flight(track: &Track) -> FlightAnalysis {
-    let d = calculate_flight_duration(&track);
-    let km = calculate_flight_distance(&track);
-    let height = calculate_height_over_takeoff(&track);
-    let tracklog_length = calculate_track_log_length(&track);
-    let bearing_vel = calculate_bearing_velocity(&track);
-    let (max_sink, max_climb) = calculate_min_max_climb(&bearing_vel, 60usize).unwrap();
-    let (min_speed, max_speed) = calculate_min_max_speed(&bearing_vel, 60usize).unwrap();
+/// Errs (no panic) on degenerate input: the windowed climb/speed averages need at least
+/// `60 + 2` track points, everything else at least 2.
+pub fn analyse_flight(track: &Track) -> Result<FlightAnalysis> {
+    let too_short = || format!("track too short to analyse ({} points)", track.points.len());
+    let d = calculate_flight_duration(track).with_context(too_short)?;
+    let km = calculate_flight_distance(track).with_context(too_short)?;
+    let height = calculate_height_over_takeoff(track).with_context(too_short)?;
+    let tracklog_length = calculate_track_log_length(track).with_context(too_short)?;
+    let bearing_vel = calculate_bearing_velocity(track);
+    let (max_sink, max_climb) =
+        calculate_min_max_climb(&bearing_vel, 60usize).with_context(too_short)?;
+    let (min_speed, max_speed) =
+        calculate_min_max_speed(&bearing_vel, 60usize).with_context(too_short)?;
     let glide = calculate_glide_ratio(&bearing_vel, 60usize);
+    // A track that never sinks has no finite glide window; report 0 rather than erroring.
     let (min_glide, sum_glide, count) = glide
         .iter()
         .fold(None, |a: Option<(f64, f64, u32)>, g| match a {
@@ -69,10 +76,10 @@ pub fn analyse_flight(track: &Track) -> FlightAnalysis {
                 }
             }
         })
-        .unwrap();
-    let total_height_gained = calculate_total_elevation_gained(&track);
+        .unwrap_or((0.0, 0.0, 0));
+    let total_height_gained = calculate_total_elevation_gained(track);
 
-    FlightAnalysis {
+    Ok(FlightAnalysis {
         path: {
             track
                 .points
@@ -87,18 +94,18 @@ pub fn analyse_flight(track: &Track) -> FlightAnalysis {
                 })
                 .collect()
         },
-        duration: format!("{:?}", d.unwrap()),
-        distance: format!("{}", km.unwrap()),
-        max_altitude: format!("{}", height.unwrap()),
-        track_length: format!("{}", tracklog_length.unwrap()),
+        duration: format!("{:?}", d),
+        distance: format!("{}", km),
+        max_altitude: format!("{}", height),
+        track_length: format!("{}", tracklog_length),
         max_climb: format!("{}", max_climb),
         max_sink: format!("{}", max_sink),
         min_speed: format!("{}", min_speed),
         max_speed: format!("{}", max_speed),
         min_glide,
-        avg_glide: sum_glide / count as f64,
+        avg_glide: if count > 0 { sum_glide / count as f64 } else { 0.0 },
         total_elevation_gain: format!("{}", total_height_gained),
-    }
+    })
 }
 
 fn calculate_flight_duration(track: &Track) -> Option<Duration> {
@@ -145,20 +152,8 @@ fn calculate_bearing_velocity(track: &Track) -> Vec<(BearingVelocity, DateTime<U
         .collect()
 }
 
-fn calculate_turn_rate(
-    bv: &Vec<(BearingVelocity, DateTime<Utc>)>,
-) -> Vec<(AngularVelocity, DateTime<Utc>)> {
-    bv.windows(3)
-        .map(|t| {
-            let dt = t[2].1 - t[0].1;
-            let da = t[2].0.bearing - t[0].0.bearing;
-            (da / dt, t[1].1)
-        })
-        .collect()
-}
-
 fn calculate_min_max_climb(
-    bv: &Vec<(BearingVelocity, DateTime<Utc>)>,
+    bv: &[(BearingVelocity, DateTime<Utc>)],
     samples: usize,
 ) -> Option<(ScalarVelocity, ScalarVelocity)> {
     bv.windows(samples)
@@ -179,7 +174,7 @@ fn calculate_min_max_climb(
 }
 
 fn calculate_min_max_speed(
-    bv: &Vec<(BearingVelocity, DateTime<Utc>)>,
+    bv: &[(BearingVelocity, DateTime<Utc>)],
     samples: usize,
 ) -> Option<(ScalarVelocity, ScalarVelocity)> {
     bv.windows(samples)
@@ -200,7 +195,7 @@ fn calculate_min_max_speed(
 }
 
 fn calculate_glide_ratio(
-    bv: &Vec<(BearingVelocity, DateTime<Utc>)>,
+    bv: &[(BearingVelocity, DateTime<Utc>)],
     samples: usize,
 ) -> Vec<(f64, DateTime<Utc>)> {
     bv.windows(samples)
@@ -257,10 +252,7 @@ mod tests {
     }
 
     fn track(points: Vec<TrackPoint>) -> Track {
-        Track {
-            points,
-            metadata: String::new(),
-        }
+        Track { points }
     }
 
     #[test]
@@ -276,6 +268,23 @@ mod tests {
     fn flight_duration_is_none_for_empty_track() {
         let t = track(vec![]);
         assert!(calculate_flight_duration(&t).is_none());
+    }
+
+    #[test]
+    fn analyse_flight_errors_instead_of_panicking_on_short_tracks() {
+        for n in [0usize, 1, 2, 10] {
+            let t = track((0..n).map(|i| point(50.0, 13.0, 1000.0, i as i64)).collect());
+            assert!(analyse_flight(&t).is_err(), "{n}-point track must err, not panic");
+        }
+    }
+
+    #[test]
+    fn analyse_flight_succeeds_on_a_never_sinking_track() {
+        // Long enough for the 60-sample windows, monotonically climbing → no finite glide.
+        let t = track((0..100).map(|i| point(50.0, 13.0, 1000.0 + i as f64, i as i64)).collect());
+        let a = analyse_flight(&t).unwrap();
+        assert_eq!(a.avg_glide, 0.0);
+        assert_eq!(a.min_glide, 0.0);
     }
 
     #[test]

@@ -78,7 +78,7 @@ pub(crate) fn build_plan(
     let mut ranked: Vec<(f32, usize)> = Vec::with_capacity(input.candidates.len());
     for (i, c) in input.candidates.iter().enumerate() {
         let key = (c.kind, c.location.to_key());
-        if used_keys.iter().any(|k| *k == key) {
+        if used_keys.contains(&key) {
             continue;
         }
         let fun = c.score.as_ref().map(|s| s.total()).unwrap_or(0.0);
@@ -145,6 +145,7 @@ pub(crate) fn build_plan(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // placement context, not config — bundling helps nobody
 fn place_fixed(
     matrix: &DriveMatrix,
     cand_start: DateTime<Utc>,
@@ -200,6 +201,7 @@ fn place_fixed(
     Some((cand_start, cand_end))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn place_flexible(
     matrix: &DriveMatrix,
     window: TimeWindow,

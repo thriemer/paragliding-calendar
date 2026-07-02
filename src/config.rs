@@ -38,7 +38,11 @@ pub struct MicrosoftOAuthConfig {
 
 pub struct AppConfig {
     pub db_path: String,
+    // Consumed once the routing stack (BRouter/Valhalla/GraphHopper fallback) is wired into
+    // AppState; the env vars stay required so a deployment is ready for that switch.
+    #[allow(dead_code)]
     pub brouter_base_url: String,
+    #[allow(dead_code)]
     pub valhalla_base_url: String,
     pub google: GoogleOAuthConfig,
     pub microsoft: Option<MicrosoftOAuthConfig>,

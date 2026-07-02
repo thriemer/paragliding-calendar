@@ -9,12 +9,14 @@ interface SettingsModalProps {
   settings: UserSettings;
   onSave: (settings: UserSettings) => void;
   onCancel: () => void;
+  error?: string | null;
 }
 
 export function SettingsModal({
   settings,
   onSave,
   onCancel,
+  error,
 }: SettingsModalProps) {
   const [locationName, setLocationName] = useState(settings.location_name);
   const [locationLat, setLocationLat] = useState(settings.location_latitude);
@@ -141,6 +143,8 @@ export function SettingsModal({
             );
           })}
         </div>
+
+        {error && <div className={styles.error}>{error}</div>}
 
         <div className={styles.buttons}>
           <button className="btn" onClick={handleSave}>

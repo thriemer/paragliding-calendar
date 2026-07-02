@@ -1,18 +1,12 @@
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, NaiveDateTime, Utc};
-use std::error::Error;
 use quick_xml::Reader;
 use quick_xml::events::Event;
-use std::fs;
 
 use crate::domain::paragliding::flight::{Location, Track, TrackPoint};
 
 impl Track {
-    pub fn from_kml_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
-        Self::from_kml(&content)
-    }
-
-    pub fn from_kml(xml: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_kml(xml: &str) -> Result<Self> {
         let mut reader = Reader::from_str(xml);
 
         let mut buf = Vec::new();
@@ -22,13 +16,11 @@ impl Track {
         let mut in_coords = false;
         let mut in_seconds = false;
         let mut in_altitude = false;
-        let mut in_description = false;
 
         let mut time_of_first_point: Option<String> = None;
         let mut seconds: Vec<i64> = Vec::new();
         let mut altitudes: Vec<f64> = Vec::new();
         let mut coords_raw = String::new();
-        let mut description = String::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
@@ -66,9 +58,6 @@ impl Track {
                     } else if in_track_placemark && tag_name == "coordinates" {
                         in_coords = true;
                     }
-                    if !in_placemark && tag_name == "description" {
-                        in_description = true;
-                    }
                 }
                 Ok(Event::Text(e)) => {
                     let text = e.xml_content()?.to_string();
@@ -89,11 +78,6 @@ impl Track {
                         }
                     }
                 }
-                Ok(Event::CData(e)) => {
-                    if in_description {
-                        description = e.xml_content()?.to_string();
-                    }
-                }
                 Ok(Event::End(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     if tag_name == "Placemark" {
@@ -108,22 +92,20 @@ impl Track {
                         in_altitude = false;
                     } else if tag_name == "coordinates" {
                         in_coords = false;
-                    } else if tag_name == "description" {
-                        in_description = false;
                     }
                 }
                 Ok(Event::Eof) => break,
-                Err(e) => return Err(Box::new(e)),
+                Err(e) => return Err(e.into()),
                 _ => {}
             }
             buf.clear();
         }
 
         if coords_raw.trim().is_empty() {
-            return Err("No coordinates found in track placemark".into());
+            return Err(anyhow!("No coordinates found in track placemark"));
         }
 
-        let base_time = time_of_first_point.ok_or("Missing time_of_first_point")?;
+        let base_time = time_of_first_point.ok_or_else(|| anyhow!("Missing time_of_first_point"))?;
         let base_datetime = parse_datetime(&base_time)?;
 
         let coord_strings: Vec<&str> = coords_raw
@@ -139,9 +121,9 @@ impl Track {
                 continue;
             }
 
-            let lon: f64 = parts[0].parse().map_err(|_| "Invalid longitude")?;
-            let lat: f64 = parts[1].parse().map_err(|_| "Invalid latitude")?;
-            let height: f64 = parts[2].parse().map_err(|_| "Invalid height")?;
+            let lon: f64 = parts[0].parse().map_err(|_| anyhow!("Invalid longitude"))?;
+            let lat: f64 = parts[1].parse().map_err(|_| anyhow!("Invalid latitude"))?;
+            let height: f64 = parts[2].parse().map_err(|_| anyhow!("Invalid height"))?;
 
             // Skip points without an explicit timestamp rather than guessing the
             // offset from the index — the cadence is not constant across emitters.
@@ -166,14 +148,11 @@ impl Track {
             });
         }
 
-        Ok(Track {
-            points,
-            metadata: description,
-        })
+        Ok(Track { points })
     }
 }
 
-fn parse_datetime(s: &str) -> Result<DateTime<Utc>, Box<dyn Error>> {
+fn parse_datetime(s: &str) -> Result<DateTime<Utc>> {
     // Accept both "2026-06-13T10:00:00" and "2026-06-13T10:00:00Z" / "+02:00".
     // We assume the timestamp is UTC if no offset is given (matches what the FS
     // KML emitters publish).

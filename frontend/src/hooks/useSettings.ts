@@ -64,6 +64,8 @@ export function useSettings() {
         settingsQueryKey,
         toResponse(newSettings),
       );
+      // Refetch so any server-side normalization wins over our optimistic copy.
+      queryClient.invalidateQueries({ queryKey: settingsQueryKey });
     },
   });
 

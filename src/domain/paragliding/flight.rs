@@ -35,43 +35,10 @@ impl Display for Distance {
     }
 }
 
+// ponytail: the wrapped value is only carried, not read, since turn-rate analysis was cut;
+// the next consumer (turn detection, wind drift) reads it again.
 #[derive(Debug, Clone, Copy)]
-pub struct Angle(f64);
-
-#[derive(Debug, Clone, Copy)]
-pub struct AngleDelta(f64);
-
-#[derive(Debug, Clone, Copy)]
-pub struct AngularVelocity(f64);
-
-impl Div<Duration> for AngleDelta {
-    type Output = AngularVelocity;
-
-    fn div(self, rhs: Duration) -> Self::Output {
-        AngularVelocity(self.0 / rhs.as_seconds_f64())
-    }
-}
-
-impl Angle {
-    pub fn to_cartesian(&self) -> (f64, f64) {
-        let (s, c) = (self.0 * std::f64::consts::PI / 180.0).sin_cos();
-        (c, s) // cosine, sine because x is forward
-    }
-}
-
-impl Sub for Angle {
-    type Output = AngleDelta;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        let mut diff = (self.0 - rhs.0) % 360.0;
-        if diff > 180.0 {
-            diff -= 360.0;
-        } else if diff < -180.0 {
-            diff += 360.0;
-        }
-        AngleDelta(diff)
-    }
-}
+pub struct Angle(#[allow(dead_code)] f64);
 
 pub struct LocationDelta {
     pub distance: Distance,
@@ -91,24 +58,6 @@ impl Div<Duration> for LocationDelta {
     }
 }
 
-pub struct EuclideanVelocity {
-    pub vx: ScalarVelocity, // x is forward
-    pub vy: ScalarVelocity, // y is up
-    pub vz: ScalarVelocity,
-}
-
-impl From<BearingVelocity> for EuclideanVelocity {
-    fn from(value: BearingVelocity) -> Self {
-        let (x, z) = value.bearing.to_cartesian();
-
-        EuclideanVelocity {
-            vx: value.horizontal * x,
-            vy: value.vertical,
-            vz: value.horizontal * z,
-        }
-    }
-}
-
 pub struct BearingVelocity {
     pub horizontal: ScalarVelocity,
     pub bearing: Angle,
@@ -122,8 +71,14 @@ pub struct Location {
     pub height: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScalarVelocity(f64);
+
+impl PartialOrd for ScalarVelocity {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 impl ScalarVelocity {
     pub fn min(&self, other: &ScalarVelocity) -> ScalarVelocity {
@@ -207,9 +162,9 @@ impl Location {
     }
 }
 
-impl Into<geo::Point> for &Location {
-    fn into(self) -> geo::Point {
-        geo::Point::new(self.longitude, self.latitude)
+impl From<&Location> for geo::Point {
+    fn from(loc: &Location) -> geo::Point {
+        geo::Point::new(loc.longitude, loc.latitude)
     }
 }
 
@@ -222,7 +177,6 @@ pub struct TrackPoint {
 #[derive(Debug, Clone)]
 pub struct Track {
     pub points: Vec<TrackPoint>,
-    pub metadata: String,
 }
 
 #[cfg(test)]
@@ -266,49 +220,6 @@ mod tests {
     fn distance_per_duration_gives_velocity_in_ms() {
         let v = Distance::from_meters(100.0) / Duration::seconds(10);
         assert_eq!(v.get_ms(), 10.0);
-    }
-
-    #[test]
-    fn angle_subtraction_normalises_within_180_range() {
-        let a = Angle(10.0);
-        let b = Angle(350.0);
-        let delta = a - b;
-        assert!(delta.0.abs() <= 180.0);
-    }
-
-    #[test]
-    fn angle_subtraction_is_clockwise_from_rhs_to_self() {
-        // Going from 350° to 10° the short way is +20° (clockwise).
-        let delta = Angle(10.0) - Angle(350.0);
-        assert!((delta.0 - 20.0).abs() < 1e-9, "expected +20°, got {}", delta.0);
-
-        // And the reverse should be -20°.
-        let delta = Angle(350.0) - Angle(10.0);
-        assert!((delta.0 + 20.0).abs() < 1e-9, "expected -20°, got {}", delta.0);
-    }
-
-    #[test]
-    fn to_cartesian_returns_forward_axis_for_zero_degrees() {
-        // Bearing 0° (north) should map to x=1, z=0 (purely forward).
-        let (x, z) = Angle(0.0).to_cartesian();
-        assert!((x - 1.0).abs() < 1e-9, "x={x}");
-        assert!(z.abs() < 1e-9, "z={z}");
-    }
-
-    #[test]
-    fn to_cartesian_returns_lateral_axis_for_ninety_degrees() {
-        // Bearing 90° (east) should map to x=0, z=1.
-        let (x, z) = Angle(90.0).to_cartesian();
-        assert!(x.abs() < 1e-9, "x={x}");
-        assert!((z - 1.0).abs() < 1e-9, "z={z}");
-    }
-
-    #[test]
-    fn to_cartesian_is_periodic_in_360_degrees() {
-        let (x0, z0) = Angle(45.0).to_cartesian();
-        let (x1, z1) = Angle(405.0).to_cartesian();
-        assert!((x0 - x1).abs() < 1e-9);
-        assert!((z0 - z1).abs() < 1e-9);
     }
 
     #[test]

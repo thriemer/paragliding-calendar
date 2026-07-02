@@ -21,33 +21,9 @@ impl CombinedCalendar {
 
 #[async_trait]
 impl CalendarProvider for CombinedCalendar {
-    async fn is_busy(
-        &self,
-        calendars: &Vec<String>,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
-    ) -> Result<bool> {
-        let google_fut = self.google.is_busy(calendars, start, end);
-        let microsoft_fut = async {
-            if let Some(ms) = self.microsoft.as_ref() {
-                match ms.is_busy(calendars, start, end).await {
-                    Ok(b) => b,
-                    Err(e) => {
-                        tracing::warn!(error = ?e, "Microsoft is_busy failed; treating slot as free");
-                        false
-                    }
-                }
-            } else {
-                false
-            }
-        };
-        let (google_busy, microsoft_busy) = future::join(google_fut, microsoft_fut).await;
-        Ok(google_busy? || microsoft_busy)
-    }
-
     async fn get_events(
         &self,
-        calendars: &Vec<String>,
+        calendars: &[String],
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<CalendarEvent>> {

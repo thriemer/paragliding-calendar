@@ -1,12 +1,12 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { SitesMap } from "./SitesMap";
-import type { ApiSite } from "./../hooks/useSites";
+import type { ApiSite, SiteType } from "./../hooks/useSites";
 import type { UserSettings } from "./../hooks/useSettings";
 
 const mkSite = (
   name: string,
-  launches: Array<{ lat: number; lng: number; site_type: string }> = [],
+  launches: Array<{ lat: number; lng: number; site_type: SiteType }> = [],
   landings: Array<{ lat: number; lng: number }> = [],
 ): ApiSite => ({
   name,
@@ -46,7 +46,7 @@ describe("SitesMap", () => {
     expect(map.getAttribute("data-center")).toBe("[47,10]");
   });
 
-  test("renders overview markers (one per launch) when zoom < 11", () => {
+  test("renders overview markers (one per site) when zoom < 11", () => {
     const sites = [
       mkSite("S1", [{ lat: 47, lng: 10, site_type: "Hang" }]),
       mkSite("S2", [
@@ -57,8 +57,9 @@ describe("SitesMap", () => {
     render(
       <SitesMap sites={sites} mapView={{ center: [47, 10], zoom: 6 }} onMapViewChange={() => {}} />,
     );
+    // One overview marker per site, regardless of launch count.
     const markers = screen.getAllByTestId("marker");
-    expect(markers.length).toBe(3);
+    expect(markers.length).toBe(2);
   });
 
   test("renders launch+landing markers when zoom >= 11", () => {
@@ -100,7 +101,7 @@ describe("SitesMap", () => {
     expect(circle.getAttribute("data-radius")).toBe("100000");
   });
 
-  test("does not show user location when latitude is 0", () => {
+  test("shows user location even when coordinates are 0 (0 is a valid coordinate)", () => {
     const settings: UserSettings = {
       location_name: "",
       location_latitude: 0,
@@ -119,7 +120,7 @@ describe("SitesMap", () => {
         settings={settings}
       />,
     );
-    expect(screen.queryByTestId("circle")).toBeNull();
+    expect(screen.getByTestId("circle")).toBeTruthy();
   });
 
   test("clicking edit in popup invokes onSiteClick with the matching site", () => {

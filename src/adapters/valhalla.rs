@@ -1,3 +1,5 @@
+#![allow(dead_code)] // ponytail: routing stack not wired into AppState yet (CrowFlies stands in); kept per owner's call.
+
 use std::{sync::Arc, time::Duration as StdDuration};
 
 use anyhow::{Result, anyhow};

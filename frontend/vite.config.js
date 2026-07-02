@@ -17,16 +17,16 @@ export default defineConfig({
   ],
   define: {
     __API_BASE_PATH__: JSON.stringify(process.env.API_BASE_PATH || "/"),
+    // Public Cesium Ion client token; override via env to rotate without a code change.
+    __CESIUM_ION_TOKEN__: JSON.stringify(
+      process.env.CESIUM_ION_TOKEN ||
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIwODQ1NjlhMy01OTZjLTQ5ZTgtYWZjMS05NTdjZTBhYjViMTciLCJpZCI6NDIxMjIxLCJpYXQiOjE3NzY3NjYxMzN9.jY86EZR37l3t4CZKNsjBFYFqqadwYSmQjfZmXpDMlok",
+    ),
   },
   build: {
     outDir: "dist",
     sourcemap: true,
     minify: true,
-  },
-  resolve: {
-    alias: {
-      "@": "/src",
-    },
   },
   optimizeDeps: {
     include: ["react", "react-dom"],

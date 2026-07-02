@@ -23,6 +23,9 @@ impl TimeWindow {
 
 #[derive(Debug, Clone)]
 pub enum Timing {
+    // ponytail: no source emits Fixed yet (all suggestions are weather windows); the solvers
+    // already place it — the seam for fixed-time activities like competitions or bookings.
+    #[allow(dead_code)]
     Fixed {
         start: DateTime<Utc>,
         end: DateTime<Utc>,

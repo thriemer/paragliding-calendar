@@ -7,23 +7,30 @@ import { UserSettings } from "../hooks/useSettings";
 import { Legend } from "./Legend";
 import "../utils/leaflet";
 import styles from "./SitesMap.module.css";
+import blueMarker from "../assets/marker-icon-2x-blue.png";
+import greenMarker from "../assets/marker-icon-2x-green.png";
+import violetMarker from "../assets/marker-icon-2x-violet.png";
+import redMarker from "../assets/marker-icon-2x-red.png";
+import orangeMarker from "../assets/marker-icon-2x-orange.png";
+import greyMarker from "../assets/marker-icon-2x-grey.png";
+import markerShadow from "leaflet/dist/images/marker-shadow.png";
 
-const createColoredIcon = (color: string) =>
+const createColoredIcon = (iconUrl: string) =>
   new L.Icon({
-    iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${color}.png`,
-    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+    iconUrl,
+    shadowUrl: markerShadow,
     iconSize: [25, 41],
     iconAnchor: [12, 41],
     popupAnchor: [1, -34],
     shadowSize: [41, 41],
   });
 
-const winchIcon = createColoredIcon("blue");
-const hangIcon = createColoredIcon("green");
-const bothIcon = createColoredIcon("violet");
-const landingIcon = createColoredIcon("red");
-const userLocationIcon = createColoredIcon("orange");
-const unknownIcon = createColoredIcon("grey");
+const winchIcon = createColoredIcon(blueMarker);
+const hangIcon = createColoredIcon(greenMarker);
+const bothIcon = createColoredIcon(violetMarker);
+const landingIcon = createColoredIcon(redMarker);
+const userLocationIcon = createColoredIcon(orangeMarker);
+const unknownIcon = createColoredIcon(greyMarker);
 
 const circlePathOptions = {
   color: "#000000",
@@ -49,16 +56,19 @@ function MapController({ onMapViewChange }: { onMapViewChange: (view: MapView) =
   const cbRef = useRef(onMapViewChange);
   cbRef.current = onMapViewChange;
 
-  useEffect(() => {
-    cbRef.current({ center: map.getCenter(), zoom: map.getZoom() });
+  // Normalize Leaflet's LatLng to a plain tuple so consumers can index it.
+  const report = useCallback(() => {
+    const c = map.getCenter();
+    cbRef.current({ center: [c.lat, c.lng], zoom: map.getZoom() });
   }, [map]);
 
+  useEffect(() => {
+    report();
+  }, [report]);
+
   const handlers = useMemo(
-    () => ({
-      zoomend: () => cbRef.current({ center: map.getCenter(), zoom: map.getZoom() }),
-      moveend: () => cbRef.current({ center: map.getCenter(), zoom: map.getZoom() }),
-    }),
-    [map],
+    () => ({ zoomend: report, moveend: report }),
+    [report],
   );
   useMapEvents(handlers);
   return null;
@@ -242,7 +252,7 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, setting
           siteType: l.site_type,
         })),
       )
-      .filter((loc) => loc.location.lat && loc.location.lng);
+      .filter((loc) => loc.location.lat != null && loc.location.lng != null);
 
     const landings: LandingData[] = sites
       .flatMap((site) =>
@@ -253,7 +263,7 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, setting
           siteCountry: site.country,
         })),
       )
-      .filter((loc) => loc.location.lat && loc.location.lng);
+      .filter((loc) => loc.location.lat != null && loc.location.lng != null);
 
     const launchesWithOverlap: LaunchWithOverlap[] = launches.map((launch) => ({
       ...launch,
@@ -279,7 +289,8 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, setting
 
   const isZoomedIn = mapView ? mapView.zoom >= 11 : false;
   const mapCenter = mapView?.center ?? center;
-  const hasLocationSettings = settings && settings.location_latitude && settings.location_longitude;
+  const hasLocationSettings =
+    settings != null && settings.location_latitude != null && settings.location_longitude != null;
 
   const sitesRef = useRef(sites);
   sitesRef.current = sites;
@@ -347,16 +358,18 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, setting
             ))}
           </>
         ) : (
-          sites.map((site) =>
-            site.launches.map((launch, idx) => (
+          sites.map((site) => {
+            const launch = site.launches[0];
+            if (!launch) return null;
+            return (
               <SiteOverviewMarker
-                key={`${site.name}-${idx}`}
+                key={site.name}
                 site={site}
                 launch={launch}
                 onEdit={editHandler}
               />
-            )),
-          )
+            );
+          })
         )}
       </MapContainer>
       <Legend isZoomedIn={isZoomedIn} hasLocationSettings={!!hasLocationSettings} />

@@ -35,7 +35,8 @@ impl WeatherProvider for OpenMeteoClient {
             .as_deref()
             .map(|m| format!("_{}", m))
             .unwrap_or_default();
-        let key = format!("weather_for_{}{}", source.to_key(), model_suffix);
+        // v2: WeatherData layout changed (Option fields); postcard can't decode v1 entries.
+        let key = format!("weather_v2_for_{}{}", source.to_key(), model_suffix);
 
         if let Some(cached) = self.cache.get::<WeatherForecast>(&key).await? {
             return Ok(cached);
@@ -125,7 +126,7 @@ impl GeoProvider for OpenMeteoClient {
 
 async fn get_forecast_raw(location: Location, model: Option<&str>) -> Result<WeatherForecast> {
     let mut url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&hourly=temperature_2m,windspeed_10m,winddirection_10m,windgusts_10m,precipitation,cloudcover,surface_pressure,visibility,weathercode&timezone=auto&forecast_days=7&wind_speed_unit=ms",
+        "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&hourly=temperature_2m,windspeed_10m,winddirection_10m,windgusts_10m,precipitation,cloudcover,surface_pressure,visibility,weathercode&timezone=UTC&forecast_days=7&wind_speed_unit=ms",
         location.latitude, location.longitude
     );
 
@@ -173,7 +174,7 @@ async fn geocode_raw(location_name: &str) -> Result<Vec<Location>> {
 }
 
 mod openmeteo {
-    use chrono::Utc;
+    
     use serde::Deserialize;
 
     use super::{Location, WeatherForecast};
@@ -181,71 +182,34 @@ mod openmeteo {
 
     #[derive(Debug, Deserialize)]
     pub struct ForecastResponse {
-        pub latitude: f64,
-        pub longitude: f64,
-        pub timezone: String,
-        pub timezone_abbreviation: String,
         pub hourly: Option<HourlyData>,
-        pub daily: Option<DailyData>,
-        pub current: Option<CurrentData>,
     }
 
+    /// Every value array carries per-element nulls — Open-Meteo returns `null` for hours a
+    /// model doesn't cover.
     #[derive(Debug, Deserialize)]
     pub struct HourlyData {
         pub time: Vec<String>,
         #[serde(rename = "temperature_2m")]
-        pub temperature: Option<Vec<f32>>,
+        pub temperature: Option<Vec<Option<f32>>>,
         #[serde(rename = "windspeed_10m")]
-        pub wind_speed: Option<Vec<f32>>,
+        pub wind_speed: Option<Vec<Option<f32>>>,
         #[serde(rename = "winddirection_10m")]
-        pub wind_direction: Option<Vec<u16>>,
-        #[serde(rename = "windgusts_10m")]
-        pub wind_gusts: Option<Vec<f32>>,
-        pub precipitation: Option<Vec<f32>>,
-        #[serde(rename = "cloudcover")]
-        pub cloud_cover: Option<Vec<u8>>,
-        #[serde(rename = "surface_pressure")]
-        pub pressure: Option<Vec<f32>>,
-        pub visibility: Option<Vec<f32>>,
-        #[serde(rename = "weathercode")]
-        pub weather_code: Option<Vec<u8>>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    pub struct DailyData {
-        pub time: Vec<String>,
-        #[serde(rename = "temperature_2m_max")]
-        pub temperature_max: Option<Vec<Option<f32>>>,
-        #[serde(rename = "temperature_2m_min")]
-        pub temperature_min: Option<Vec<Option<f32>>>,
-        #[serde(rename = "windspeed_10m_max")]
-        pub wind_speed_max: Option<Vec<Option<f32>>>,
-        #[serde(rename = "winddirection_10m_dominant")]
         pub wind_direction: Option<Vec<Option<u16>>>,
-        #[serde(rename = "precipitation_sum")]
+        #[serde(rename = "windgusts_10m")]
+        pub wind_gusts: Option<Vec<Option<f32>>>,
         pub precipitation: Option<Vec<Option<f32>>>,
+        #[serde(rename = "cloudcover")]
+        pub cloud_cover: Option<Vec<Option<u8>>>,
+        #[serde(rename = "surface_pressure")]
+        pub pressure: Option<Vec<Option<f32>>>,
+        pub visibility: Option<Vec<Option<f32>>>,
         #[serde(rename = "weathercode")]
         pub weather_code: Option<Vec<Option<u8>>>,
     }
 
-    #[derive(Debug, Deserialize)]
-    pub struct CurrentData {
-        #[serde(rename = "temperature_2m")]
-        pub temperature: f32,
-        #[serde(rename = "windspeed_10m")]
-        pub wind_speed: f32,
-        #[serde(rename = "winddirection_10m")]
-        pub wind_direction: u16,
-        #[serde(rename = "windgusts_10m")]
-        pub wind_gusts: f32,
-        pub precipitation: f32,
-        #[serde(rename = "cloudcover")]
-        pub cloud_cover: u8,
-        #[serde(rename = "surface_pressure")]
-        pub pressure: f32,
-        pub visibility: f32,
-        #[serde(rename = "weathercode")]
-        pub weather_code: u8,
+    fn at<T: Copy>(field: &Option<Vec<Option<T>>>, i: usize) -> Option<T> {
+        field.as_ref()?.get(i).copied().flatten()
     }
 
     #[derive(Debug, Deserialize)]
@@ -259,18 +223,15 @@ mod openmeteo {
         pub latitude: f64,
         pub longitude: f64,
         pub country: Option<String>,
-        pub admin1: Option<String>,
-        pub admin2: Option<String>,
-        pub timezone: Option<String>,
     }
 
-    impl Into<Location> for GeocodingResult {
-        fn into(self) -> Location {
+    impl From<GeocodingResult> for Location {
+        fn from(value: GeocodingResult) -> Location {
             Location {
-                latitude: self.latitude,
-                longitude: self.longitude,
-                name: self.name,
-                country: self.country.unwrap_or("Unknown".into()),
+                latitude: value.latitude,
+                longitude: value.longitude,
+                name: value.name,
+                country: value.country.unwrap_or("Unknown".into()),
             }
         }
     }
@@ -311,94 +272,82 @@ mod openmeteo {
     }
 
     impl WeatherForecast {
+        /// Hours with a missing scoring-relevant value are dropped rather than filled with
+        /// sentinels — a fabricated wind speed scores as flyable weather.
         #[must_use]
         pub fn from_openmeteo(response: &ForecastResponse, location: Location) -> Self {
             let mut forecasts = Vec::new();
+            let mut skipped = 0usize;
 
             if let Some(hourly) = &response.hourly {
-                let len = hourly.time.len();
-
-                for i in 0..len {
-                    let timestamp =
-                        chrono::NaiveDateTime::parse_from_str(&hourly.time[i], "%Y-%m-%dT%H:%M")
-                            .map_or_else(|_| Utc::now(), |dt| dt.and_utc());
-
-                    let temperature = *hourly
-                        .temperature
-                        .as_ref()
-                        .and_then(|temps| temps.get(i))
-                        .unwrap_or(&-999.0);
-
-                    let wind_speed = *hourly
-                        .wind_speed
-                        .as_ref()
-                        .and_then(|speeds| speeds.get(i))
-                        .unwrap_or(&-999.0);
-
-                    let wind_direction = *hourly
-                        .wind_direction
-                        .as_ref()
-                        .and_then(|dirs| dirs.get(i))
-                        .unwrap_or(&0);
-
-                    let wind_gust = *hourly
-                        .wind_gusts
-                        .as_ref()
-                        .and_then(|gusts| gusts.get(i))
-                        .unwrap_or(&-999.0);
-
-                    let precipitation = *hourly
-                        .precipitation
-                        .as_ref()
-                        .and_then(|precip| precip.get(i))
-                        .unwrap_or(&-999.0);
-                    let cloud_cover = *hourly
-                        .cloud_cover
-                        .as_ref()
-                        .and_then(|clouds| clouds.get(i))
-                        .unwrap_or(&0);
-
-                    let pressure = *hourly
-                        .pressure
-                        .as_ref()
-                        .and_then(|press| press.get(i))
-                        .unwrap_or(&-999.0);
-
-                    let visibility = *hourly
-                        .visibility
-                        .as_ref()
-                        .and_then(|vis| vis.get(i))
-                        .unwrap_or(&999.0);
-
-                    let weather_code = *hourly
-                        .weather_code
-                        .as_ref()
-                        .and_then(|codes| codes.get(i))
-                        .unwrap_or(&0);
-
-                    let description = weather_code_to_description(weather_code).to_string();
-
-                    let weather_data = WeatherData {
-                        timestamp,
-                        temperature,
-                        wind_speed_ms: wind_speed,
-                        wind_direction,
-                        wind_gust_ms: wind_gust,
-                        precipitation,
-                        cloud_cover,
-                        pressure,
-                        visibility,
-                        description,
-                    };
-
-                    forecasts.push(weather_data);
+                for i in 0..hourly.time.len() {
+                    let complete = (|| {
+                        let timestamp = chrono::NaiveDateTime::parse_from_str(
+                            &hourly.time[i],
+                            "%Y-%m-%dT%H:%M",
+                        )
+                        .ok()?
+                        .and_utc();
+                        let weather_code = at(&hourly.weather_code, i).unwrap_or(0);
+                        Some(WeatherData {
+                            timestamp,
+                            temperature: at(&hourly.temperature, i)?,
+                            wind_speed_ms: at(&hourly.wind_speed, i)?,
+                            wind_direction: at(&hourly.wind_direction, i)?,
+                            wind_gust_ms: at(&hourly.wind_gusts, i)?,
+                            precipitation: at(&hourly.precipitation, i)?,
+                            cloud_cover: at(&hourly.cloud_cover, i)?,
+                            pressure: at(&hourly.pressure, i)?,
+                            visibility: at(&hourly.visibility, i),
+                            description: weather_code_to_description(weather_code).to_string(),
+                        })
+                    })();
+                    match complete {
+                        Some(data) => forecasts.push(data),
+                        None => skipped += 1,
+                    }
                 }
+            }
+            if skipped > 0 {
+                tracing::debug!(skipped, kept = forecasts.len(), "dropped incomplete forecast hours");
             }
 
             Self {
                 location,
                 forecast: forecasts,
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn incomplete_hours_are_dropped_not_fabricated() {
+            // Hour 0 complete, hour 1 has a null wind speed, hour 2 unparseable timestamp.
+            let body = r#"{
+                "hourly": {
+                    "time": ["2026-07-02T10:00", "2026-07-02T11:00", "not-a-time"],
+                    "temperature_2m": [20.0, 21.0, 22.0],
+                    "windspeed_10m": [3.0, null, 3.5],
+                    "winddirection_10m": [180, 190, 200],
+                    "windgusts_10m": [4.0, 4.5, 5.0],
+                    "precipitation": [0.0, 0.0, 0.0],
+                    "cloudcover": [25, 30, 35],
+                    "surface_pressure": [1013.0, 1012.0, 1011.0],
+                    "visibility": [null, 10000.0, 10000.0],
+                    "weathercode": [1, 1, 1]
+                }
+            }"#;
+            let response: ForecastResponse = serde_json::from_str(body).unwrap();
+            let loc = Location::new(50.7, 13.0, "Test".into(), "DE".into());
+            let forecast = WeatherForecast::from_openmeteo(&response, loc);
+
+            assert_eq!(forecast.forecast.len(), 1, "only the complete hour survives");
+            let hour = &forecast.forecast[0];
+            assert_eq!(hour.wind_speed_ms, 3.0);
+            assert_eq!(hour.visibility, None, "missing visibility is None, not a sentinel");
         }
     }
 }

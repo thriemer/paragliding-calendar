@@ -37,8 +37,7 @@ describe("fetchJson", () => {
       ok: false,
       status: 500,
       statusText: "Internal Server Error",
-      json: async () => ({ message: "boom" }),
-      text: async () => "ignored",
+      text: async () => '{"message":"boom"}',
     });
 
     await expect(fetchJson("/foo")).rejects.toThrow(
@@ -67,8 +66,7 @@ describe("fetchJson", () => {
       ok: false,
       status: 422,
       statusText: "Unprocessable",
-      json: async () => ({ code: 42 }),
-      text: async () => "",
+      text: async () => '{"code":42}',
     });
 
     await expect(fetchJson("/foo")).rejects.toThrow(

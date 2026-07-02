@@ -86,8 +86,7 @@ describe("FlightUploader", () => {
       ok: false,
       status: 500,
       statusText: "Server Error",
-      json: async () => ({ message: "broken kml" }),
-      text: async () => "",
+      text: async () => '{"message":"broken kml"}',
     });
     const { container } = renderInProvider();
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
@@ -105,8 +104,7 @@ describe("FlightUploader", () => {
       ok: false,
       status: 500,
       statusText: "Server Error",
-      json: async () => ({ message: "first fail" }),
-      text: async () => "",
+      text: async () => '{"message":"first fail"}',
     });
     fetchMock.mockResolvedValueOnce({
       ok: true,

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { CompassRose } from "./CompassRose";
 import { LocationPicker } from "./LocationPicker";
-import { ApiLaunch, ApiLocation } from "../hooks/useSites";
+import { ApiLaunch, ApiLocation, SiteType } from "../hooks/useSites";
 import styles from "./LaunchEditor.module.css";
 
 interface LaunchEditorProps {
@@ -18,7 +18,7 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
     onChange(index, { ...launch, location: { ...launch.location, name } });
   };
 
-  const handleSiteTypeChange = (site_type: string) => {
+  const handleSiteTypeChange = (site_type: SiteType) => {
     onChange(index, { ...launch, site_type });
   };
 
@@ -70,7 +70,7 @@ export function LaunchEditor({ launch, index, onChange, onRemove }: LaunchEditor
               <label>Type:</label>
               <select
                 value={launch.site_type}
-                onChange={(e) => handleSiteTypeChange(e.target.value)}
+                onChange={(e) => handleSiteTypeChange(e.target.value as SiteType)}
               >
                 <option value="Hang">Hang</option>
                 <option value="Winch">Winch</option>

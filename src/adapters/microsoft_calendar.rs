@@ -21,6 +21,9 @@ use crate::{
 };
 
 const TOKEN_CACHE_KEY: &str = "microsoft_calendar_token";
+/// Latest CSRF `state` sent out by `wait_for_authentication`; only the most recent auth email
+/// is valid. Verified by the OAuth callback before exchanging the code.
+const CSRF_STATE_KEY: &str = "microsoft_oauth_csrf_state";
 
 const SCOPES: [&str; 2] = ["offline_access", "https://graph.microsoft.com/Calendars.Read"];
 
@@ -95,7 +98,10 @@ impl O365Authenticator {
         let max_attempts = two_days_secs / check_interval_secs;
 
         loop {
-            let (auth_url, _csrf_state) = self.build_authorization_url();
+            let (auth_url, csrf_state) = self.build_authorization_url();
+            self.cache
+                .put(CSRF_STATE_KEY, csrf_state, Duration::from_secs(two_days_secs))
+                .await?;
 
             tracing::info!("Sending Microsoft authentication URL via email");
             email::send_microsoft_auth_link(&auth_url)
@@ -115,6 +121,14 @@ impl O365Authenticator {
 
             tracing::warn!("Microsoft user did not authenticate within 2 days, sending new email");
         }
+    }
+
+    /// True iff `state` matches the most recently issued auth link (older emails go stale).
+    pub async fn verify_csrf_state(&self, state: &str) -> bool {
+        matches!(
+            self.cache.get::<String>(CSRF_STATE_KEY).await,
+            Ok(Some(expected)) if expected == state
+        )
     }
 
     pub async fn exchange_code(&self, code: &str) -> Result<StoredToken> {
@@ -354,7 +368,7 @@ impl GraphEvent {
 
     /// A GraphEvent that survived the busy filters, mapped to the domain type. `None` if either
     /// endpoint is unparseable.
-    fn to_calendar_event(self) -> Option<CalendarEvent> {
+    fn into_calendar_event(self) -> Option<CalendarEvent> {
         Some(CalendarEvent {
             title: self.subject.clone().unwrap_or_default(),
             start_time: parse_graph_datetime(&self.start)?,
@@ -396,32 +410,13 @@ fn parse_graph_datetime(dt: &GraphDateTime) -> Option<DateTime<Utc>> {
 #[async_trait]
 impl CalendarProvider for MicrosoftCalendar {
     #[instrument(skip(self))]
-    async fn is_busy(
-        &self,
-        _calendars: &Vec<String>,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
-    ) -> Result<bool> {
-        let busy = self
-            .fetch_week_events(start, end)
-            .await?
-            .iter()
-            .filter(|e| !e.is_cancelled)
-            .filter(|e| e.show_as.as_deref() != Some("free"))
-            .filter(|e| e.is_user_accepted())
-            .any(|e| e.overlaps(start, end));
-
-        Ok(busy)
-    }
-
-    #[instrument(skip(self))]
     async fn get_events(
         &self,
-        _calendars: &Vec<String>,
+        _calendars: &[String],
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<CalendarEvent>> {
-        // Same filters as `is_busy`; `_calendars` is ignored (calendarView is the default calendar).
+        // `_calendars` is ignored (calendarView is the default calendar).
         let events = self
             .fetch_week_events(start, end)
             .await?
@@ -430,7 +425,7 @@ impl CalendarProvider for MicrosoftCalendar {
             .filter(|e| e.show_as.as_deref() != Some("free"))
             .filter(|e| e.is_user_accepted())
             .filter(|e| e.overlaps(start, end))
-            .filter_map(|e| e.to_calendar_event())
+            .filter_map(|e| e.into_calendar_event())
             .collect();
 
         Ok(events)

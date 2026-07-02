@@ -19,10 +19,6 @@ impl Location {
         }
     }
 
-    pub fn format_coordinates(&self) -> String {
-        format!("{:.4}, {:.4}", self.latitude, self.longitude)
-    }
-
     pub fn distance_to(&self, other: &Location) -> f64 {
         Self::calculate_distance(self, other)
     }
@@ -66,12 +62,6 @@ mod tests {
             (km - expected_km).abs() / expected_km < 0.01,
             "expected ~{expected_km} km, got {km} km",
         );
-    }
-
-    #[test]
-    fn format_coordinates_uses_four_decimals() {
-        let a = Location::new(50.123456, 13.987654, "A".into(), "DE".into());
-        assert_eq!(a.format_coordinates(), "50.1235, 13.9877");
     }
 
     #[test]

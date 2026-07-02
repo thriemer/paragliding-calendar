@@ -21,10 +21,7 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
 
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"]
-    },
+    "types": ["vite/client", "vitest/globals"],
 
     // Some stricter flags (disabled by default)
     "noUnusedLocals": false,

@@ -51,10 +51,16 @@ export function useUpdateSite() {
     }
   };
 
+  const error =
+    (update.error instanceof Error && update.error.message) ||
+    (remove.error instanceof Error && remove.error.message) ||
+    null;
+
   return {
     updateSite,
     deleteSite,
     saving: update.isPending,
     deleting: remove.isPending,
+    error,
   };
 }

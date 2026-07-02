@@ -35,7 +35,7 @@ describe("useFlightAnalytics", () => {
     const { wrapper } = makeWrapper();
     const { result } = renderHook(() => useFlightAnalytics(), { wrapper });
 
-    let analysis: typeof sampleAnalysis | null = null;
+    let analysis: Awaited<ReturnType<ReturnType<typeof useFlightAnalytics>["analyzeFlight"]>> = null;
     await act(async () => {
       analysis = await result.current.analyzeFlight(file);
     });

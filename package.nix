@@ -19,7 +19,7 @@
         && !(lib.hasInfix "/dist/" path);
     };
 
-    npmDepsHash = "sha256-Dac7HiSiqYFL+X+kAhEXudsMAdZPENIKEk9rLUHmEY0=";
+    npmDepsHash = "sha256-Mt6jTMwJWaYfxKRK0/bNMOk3g0ReNgQu0ooi2taSf4I=";
 
     npmFlags = ["--legacy-peer-deps"];
 

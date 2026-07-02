@@ -15,6 +15,11 @@ async fn oauth_callback(
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<String, String> {
     let code = params.get("code").ok_or("Missing code parameter")?;
+    let csrf = params.get("state").ok_or("Missing state parameter")?;
+    if !state.auth.verify_csrf_state(csrf).await {
+        tracing::warn!("OAuth callback with unknown/stale state; rejecting");
+        return Err("Invalid state parameter — use the link from the latest email".to_string());
+    }
 
     match state.auth.exchange_code(code).await {
         Ok(_token) => {
@@ -33,11 +38,17 @@ async fn microsoft_oauth_callback(
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<String, String> {
     let code = params.get("code").ok_or("Missing code parameter")?;
+    let csrf = params.get("state").ok_or("Missing state parameter")?;
 
     let auth = state
         .microsoft_auth
         .as_ref()
         .ok_or("Microsoft auth is not configured on this server")?;
+
+    if !auth.verify_csrf_state(csrf).await {
+        tracing::warn!("Microsoft OAuth callback with unknown/stale state; rejecting");
+        return Err("Invalid state parameter — use the link from the latest email".to_string());
+    }
 
     match auth.exchange_code(code).await {
         Ok(_token) => {

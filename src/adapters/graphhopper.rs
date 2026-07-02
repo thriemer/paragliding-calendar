@@ -1,3 +1,5 @@
+#![allow(dead_code)] // ponytail: routing stack not wired into AppState yet (CrowFlies stands in); kept per owner's call.
+
 use std::{env, sync::Arc, time::Duration as StdDuration};
 
 use anyhow::{Context, Result, anyhow};
@@ -80,8 +82,7 @@ impl Routing {
                     }
                     let parsed: ApiResponse = response.json().await?;
                     return parsed
-                        .paths
-                        .get(0)
+                        .paths.first()
                         .map(|path| path.time / 1000)
                         .ok_or(anyhow!("No paths in response"));
                 }

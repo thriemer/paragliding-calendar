@@ -7,8 +7,7 @@ interface FlightMapProps {
   path: TrackPoint[];
 }
 
-const ionAccessToken =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIwODQ1NjlhMy01OTZjLTQ5ZTgtYWZjMS05NTdjZTBhYjViMTciLCJpZCI6NDIxMjIxLCJpYXQiOjE3NzY3NjYxMzN9.jY86EZR37l3t4CZKNsjBFYFqqadwYSmQjfZmXpDMlok";
+const ionAccessToken = __CESIUM_ION_TOKEN__;
 
 const getColorForClimbRate = (rate: number): Cesium.Color => {
   if (rate < -2) return Cesium.Color.RED;

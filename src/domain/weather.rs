@@ -69,39 +69,10 @@ pub struct WeatherData {
     pub cloud_cover: u8,
     /// Atmospheric pressure in hPa
     pub pressure: f32,
-    /// Visibility in kilometers (optional)
-    pub visibility: f32,
+    /// Visibility in meters; `None` when the model doesn't provide it (unused in scoring)
+    pub visibility: Option<f32>,
     /// Human-readable description of weather conditions
     pub description: String,
-}
-
-impl WeatherData {
-    pub fn kelvin_to_celsius(kelvin: f32) -> f32 {
-        kelvin - 273.15
-    }
-
-    pub fn wind_direction_to_cardinal(degrees: u16) -> &'static str {
-        match degrees {
-            0..=11 | 349..=360 => "N",
-            12..=33 => "NNE",
-            34..=56 => "NE",
-            57..=78 => "ENE",
-            79..=101 => "E",
-            102..=123 => "ESE",
-            124..=146 => "SE",
-            147..=168 => "SSE",
-            169..=191 => "S",
-            192..=213 => "SSW",
-            214..=236 => "SW",
-            237..=258 => "WSW",
-            259..=281 => "W",
-            282..=303 => "WNW",
-            304..=326 => "NW",
-            327..=348 => "NNW",
-            _ => "Unknown",
-        }
-    }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,38 +84,6 @@ pub struct WeatherModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
-
-    #[test]
-    fn kelvin_to_celsius_known_values() {
-        assert!((WeatherData::kelvin_to_celsius(273.15) - 0.0).abs() < 0.001);
-        assert!((WeatherData::kelvin_to_celsius(373.15) - 100.0).abs() < 0.001);
-        assert!((WeatherData::kelvin_to_celsius(0.0) - -273.15).abs() < 0.001);
-    }
-
-    #[rstest]
-    #[case(0, "N")]
-    #[case(11, "N")]
-    #[case(349, "N")]
-    #[case(360, "N")]
-    #[case(22, "NNE")]
-    #[case(45, "NE")]
-    #[case(67, "ENE")]
-    #[case(90, "E")]
-    #[case(112, "ESE")]
-    #[case(135, "SE")]
-    #[case(157, "SSE")]
-    #[case(180, "S")]
-    #[case(202, "SSW")]
-    #[case(225, "SW")]
-    #[case(247, "WSW")]
-    #[case(270, "W")]
-    #[case(292, "WNW")]
-    #[case(315, "NW")]
-    #[case(337, "NNW")]
-    fn wind_direction_to_cardinal_cases(#[case] deg: u16, #[case] expected: &str) {
-        assert_eq!(WeatherData::wind_direction_to_cardinal(deg), expected);
-    }
 
     #[test]
     fn sunrise_sunset_returns_sunrise_before_sunset() {

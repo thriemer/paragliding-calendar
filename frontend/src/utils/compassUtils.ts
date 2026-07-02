@@ -7,10 +7,6 @@ export function calculateLargeArc(startDegrees: number, stopDegrees: number): nu
   return diff > 180 ? 1 : 0;
 }
 
-export function calculateSweepFlag(): number {
-  return 1;
-}
-
 export function degreesToRadians(degrees: number): number {
   return (degrees - 90) * (Math.PI / 180);
 }

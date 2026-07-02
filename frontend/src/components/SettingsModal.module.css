@@ -84,3 +84,12 @@
 .btn-secondary:hover {
   background: #5a6268;
 }
+
+.error {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: #fdecea;
+  color: #c62828;
+  border-radius: 4px;
+  font-size: 14px;
+}

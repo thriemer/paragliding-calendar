@@ -24,7 +24,7 @@ export function FlightAnalysisCard({ analysis }: FlightAnalysisCardProps) {
   const parseDuration = (duration: string): string => {
     const match = duration.match(/(\d+)h\s*(\d+)m\s*(\d+\.\d+)s/);
     if (match) {
-      const [, hours, minutes, seconds] = match;
+      const [, hours = "0", minutes = "0", seconds = "0"] = match;
       const parts = [];
       const hasHours = parseInt(hours) > 0;
       if (hasHours) parts.push(`${hours}h`);

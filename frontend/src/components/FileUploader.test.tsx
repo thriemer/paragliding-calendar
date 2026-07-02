@@ -52,8 +52,7 @@ describe("FileUploader", () => {
       ok: false,
       status: 400,
       statusText: "Bad Request",
-      json: async () => ({ message: "invalid" }),
-      text: async () => "",
+      text: async () => '{"message":"invalid"}',
     });
     const { container } = renderInProvider();
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
@@ -69,8 +68,7 @@ describe("FileUploader", () => {
       ok: false,
       status: 400,
       statusText: "Bad Request",
-      json: async () => ({ message: "bad xml" }),
-      text: async () => "",
+      text: async () => '{"message":"bad xml"}',
     });
     fetchMock.mockResolvedValueOnce({
       ok: true,

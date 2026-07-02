@@ -22,7 +22,7 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
   const radius = 60;
   const center = radius + 10;
 
-  const getAngleFromEvent = (e: React.MouseEvent<SVGSVGElement>): number => {
+  const getAngleFromEvent = (e: React.PointerEvent<SVGSVGElement>): number => {
     const svg = e.currentTarget as SVGSVGElement;
     const rect = svg.getBoundingClientRect();
     const x = e.clientX - rect.left - center;
@@ -35,23 +35,25 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
     else onChange(startDegrees, angle);
   };
 
-  const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+  const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     const angle = getAngleFromEvent(e);
     const mode: "start" | "stop" =
       angularDistance(angle, startDegrees) <= angularDistance(angle, stopDegrees)
         ? "start"
         : "stop";
     dragModeRef.current = mode;
+    // Keep receiving moves outside the svg; not implemented in jsdom.
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     apply(mode, angle);
   };
 
-  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+  const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
     const mode = dragModeRef.current;
     if (!mode) return;
     apply(mode, getAngleFromEvent(e));
   };
 
-  const handleMouseUp = () => {
+  const handlePointerUp = () => {
     dragModeRef.current = null;
   };
 
@@ -68,11 +70,11 @@ export function CompassRose({ startDegrees, stopDegrees, onChange }: CompassRose
       <svg
         width={center * 2}
         height={center * 2}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        style={{ cursor: 'pointer' }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        style={{ cursor: 'pointer', touchAction: 'none' }}
       >
         <circle cx={center} cy={center} r={radius} fill="#f0f0f0" stroke="#ccc" />
 
