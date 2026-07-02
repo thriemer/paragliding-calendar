@@ -45,6 +45,32 @@ impl CalendarProvider for CombinedCalendar {
         Ok(google_busy? || microsoft_busy)
     }
 
+    async fn get_events(
+        &self,
+        calendars: &Vec<String>,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<CalendarEvent>> {
+        let google_fut = self.google.get_events(calendars, start, end);
+        let microsoft_fut = async {
+            if let Some(ms) = self.microsoft.as_ref() {
+                match ms.get_events(calendars, start, end).await {
+                    Ok(events) => events,
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "Microsoft get_events failed; ignoring its events");
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            }
+        };
+        let (google_events, mut microsoft_events) = future::join(google_fut, microsoft_fut).await;
+        let mut events = google_events?;
+        events.append(&mut microsoft_events);
+        Ok(events)
+    }
+
     async fn get_calendar_names(&self) -> Result<Vec<String>> {
         self.google.get_calendar_names().await
     }

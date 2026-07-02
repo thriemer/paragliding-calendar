@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 
 use crate::domain::{
-    activities::{ActivitySuggestion, Plan, PlanningContext, TimeWindow},
+    activities::{ActivitySuggestion, Plan, PlanningContext, ScheduledActivity, TimeWindow},
     calendar::CalendarEvent,
     location::Location,
     paragliding::ParaglidingSite,
@@ -14,6 +14,9 @@ pub struct SolverInput {
     pub candidates: Vec<ActivitySuggestion>,
     pub origin: Location,
     pub free_slots: Vec<TimeWindow>,
+    /// Fixed calendar commitments (fun = 0) the plan must schedule around. Consumed by the
+    /// genetic solver; greedy ignores it.
+    pub fixed: Vec<ScheduledActivity>,
     pub num_alternatives: usize,
 }
 
@@ -79,6 +82,13 @@ pub trait CalendarProvider: Send + Sync {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<bool>;
+    /// Concrete events in `[start, end]` across `calendars`, expanded from recurrences.
+    async fn get_events(
+        &self,
+        calendars: &Vec<String>,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<CalendarEvent>>;
     async fn get_calendar_names(&self) -> Result<Vec<String>>;
     async fn clear_calendar(&self, name: &str) -> Result<()>;
     async fn create_event(&self, calendar: &str, event: CalendarEvent) -> Result<()>;

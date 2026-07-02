@@ -10,6 +10,9 @@ pub struct CalendarEvent {
     pub is_all_day: bool,
     pub location: Option<String>,
     pub body: Option<String>,
+    /// Google Calendar `colorId` ("1".."11"), or `None` for the calendar's default color.
+    /// Only honored on write; ignored when reading events back.
+    pub color_id: Option<String>,
 }
 
 impl CalendarEvent {
@@ -48,6 +51,7 @@ mod tests {
             is_all_day: false,
             location: None,
             body: None,
+            color_id: None,
         }
     }
 

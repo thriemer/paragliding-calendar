@@ -1,36 +1,16 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 
+use crate::application::solvers::placement::{build_matrix, compute_total_drive, DriveMatrix};
 use crate::domain::{
     activities::{ActivityKind, Plan, ScheduledActivity, TimeWindow, Timing},
     location::Location,
     ports::{RoutingProvider, SolverInput, WeekSolver},
+    weather::overnight_deadline,
 };
-
-/// Pairwise drive times over the deduped `{origin} ∪ {candidate locations}` set, fetched
-/// once per solve via the routing matrix so placement is pure lookups.
-struct DriveMatrix {
-    index: HashMap<String, usize>,
-    times: Vec<Vec<Duration>>,
-}
-
-impl DriveMatrix {
-    fn get(&self, from: &Location, to: &Location) -> Duration {
-        let (fk, tk) = (from.to_key(), to.to_key());
-        if fk == tk {
-            return Duration::zero();
-        }
-        match (self.index.get(&fk), self.index.get(&tk)) {
-            (Some(&i), Some(&j)) => self.times[i][j],
-            // Every location the solver queries is in the set by construction.
-            _ => Duration::zero(),
-        }
-    }
-}
 
 pub struct GreedyDiversitySolver {
     routing: Arc<dyn RoutingProvider>,
@@ -46,42 +26,41 @@ impl GreedyDiversitySolver {
             buffer_between_items: Duration::minutes(15),
         }
     }
-
-    /// Dedup origin + candidate locations by `to_key()` and fetch the full matrix once.
-    async fn build_matrix(&self, input: &SolverInput) -> Result<DriveMatrix> {
-        let mut index: HashMap<String, usize> = HashMap::new();
-        let mut locs: Vec<Location> = Vec::new();
-        for loc in std::iter::once(&input.origin)
-            .chain(input.candidates.iter().map(|c| &c.location))
-        {
-            index.entry(loc.to_key()).or_insert_with(|| {
-                locs.push(loc.clone());
-                locs.len() - 1
-            });
-        }
-
-        let times = if locs.len() > 1 {
-            self.routing.travel_time_matrix(&locs).await?
-        } else {
-            vec![vec![Duration::zero(); locs.len()]; locs.len()]
-        };
-        Ok(DriveMatrix { index, times })
-    }
 }
 
 #[async_trait]
 impl WeekSolver for GreedyDiversitySolver {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            candidates = input.candidates.len(),
+            free_slots = input.free_slots.len(),
+            fixed = input.fixed.len(),
+            num_alternatives = input.num_alternatives,
+        )
+    )]
     async fn solve(&self, input: SolverInput) -> Result<Vec<Plan>> {
         // One matrix fetch up front warms every pair; placement below is pure lookups.
-        let matrix = self.build_matrix(&input).await?;
+        let matrix = build_matrix(self.routing.as_ref(), &input).await?;
 
         let mut plans = Vec::with_capacity(input.num_alternatives);
         let mut used_keys: Vec<(ActivityKind, String)> = Vec::new();
 
         for _ in 0..input.num_alternatives {
             let plan = build_plan(self, &input, &used_keys, &matrix);
+            // Each alternative excludes the prior plans' (kind, location) pairs, so an empty plan
+            // here means diversity exhausted the candidates — the reason a later alternative is bare.
+            tracing::info!(
+                rank = plans.len(),
+                total_fun = plan.total_fun,
+                drive_min = plan.total_drive.num_minutes(),
+                items = plan.items.len(),
+                "alternative plan"
+            );
             for a in &plan.items {
-                used_keys.push((a.kind, a.location.to_key()));
+                if let Some(loc) = &a.location {
+                    used_keys.push((a.kind, loc.to_key()));
+                }
             }
             plans.push(plan);
         }
@@ -90,7 +69,7 @@ impl WeekSolver for GreedyDiversitySolver {
     }
 }
 
-fn build_plan(
+pub(crate) fn build_plan(
     cfg: &GreedyDiversitySolver,
     input: &SolverInput,
     used_keys: &[(ActivityKind, String)],
@@ -145,7 +124,7 @@ fn build_plan(
                 .unwrap_or(0.0);
             items.push(ScheduledActivity {
                 kind: c.kind,
-                location: c.location.clone(),
+                location: Some(c.location.clone()),
                 start,
                 end,
                 title: c.title.clone(),
@@ -192,8 +171,8 @@ fn place_fixed(
         }
     }
 
-    let prev_loc = prev.map(|a| &a.location).unwrap_or(home);
-    let next_loc = next.map(|a| &a.location).unwrap_or(home);
+    let prev_loc = prev.and_then(|a| a.location.as_ref()).unwrap_or(home);
+    let next_loc = next.and_then(|a| a.location.as_ref()).unwrap_or(home);
 
     let drive_in = matrix.get(prev_loc, cand_loc);
     let drive_out = matrix.get(cand_loc, next_loc);
@@ -244,15 +223,19 @@ fn place_flexible(
         for i in 0..=in_fs.len() {
             let (next_loc, phys_upper): (&Location, DateTime<Utc>) = if i < in_fs.len() {
                 let a = in_fs[i];
-                (&a.location, a.start - buffer)
+                (a.location.as_ref().unwrap_or(home), a.start - buffer)
             } else {
                 (home, fs.end)
             };
 
             let drive_in = matrix.get(prev_loc, cand_loc);
             let drive_out = matrix.get(cand_loc, next_loc);
+            // You must reach home by sunset − 1h of this activity's day, whatever comes next — so the
+            // greedy seed returns home each night rather than assuming an overnight stay at the site.
+            let home_by = overnight_deadline(home, window.start.date_naive())
+                - matrix.get(cand_loc, home);
             let activity_start_min = (phys_lower + drive_in).max(window.start);
-            let activity_end_max = (phys_upper - drive_out).min(window.end);
+            let activity_end_max = (phys_upper - drive_out).min(window.end).min(home_by);
 
             if activity_end_max - activity_start_min >= min_duration {
                 return Some((activity_start_min, activity_end_max));
@@ -260,27 +243,12 @@ fn place_flexible(
 
             if i < in_fs.len() {
                 let a = in_fs[i];
-                prev_loc = &a.location;
+                prev_loc = a.location.as_ref().unwrap_or(home);
                 phys_lower = a.end + buffer;
             }
         }
     }
     None
-}
-
-fn compute_total_drive(
-    matrix: &DriveMatrix,
-    items: &[ScheduledActivity],
-    home: &Location,
-) -> Duration {
-    let mut total = Duration::zero();
-    let mut prev: &Location = home;
-    for a in items {
-        total = total + matrix.get(prev, &a.location);
-        prev = &a.location;
-    }
-    total = total + matrix.get(prev, home);
-    total
 }
 
 // ponytail: skipped 2-opt repair pass; add when greedy ordering misses obvious
@@ -370,11 +338,12 @@ mod tests {
                 start: ts(8),
                 end: ts(18),
             }],
+            fixed: vec![],
             num_alternatives: 1,
         };
         let plans = solver.solve(input).await.unwrap();
         assert_eq!(plans[0].items.len(), 1);
-        assert_eq!(plans[0].items[0].location.name, "B");
+        assert_eq!(plans[0].items[0].location.as_ref().unwrap().name, "B");
     }
 
     #[tokio::test]
@@ -390,12 +359,21 @@ mod tests {
                 start: ts(8),
                 end: ts(16),
             }],
+            fixed: vec![],
             num_alternatives: 2,
         };
         let plans = solver.solve(input).await.unwrap();
         assert_eq!(plans.len(), 2);
-        let pick_a: Vec<_> = plans[0].items.iter().map(|a| &a.location.name).collect();
-        let pick_b: Vec<_> = plans[1].items.iter().map(|a| &a.location.name).collect();
+        let pick_a: Vec<_> = plans[0]
+            .items
+            .iter()
+            .map(|a| &a.location.as_ref().unwrap().name)
+            .collect();
+        let pick_b: Vec<_> = plans[1]
+            .items
+            .iter()
+            .map(|a| &a.location.as_ref().unwrap().name)
+            .collect();
         assert_eq!(pick_a, vec!["A"]);
         assert_eq!(pick_b, vec!["B"]);
     }
@@ -413,6 +391,7 @@ mod tests {
                 start: ts(6),
                 end: ts(20),
             }],
+            fixed: vec![],
             num_alternatives: 2,
         };
         let plans = solver.solve(input).await.unwrap();
@@ -433,6 +412,7 @@ mod tests {
                 start: ts(0),
                 end: ts(23),
             }],
+            fixed: vec![],
             num_alternatives: 1,
         };
         let plans = solver.solve(input).await.unwrap();
@@ -462,12 +442,21 @@ mod tests {
                 start: ts(6),
                 end: ts(20),
             }],
+            fixed: vec![],
             num_alternatives: 1,
         };
         let plans = solver.solve(input).await.unwrap();
         assert_eq!(plans[0].items.len(), 2);
-        let a = plans[0].items.iter().find(|a| a.location.name == "A").unwrap();
-        let b = plans[0].items.iter().find(|a| a.location.name == "B").unwrap();
+        let a = plans[0]
+            .items
+            .iter()
+            .find(|a| a.location.as_ref().unwrap().name == "A")
+            .unwrap();
+        let b = plans[0]
+            .items
+            .iter()
+            .find(|a| a.location.as_ref().unwrap().name == "B")
+            .unwrap();
         let gap = b.start - a.end;
         // With chaining (A→B is 15 min) the gap is ~1 h; going home would be ~4.5 h.
         assert!(gap >= Duration::minutes(15));

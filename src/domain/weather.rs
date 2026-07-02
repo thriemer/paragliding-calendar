@@ -32,6 +32,19 @@ pub fn get_sunrise_sunset(
     Ok((sunrise, sunset))
 }
 
+/// The latest you may still be en route on `date`: you must reach your overnight location (home or,
+/// later, a campsite) at least one hour before sunset there. Falls back to 18:00 UTC (19:00 sunset
+/// − 1h) only if the coordinates are invalid — `get_sunrise_sunset` already handles missing solar
+/// events internally.
+pub fn overnight_deadline(location: &Location, date: NaiveDate) -> DateTime<Utc> {
+    match get_sunrise_sunset(location, date) {
+        Ok((_, sunset)) => sunset - chrono::Duration::hours(1),
+        Err(_) => date
+            .and_time(NaiveTime::from_hms_opt(18, 0, 0).unwrap())
+            .and_utc(),
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WeatherForecast {
     pub location: Location,

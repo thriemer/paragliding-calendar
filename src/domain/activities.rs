@@ -5,6 +5,8 @@ use crate::domain::location::Location;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityKind {
     Paragliding,
+    /// A fixed calendar commitment (meeting, appointment) the planner schedules around.
+    Commitment,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +77,30 @@ pub struct ActivitySuggestion {
     pub score: Option<Score>,
 }
 
+/// Where a day ends: the location you sleep at. Today only `Home`; a future version adds campable
+/// spots (with facilities, cost, notes) as `Camp`, which is why the solver references these by
+/// `Arc<OvernightSpot>` rather than a bare `Location` or an id — the struct is meant to grow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OvernightKind {
+    Home,
+    // ponytail: constructed once `overnight_candidates` sources campable spots; the whole
+    // overnight-in-genome machinery is wired for it, only the data source is deferred.
+    #[allow(dead_code)]
+    Camp,
+}
+
+#[derive(Debug, Clone)]
+pub struct OvernightSpot {
+    pub location: Location,
+    pub kind: OvernightKind,
+}
+
+impl OvernightSpot {
+    pub fn home(location: Location) -> Self {
+        Self { location, kind: OvernightKind::Home }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PlanningContext {
     pub home: Location,
@@ -85,7 +111,8 @@ pub struct PlanningContext {
 #[derive(Debug, Clone)]
 pub struct ScheduledActivity {
     pub kind: ActivityKind,
-    pub location: Location,
+    /// `None` for online commitments (stationary, no drive); `Some` otherwise.
+    pub location: Option<Location>,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub title: String,
@@ -141,6 +168,19 @@ mod tests {
         // Occupy the first 30 minutes of bucket 0 → half of 2.0.
         let fun = s.fun_between(ws, ws + Duration::minutes(30));
         assert!((fun - 1.0).abs() < 1e-6, "got {fun}");
+    }
+
+    #[test]
+    fn splitting_a_span_is_fun_neutral() {
+        // Locks in the invariant that lets the renderer coalesce fragments freely: two
+        // back-to-back placements earn exactly what one covering the same span does — so the GA
+        // gains nothing from splitting. If scoring ever rewards splitting, this fails loudly.
+        let ws = Utc.with_ymd_and_hms(2026, 6, 13, 7, 0, 0).unwrap();
+        let s = score(ws, vec![1.0, 2.0, 3.0, 4.0]); // hours 7,8,9,10
+        let whole = s.fun_between(ws, ws + Duration::hours(4));
+        let split = s.fun_between(ws, ws + Duration::hours(2))
+            + s.fun_between(ws + Duration::hours(2), ws + Duration::hours(4));
+        assert!((whole - split).abs() < 1e-6, "whole {whole} != split {split}");
     }
 
     #[test]

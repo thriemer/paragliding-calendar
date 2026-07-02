@@ -228,6 +228,77 @@ impl MicrosoftCalendar {
     pub fn new(auth: Arc<O365Authenticator>, cache: Arc<PersistentCache>) -> Self {
         Self { auth, cache }
     }
+
+    /// Fetch (and cache for 5 min) the full calendarView for the week(s) covering `[start, end]`.
+    /// Shared by `is_busy` and `get_events` so both see identical events.
+    async fn fetch_week_events(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<GraphEvent>> {
+        let start_weekday = start.weekday().num_days_from_monday() as i64;
+        let end_weekday = end.weekday().num_days_from_monday() as i64;
+        let week_start =
+            start.date_naive().and_time(NaiveTime::MIN).and_utc() - TimeDelta::days(start_weekday);
+        let week_end = end
+            .date_naive()
+            .and_time(NaiveTime::from_hms_opt(23, 59, 59).unwrap())
+            .and_utc()
+            + TimeDelta::days(6 - end_weekday);
+
+        let mut hasher = DefaultHasher::new();
+        week_start.hash(&mut hasher);
+        week_end.hash(&mut hasher);
+        let cache_key = format!("microsoft_calendar_events_hash_{}", hasher.finish());
+
+        if let Some(cached) = self.cache.get(&cache_key).await? {
+            return Ok(cached);
+        }
+
+        let token = self.auth.get_access_token().await?;
+        let client = GraphClient::new(token);
+
+        let start_iso = week_start.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let end_iso = week_end.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+        let response = client
+            .me()
+            .calendar_views()
+            .list_calendar_view()
+            .append_query_pair("startDateTime", &start_iso)
+            .append_query_pair("endDateTime", &end_iso)
+            .select(&[
+                "start",
+                "end",
+                "subject",
+                "location",
+                "isAllDay",
+                "responseStatus",
+                "isCancelled",
+                "showAs",
+            ])
+            .send()
+            .await
+            .context("Failed to query Microsoft calendar view")?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Microsoft Graph calendarView returned {status}: {body}"
+            ));
+        }
+
+        let body: CalendarViewResponse = response
+            .json()
+            .await
+            .context("Failed to parse Microsoft calendar view response")?;
+
+        self.cache
+            .put(&cache_key, body.value.clone(), Duration::from_secs(5 * 60))
+            .await?;
+        Ok(body.value)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -241,11 +312,24 @@ struct GraphEvent {
     start: GraphDateTime,
     end: GraphDateTime,
     #[serde(default)]
+    subject: Option<String>,
+    #[serde(default)]
+    location: Option<GraphLocation>,
+    #[serde(default)]
+    is_all_day: bool,
+    #[serde(default)]
     response_status: Option<ResponseStatus>,
     #[serde(default)]
     is_cancelled: bool,
     #[serde(default)]
     show_as: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphLocation {
+    #[serde(default)]
+    display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,6 +350,20 @@ impl GraphEvent {
             self.response_status.as_ref().map(|r| r.response.as_str()),
             Some("accepted") | Some("organizer")
         )
+    }
+
+    /// A GraphEvent that survived the busy filters, mapped to the domain type. `None` if either
+    /// endpoint is unparseable.
+    fn to_calendar_event(self) -> Option<CalendarEvent> {
+        Some(CalendarEvent {
+            title: self.subject.clone().unwrap_or_default(),
+            start_time: parse_graph_datetime(&self.start)?,
+            end_time: parse_graph_datetime(&self.end)?,
+            is_all_day: self.is_all_day,
+            location: self.location.and_then(|l| l.display_name),
+            body: None,
+            color_id: None,
+        })
     }
 
     fn overlaps(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> bool {
@@ -304,61 +402,9 @@ impl CalendarProvider for MicrosoftCalendar {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<bool> {
-        let start_weekday = start.weekday().num_days_from_monday() as i64;
-        let end_weekday = end.weekday().num_days_from_monday() as i64;
-        let week_start = start.date_naive().and_time(NaiveTime::MIN).and_utc()
-            - TimeDelta::days(start_weekday);
-        let week_end = end
-            .date_naive()
-            .and_time(NaiveTime::from_hms_opt(23, 59, 59).unwrap())
-            .and_utc()
-            + TimeDelta::days(6 - end_weekday);
-
-        let mut hasher = DefaultHasher::new();
-        week_start.hash(&mut hasher);
-        week_end.hash(&mut hasher);
-        let cache_key = format!("microsoft_calendar_events_hash_{}", hasher.finish());
-
-        let events: Vec<GraphEvent> = if let Some(cached) = self.cache.get(&cache_key).await? {
-            cached
-        } else {
-            let token = self.auth.get_access_token().await?;
-            let client = GraphClient::new(token);
-
-            let start_iso = week_start.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-            let end_iso = week_end.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
-            let response = client
-                .me()
-                .calendar_views()
-                .list_calendar_view()
-                .append_query_pair("startDateTime", &start_iso)
-                .append_query_pair("endDateTime", &end_iso)
-                .select(&["start", "end", "responseStatus", "isCancelled", "showAs"])
-                .send()
-                .await
-                .context("Failed to query Microsoft calendar view")?;
-
-            let status = response.status();
-            if !status.is_success() {
-                let body = response.text().await.unwrap_or_default();
-                return Err(anyhow!(
-                    "Microsoft Graph calendarView returned {status}: {body}"
-                ));
-            }
-
-            let body: CalendarViewResponse = response
-                .json()
-                .await
-                .context("Failed to parse Microsoft calendar view response")?;
-
-            self.cache
-                .put(&cache_key, body.value.clone(), Duration::from_secs(5 * 60))
-                .await?;
-            body.value
-        };
-
-        let busy = events
+        let busy = self
+            .fetch_week_events(start, end)
+            .await?
             .iter()
             .filter(|e| !e.is_cancelled)
             .filter(|e| e.show_as.as_deref() != Some("free"))
@@ -366,6 +412,28 @@ impl CalendarProvider for MicrosoftCalendar {
             .any(|e| e.overlaps(start, end));
 
         Ok(busy)
+    }
+
+    #[instrument(skip(self))]
+    async fn get_events(
+        &self,
+        _calendars: &Vec<String>,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<CalendarEvent>> {
+        // Same filters as `is_busy`; `_calendars` is ignored (calendarView is the default calendar).
+        let events = self
+            .fetch_week_events(start, end)
+            .await?
+            .into_iter()
+            .filter(|e| !e.is_cancelled)
+            .filter(|e| e.show_as.as_deref() != Some("free"))
+            .filter(|e| e.is_user_accepted())
+            .filter(|e| e.overlaps(start, end))
+            .filter_map(|e| e.to_calendar_event())
+            .collect();
+
+        Ok(events)
     }
 
     async fn get_calendar_names(&self) -> Result<Vec<String>> {
@@ -399,6 +467,9 @@ mod tests {
                 date_time: end.to_string(),
                 time_zone: "UTC".to_string(),
             },
+            subject: None,
+            location: None,
+            is_all_day: false,
             response_status: Some(ResponseStatus {
                 response: response.to_string(),
             }),

@@ -18,7 +18,7 @@ use crate::{
         open_meteo::OpenMeteoClient,
         store::PersistentStore,
     },
-    application::{Planner, solvers::GreedyDiversitySolver},
+    application::{Planner, solvers::Nsga2Solver},
     config::AppConfig,
     domain::ports::{
         ActivitySource, CalendarProvider, GeoProvider, RoutingProvider, WeatherProvider, WeekSolver,
@@ -81,10 +81,11 @@ impl AppState {
             site_repo.clone(),
             weather.clone(),
         ));
-        let solver: Arc<dyn WeekSolver> = Arc::new(GreedyDiversitySolver::new(routing.clone()));
+        let solver: Arc<dyn WeekSolver> = Arc::new(Nsga2Solver::new(routing.clone()));
         let planner = Arc::new(Planner::new(
             vec![paragliding_source],
             solver.clone(),
+            geo.clone(),
         ));
 
         let google_cal = GoogleCalendar::new(auth.clone(), cache.clone())?;

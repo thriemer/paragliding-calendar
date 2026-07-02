@@ -28,12 +28,15 @@ use crate::{
     domain::{calendar::CalendarEvent, ports::CalendarProvider},
 };
 
-const TOKEN_CACHE_KEY: &str = "calendar_token";
+// v2: bumped when `calendar.events.readonly` was added — cached v1 tokens lack the scope and
+// would 403 on events.list forever, so we ignore them and force the prompt=consent re-auth.
+const TOKEN_CACHE_KEY: &str = "calendar_token_v2";
 
-const SCOPES: [&str; 3] = [
+const SCOPES: [&str; 4] = [
     "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
     "https://www.googleapis.com/auth/calendar.app.created",
     "https://www.googleapis.com/auth/calendar.freebusy",
+    "https://www.googleapis.com/auth/calendar.events.readonly",
 ];
 
 pub struct WebFlowAuthenticator {
@@ -79,12 +82,11 @@ impl WebFlowAuthenticator {
     }
 
     pub fn build_authorization_url(&self) -> (String, String) {
-        let (auth_url, csrf_token) = self
-            .client
-            .authorize_url(CsrfToken::new_random)
-            .add_scope(OAuthScope::new(SCOPES[0].to_string()))
-            .add_scope(OAuthScope::new(SCOPES[1].to_string()))
-            .add_scope(OAuthScope::new(SCOPES[2].to_string()))
+        let mut request = self.client.authorize_url(CsrfToken::new_random);
+        for scope in SCOPES {
+            request = request.add_scope(OAuthScope::new(scope.to_string()));
+        }
+        let (auth_url, csrf_token) = request
             .add_extra_param("access_type", "offline")
             .add_extra_param("prompt", "consent")
             .url();
@@ -438,6 +440,60 @@ impl CalendarProvider for GoogleCalendar {
         Ok(b)
     }
 
+    #[instrument(skip(self))]
+    async fn get_events(
+        &self,
+        calendars: &Vec<String>,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<CalendarEvent>> {
+        let mut out = Vec::new();
+        for name in calendars {
+            let calendar_id = match self.get_id_for_name(name).await {
+                Ok(id) => id,
+                Err(err) => {
+                    tracing::warn!(name = %name, error = ?err, "Cant get id for calendar");
+                    continue;
+                }
+            };
+
+            let mut page_token: Option<String> = None;
+            loop {
+                let mut request = self
+                    .hub
+                    .events()
+                    .list(&calendar_id)
+                    .add_scope(SCOPES[3]) // calendar.events.readonly
+                    .single_events(true) // expand recurring events into concrete instances
+                    .time_min(start)
+                    .time_max(end);
+                if let Some(ref token) = page_token {
+                    request = request.page_token(token);
+                }
+
+                // A calendar shared as free/busy-only (or otherwise not events-readable) returns
+                // 404 here. Skip it with a warning instead of aborting the whole fetch — one
+                // unreadable calendar must not wipe out every other calendar's commitments.
+                let list = match request.doit().await {
+                    Ok((_, list)) => list,
+                    Err(err) => {
+                        tracing::warn!(name = %name, id = %calendar_id, error = ?err, "events.list failed; skipping calendar");
+                        break;
+                    }
+                };
+                if let Some(events) = list.items {
+                    out.extend(events.into_iter().filter_map(to_calendar_event));
+                }
+
+                page_token = list.next_page_token;
+                if page_token.is_none() {
+                    break;
+                }
+            }
+        }
+        Ok(out)
+    }
+
     #[instrument(skip(self), fields(calendar = %name))]
     async fn clear_calendar(&self, name: &str) -> anyhow::Result<()> {
         let calendar_id = self.get_id_for_name(name).await?;
@@ -543,6 +599,7 @@ impl From<CalendarEvent> for Event {
         event.end = Some(to_event_time(value.end_time));
         event.location = value.location;
         event.description = value.body;
+        event.color_id = value.color_id;
         event
     }
 }
@@ -552,5 +609,92 @@ fn to_event_time(time: DateTime<Utc>) -> EventDateTime {
         date: None,
         date_time: Some(time),
         time_zone: None,
+    }
+}
+
+/// Inverse of `From<CalendarEvent> for Event`. Returns `None` for events that don't block time:
+/// cancelled instances and ones marked free (`transparency == "transparent"`).
+fn to_calendar_event(e: Event) -> Option<CalendarEvent> {
+    if e.status.as_deref() == Some("cancelled")
+        || e.transparency.as_deref() == Some("transparent")
+    {
+        return None;
+    }
+
+    let start = e.start.as_ref()?;
+    let end = e.end.as_ref()?;
+    let (start_time, end_time, is_all_day) = match (start.date_time, end.date_time) {
+        (Some(s), Some(en)) => (s, en, false),
+        // All-day events carry `date` (end exclusive), so [start 00:00, end 00:00) is the span.
+        _ => {
+            let s = start.date?.and_time(NaiveTime::MIN).and_utc();
+            let en = end.date?.and_time(NaiveTime::MIN).and_utc();
+            (s, en, true)
+        }
+    };
+
+    Some(CalendarEvent {
+        title: e.summary.unwrap_or_default(),
+        start_time,
+        end_time,
+        is_all_day,
+        location: e.location,
+        body: e.description,
+        color_id: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{NaiveDate, TimeZone};
+
+    fn timed(summary: &str) -> Event {
+        let mut e = Event::default();
+        e.summary = Some(summary.into());
+        e.start = Some(to_event_time(Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap()));
+        e.end = Some(to_event_time(Utc.with_ymd_and_hms(2026, 6, 13, 11, 0, 0).unwrap()));
+        e
+    }
+
+    #[test]
+    fn timed_event_maps_through() {
+        let ce = to_calendar_event(timed("standup")).unwrap();
+        assert_eq!(ce.title, "standup");
+        assert!(!ce.is_all_day);
+    }
+
+    #[test]
+    fn cancelled_event_is_skipped() {
+        let mut e = timed("x");
+        e.status = Some("cancelled".into());
+        assert!(to_calendar_event(e).is_none());
+    }
+
+    #[test]
+    fn transparent_event_is_skipped() {
+        let mut e = timed("x");
+        e.transparency = Some("transparent".into());
+        assert!(to_calendar_event(e).is_none());
+    }
+
+    #[test]
+    fn all_day_event_expands_to_full_day_span() {
+        let mut e = Event::default();
+        e.summary = Some("holiday".into());
+        e.start = Some(EventDateTime {
+            date: Some(NaiveDate::from_ymd_opt(2026, 6, 13).unwrap()),
+            date_time: None,
+            time_zone: None,
+        });
+        e.end = Some(EventDateTime {
+            date: Some(NaiveDate::from_ymd_opt(2026, 6, 14).unwrap()),
+            date_time: None,
+            time_zone: None,
+        });
+        let ce = to_calendar_event(e).unwrap();
+        assert!(ce.is_all_day);
+        assert_eq!(ce.start_time, Utc.with_ymd_and_hms(2026, 6, 13, 0, 0, 0).unwrap());
+        assert_eq!(ce.end_time, Utc.with_ymd_and_hms(2026, 6, 14, 0, 0, 0).unwrap());
     }
 }

@@ -1,19 +1,24 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::{DateTime, Duration, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use futures::future;
 
 use tracing::{Span, instrument};
 
 use crate::domain::{
-    activities::{ActivitySuggestion, Plan, PlanningContext, TimeWindow, Timing},
-    ports::{ActivitySource, CalendarProvider, SolverInput, WeekSolver},
+    activities::{
+        ActivityKind, ActivitySuggestion, Plan, PlanningContext, ScheduledActivity, TimeWindow,
+        Timing,
+    },
+    calendar::CalendarEvent,
+    ports::{ActivitySource, CalendarProvider, GeoProvider, SolverInput, WeekSolver},
 };
 
 pub struct Planner {
     sources: Vec<Arc<dyn ActivitySource>>,
     solver: Arc<dyn WeekSolver>,
+    geo: Arc<dyn GeoProvider>,
     pub num_alternatives: usize,
 }
 
@@ -21,10 +26,12 @@ impl Planner {
     pub fn new(
         sources: Vec<Arc<dyn ActivitySource>>,
         solver: Arc<dyn WeekSolver>,
+        geo: Arc<dyn GeoProvider>,
     ) -> Self {
         Self {
             sources,
             solver,
+            geo,
             num_alternatives: 2,
         }
     }
@@ -38,11 +45,14 @@ impl Planner {
             plans = tracing::field::Empty,
         )
     )]
+    /// Returns the alternative plans **plus** the fixed commitments they were planned around —
+    /// the renderer (`calendar_job`) needs the commitments to route drives through them instead
+    /// of straight across a meeting window.
     pub async fn plan(
         &self,
         ctx: &PlanningContext,
         calendar: &dyn CalendarProvider,
-    ) -> Result<Vec<Plan>> {
+    ) -> Result<(Vec<Plan>, Vec<ScheduledActivity>)> {
         let per_source = future::join_all(self.sources.iter().map(|s| s.suggest(ctx))).await;
 
         let mut raw: Vec<ActivitySuggestion> = Vec::new();
@@ -66,92 +76,117 @@ impl Planner {
             }
         }
 
-        let free_slots = slice_by_calendar(ctx.horizon, &ctx.conflict_calendars, calendar).await;
+        // One event fetch feeds both the fixed commitments and the free slots, so a commitment and
+        // its hole line up by construction. A calendar hiccup degrades to "no commitments / all
+        // free" rather than aborting the plan (matching the old per-hour is_busy fallback).
+        let events = calendar
+            .get_events(&ctx.conflict_calendars, ctx.horizon.start, ctx.horizon.end)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "calendar get_events failed; planning with no commitments");
+                Vec::new()
+            });
+
+        let fixed = self.commitments_from_events(&events).await;
+        let free_slots = free_slots_from_events(ctx.horizon, &events);
 
         let input = SolverInput {
             candidates,
             origin: ctx.home.clone(),
             free_slots,
+            fixed,
             num_alternatives: self.num_alternatives,
         };
         let candidates_out = input.candidates.len();
+        // Keep a copy of the commitments to hand back for rendering; `solve` consumes `input`.
+        let commitments = input.fixed.clone();
         let plans = self.solver.solve(input).await?;
 
         Span::current().record("candidates_in", candidates_in);
         Span::current().record("candidates_out", candidates_out);
         Span::current().record("plans", plans.len());
 
-        Ok(plans)
-    }
-}
-
-async fn slice_by_calendar(
-    window: TimeWindow,
-    conflict_calendars: &Vec<String>,
-    calendar: &dyn CalendarProvider,
-) -> Vec<TimeWindow> {
-    let hour = TimeDelta::hours(1);
-    let mut hours: Vec<DateTime<Utc>> = Vec::new();
-    let mut t = window.start;
-    while t <= window.end {
-        hours.push(t);
-        t += hour;
+        Ok((plans, commitments))
     }
 
-    let busy_flags: Vec<bool> = future::join_all(hours.iter().map(|ts| async move {
-        calendar
-            .is_busy(
-                conflict_calendars,
-                *ts - Duration::minutes(30),
-                *ts + Duration::minutes(30),
-            )
-            .await
-            .unwrap_or(false)
-    }))
-    .await;
-
-    let mut windows = Vec::new();
-    let mut current: Option<Vec<DateTime<Utc>>> = None;
-    for (ts, busy) in hours.into_iter().zip(busy_flags) {
-        if busy {
-            if let Some(run) = current.take()
-                && let Some(w) = run_to_window(&run)
-            {
-                windows.push(w);
+    /// Turn calendar events into fixed commitments (`fun = 0`). A located event geocodes to
+    /// `Some(location)`; an event with no location, an empty geocode, or a geocode error becomes
+    /// `None` (online) with a warning — never an error, since real calendar locations are junk half
+    /// the time ("Teams-Meeting", "Konferenzraum 2. OG").
+    async fn commitments_from_events(&self, events: &[CalendarEvent]) -> Vec<ScheduledActivity> {
+        future::join_all(events.iter().map(|e| async move {
+            let location = match &e.location {
+                Some(text) if !text.trim().is_empty() => match self.geo.geocode(text).await {
+                    Ok(hits) => {
+                        let first = hits.into_iter().next();
+                        if first.is_none() {
+                            tracing::warn!(location = %text, "commitment location did not geocode; treating as online");
+                        }
+                        first
+                    }
+                    Err(err) => {
+                        tracing::warn!(location = %text, error = %err, "geocode failed; treating commitment as online");
+                        None
+                    }
+                },
+                _ => None,
+            };
+            ScheduledActivity {
+                kind: ActivityKind::Commitment,
+                location,
+                start: e.start_time,
+                end: e.end_time,
+                title: e.title.clone(),
+                description: e.body.clone().unwrap_or_default(),
+                fun: 0.0,
             }
-        } else {
-            current.get_or_insert_with(Vec::new).push(ts);
-        }
+        }))
+        .await
     }
-    if let Some(run) = current
-        && let Some(w) = run_to_window(&run)
-    {
-        windows.push(w);
-    }
-
-    windows
 }
 
-fn run_to_window(run: &[DateTime<Utc>]) -> Option<TimeWindow> {
-    let start = *run.first()?;
-    let end = *run.last()?;
-    Some(TimeWindow { start, end })
+/// Free slots = the horizon with every event span subtracted. Overlapping events merge naturally
+/// via the advancing cursor, giving exact-boundary windows (no hour quantization).
+fn free_slots_from_events(horizon: TimeWindow, events: &[CalendarEvent]) -> Vec<TimeWindow> {
+    let mut spans: Vec<(DateTime<Utc>, DateTime<Utc>)> = events
+        .iter()
+        .map(|e| (e.start_time.max(horizon.start), e.end_time.min(horizon.end)))
+        .filter(|(s, e)| s < e)
+        .collect();
+    spans.sort_by_key(|(s, _)| *s);
+
+    let mut slots = Vec::new();
+    let mut cursor = horizon.start;
+    for (s, e) in spans {
+        if s > cursor {
+            slots.push(TimeWindow { start: cursor, end: s });
+        }
+        cursor = cursor.max(e);
+    }
+    if cursor < horizon.end {
+        slots.push(TimeWindow {
+            start: cursor,
+            end: horizon.end,
+        });
+    }
+    slots
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        application::solvers::GreedyDiversitySolver,
+        application::solvers::greedy_diversity::GreedyDiversitySolver,
         domain::{
-            activities::{ActivityKind, Score},
+            activities::Score,
             location::Location,
             ports::{
-                MockActivitySource, MockCalendarProvider, MockRoutingProvider, RoutingProvider,
+                MockActivitySource, MockCalendarProvider, MockGeoProvider, MockRoutingProvider,
+                RoutingProvider,
             },
         },
     };
-    use chrono::{TimeZone, Timelike};
+    use chrono::{TimeDelta, TimeZone};
 
     fn home() -> Location {
         Location::new(50.7, 13.0, "Home".into(), "DE".into())
@@ -217,16 +252,51 @@ mod tests {
         }
     }
 
-    fn always_free_calendar() -> MockCalendarProvider {
+    /// No calendar events → the whole horizon is free.
+    fn empty_calendar() -> MockCalendarProvider {
         let mut cal = MockCalendarProvider::new();
-        cal.expect_is_busy().returning(|_, _, _| Ok(false));
+        cal.expect_get_events().returning(|_, _, _| Ok(vec![]));
         cal
+    }
+
+    /// One event spanning the whole queried range → no free slots at all.
+    fn full_calendar() -> MockCalendarProvider {
+        let mut cal = MockCalendarProvider::new();
+        cal.expect_get_events().returning(|_, start, end| {
+            Ok(vec![CalendarEvent {
+                title: "all-day busy".into(),
+                start_time: start,
+                end_time: end,
+                is_all_day: false,
+                location: None,
+                body: None,
+                color_id: None,
+            }])
+        });
+        cal
+    }
+
+    fn commitment_event(loc: Option<&str>) -> CalendarEvent {
+        CalendarEvent {
+            title: "meeting".into(),
+            start_time: ts(10),
+            end_time: ts(12),
+            is_all_day: false,
+            location: loc.map(str::to_string),
+            body: None,
+            color_id: None,
+        }
+    }
+
+    /// A geo mock that is never expected to be called (used when there are no located events).
+    fn no_geo() -> Arc<dyn GeoProvider> {
+        Arc::new(MockGeoProvider::new())
     }
 
     fn fixed_travel() -> Arc<dyn RoutingProvider> {
         let mut r = MockRoutingProvider::new();
         r.expect_travel_time_matrix().returning(|locs| {
-            Ok(vec![vec![Duration::minutes(30); locs.len()]; locs.len()])
+            Ok(vec![vec![TimeDelta::minutes(30); locs.len()]; locs.len()])
         });
         Arc::new(r)
     }
@@ -248,119 +318,145 @@ mod tests {
 
     #[tokio::test]
     async fn fixed_dropped_when_calendar_busy() {
-        let routing = fixed_travel();
         let planner = Planner::new(
             vec![source_with(vec![fixed_suggestion(10, 12, None)])],
-            solver(routing),
+            solver(fixed_travel()),
+            no_geo(),
         );
-        let mut cal = MockCalendarProvider::new();
-        cal.expect_is_busy().returning(|_, _, _| Ok(true));
 
-        let plans = planner.plan(&ctx(), &cal).await.unwrap();
+        let (plans, _) = planner.plan(&ctx(), &full_calendar()).await.unwrap();
         assert_eq!(plans.len(), 2);
         assert!(activities_in(&plans[0]).is_empty());
     }
 
     #[tokio::test]
     async fn fixed_kept_when_calendar_free() {
-        let routing = fixed_travel();
         let planner = Planner::new(
             vec![source_with(vec![fixed_suggestion(10, 12, None)])],
-            solver(routing),
+            solver(fixed_travel()),
+            no_geo(),
         );
-        let cal = always_free_calendar();
 
-        let plans = planner.plan(&ctx(), &cal).await.unwrap();
+        let (plans, _) = planner.plan(&ctx(), &empty_calendar()).await.unwrap();
         assert_eq!(activities_in(&plans[0]).len(), 1);
     }
 
     #[tokio::test]
     async fn flexible_dropped_when_window_below_min_duration() {
-        let routing = fixed_travel();
         let planner = Planner::new(
             vec![source_with(vec![flexible_suggestion(10, 11)])],
-            solver(routing),
+            solver(fixed_travel()),
+            no_geo(),
         );
-        let cal = always_free_calendar();
 
-        let plans = planner.plan(&ctx(), &cal).await.unwrap();
+        let (plans, _) = planner.plan(&ctx(), &empty_calendar()).await.unwrap();
         assert!(activities_in(&plans[0]).is_empty(), "1h window < 2h min_duration");
     }
 
     #[tokio::test]
     async fn flexible_kept_when_window_equals_min_after_travel() {
-        let routing = fixed_travel();
         let planner = Planner::new(
             vec![source_with(vec![flexible_suggestion(10, 13)])],
-            solver(routing),
+            solver(fixed_travel()),
+            no_geo(),
         );
-        let cal = always_free_calendar();
 
-        let plans = planner.plan(&ctx(), &cal).await.unwrap();
+        let (plans, _) = planner.plan(&ctx(), &empty_calendar()).await.unwrap();
         assert_eq!(activities_in(&plans[0]).len(), 1);
     }
 
     #[tokio::test]
     async fn two_diverse_plans_returned() {
-        let routing = fixed_travel();
         let planner = Planner::new(
             vec![source_with(vec![
                 fixed_suggestion(10, 12, Some(0.9)),
                 fixed_suggestion(14, 16, Some(0.5)),
             ])],
-            solver(routing),
+            solver(fixed_travel()),
+            no_geo(),
         );
-        let cal = always_free_calendar();
 
-        let plans = planner.plan(&ctx(), &cal).await.unwrap();
+        let (plans, _) = planner.plan(&ctx(), &empty_calendar()).await.unwrap();
         assert_eq!(plans.len(), 2);
     }
 
-    #[tokio::test]
-    async fn slice_by_calendar_busy_check_window_is_centered_on_each_hour() {
-        let mut cal = MockCalendarProvider::new();
-        cal.expect_is_busy().returning(|_, start, end| {
-            assert_eq!(end - start, Duration::hours(1));
-            assert_eq!((start + Duration::minutes(30)).minute(), 0);
-            Ok(false)
-        });
-
-        let window = TimeWindow { start: ts(10), end: ts(12) };
-        let _ = slice_by_calendar(window, &vec![], &cal).await;
+    fn geocoding_planner(geo: MockGeoProvider) -> Planner {
+        Planner::new(vec![], solver(fixed_travel()), Arc::new(geo))
     }
 
     #[tokio::test]
-    async fn slice_by_calendar_returns_one_window_when_all_free() {
-        let cal = always_free_calendar();
-        let window = TimeWindow { start: ts(10), end: ts(15) };
-        let out = slice_by_calendar(window, &vec![], &cal).await;
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].start, ts(10));
-        assert_eq!(out[0].end, ts(15));
+    async fn located_event_geocodes_to_some_commitment() {
+        let mut geo = MockGeoProvider::new();
+        geo.expect_geocode().returning(|_| Ok(vec![site_loc()]));
+        let planner = geocoding_planner(geo);
+
+        let fixed = planner
+            .commitments_from_events(&[commitment_event(Some("Dresden"))])
+            .await;
+        assert_eq!(fixed.len(), 1);
+        assert_eq!(fixed[0].kind, ActivityKind::Commitment);
+        assert_eq!(fixed[0].fun, 0.0);
+        assert_eq!(fixed[0].location.as_ref().unwrap().name, "Site");
     }
 
     #[tokio::test]
-    async fn slice_by_calendar_breaks_window_at_busy_hour() {
-        let mut cal = MockCalendarProvider::new();
-        cal.expect_is_busy().returning(|_, start, _| {
-            Ok((start + Duration::minutes(30)).hour() == 12)
-        });
-
-        let window = TimeWindow { start: ts(10), end: ts(14) };
-        let out = slice_by_calendar(window, &vec![], &cal).await;
-        assert_eq!(out.len(), 2);
-        assert_eq!(out[0].start, ts(10));
-        assert_eq!(out[0].end, ts(11));
-        assert_eq!(out[1].start, ts(13));
-        assert_eq!(out[1].end, ts(14));
+    async fn location_less_event_is_online() {
+        let planner = geocoding_planner(MockGeoProvider::new()); // geocode never called
+        let fixed = planner
+            .commitments_from_events(&[commitment_event(None)])
+            .await;
+        assert_eq!(fixed.len(), 1);
+        assert!(fixed[0].location.is_none());
     }
 
     #[tokio::test]
-    async fn slice_by_calendar_returns_empty_when_all_busy() {
-        let mut cal = MockCalendarProvider::new();
-        cal.expect_is_busy().returning(|_, _, _| Ok(true));
-        let window = TimeWindow { start: ts(10), end: ts(15) };
-        let out = slice_by_calendar(window, &vec![], &cal).await;
-        assert!(out.is_empty());
+    async fn geocode_failure_degrades_to_online() {
+        let mut geo = MockGeoProvider::new();
+        geo.expect_geocode()
+            .returning(|_| Err(anyhow::anyhow!("boom")));
+        let planner = geocoding_planner(geo);
+
+        let fixed = planner
+            .commitments_from_events(&[commitment_event(Some("Konferenzraum 2. OG"))])
+            .await;
+        assert!(fixed[0].location.is_none(), "geocode error must not propagate");
+    }
+
+    #[tokio::test]
+    async fn geocode_empty_degrades_to_online() {
+        let mut geo = MockGeoProvider::new();
+        geo.expect_geocode().returning(|_| Ok(vec![]));
+        let planner = geocoding_planner(geo);
+
+        let fixed = planner
+            .commitments_from_events(&[commitment_event(Some("Teams-Meeting"))])
+            .await;
+        assert!(fixed[0].location.is_none());
+    }
+
+    #[test]
+    fn free_slots_split_around_a_midday_event() {
+        let horizon = TimeWindow { start: ts(8), end: ts(18) };
+        let event = CalendarEvent {
+            title: "lunch".into(),
+            start_time: ts(12),
+            end_time: ts(13),
+            is_all_day: false,
+            location: None,
+            body: None,
+            color_id: None,
+        };
+        let slots = free_slots_from_events(horizon, &[event]);
+        assert_eq!(slots.len(), 2);
+        assert_eq!((slots[0].start, slots[0].end), (ts(8), ts(12)));
+        assert_eq!((slots[1].start, slots[1].end), (ts(13), ts(18)));
+    }
+
+    #[test]
+    fn free_slots_whole_horizon_when_no_events() {
+        let horizon = TimeWindow { start: ts(8), end: ts(18) };
+        let slots = free_slots_from_events(horizon, &[]);
+        assert_eq!(slots.len(), 1);
+        assert_eq!((slots[0].start, slots[0].end), (ts(8), ts(18)));
     }
 }
