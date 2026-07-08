@@ -40,6 +40,14 @@ impl Location {
         let lon = (self.longitude * 1_000_000.0).round() as i64;
         format!("{}_{}_{}_{}", lat, lon, self.name, self.country)
     }
+
+    /// Snap to a coarse lat/lon grid so nearby points collapse to one cache key. Name/country are
+    /// cleared so `to_key()` keys purely on the cell — used for tour weather, where ~10 km accuracy
+    /// is plenty and per-tour forecasts would otherwise be one API call each.
+    pub fn snapped_to_grid(&self, grid_deg: f64) -> Location {
+        let snap = |v: f64| (v / grid_deg).round() * grid_deg;
+        Location::new(snap(self.latitude), snap(self.longitude), String::new(), String::new())
+    }
 }
 
 #[cfg(test)]
@@ -75,5 +83,16 @@ mod tests {
         let a = Location::new(50.7, 13.0, "A".into(), "DE".into());
         let b = Location::new(50.71, 13.0, "A".into(), "DE".into());
         assert_ne!(a.to_key(), b.to_key());
+    }
+
+    #[test]
+    fn snapped_to_grid_collapses_nearby_points_and_clears_name() {
+        // Two tours ~2 km apart in the same cell, with different names, snap to one cache key.
+        let a = Location::new(50.72, 13.03, "Tour A".into(), "DE".into());
+        let b = Location::new(50.74, 13.01, "Tour B".into(), "DE".into());
+        assert_eq!(a.snapped_to_grid(0.1).to_key(), b.snapped_to_grid(0.1).to_key());
+        // A distant point still lands in a different cell.
+        let c = Location::new(51.24, 13.0, "Tour C".into(), "DE".into());
+        assert_ne!(a.snapped_to_grid(0.1).to_key(), c.snapped_to_grid(0.1).to_key());
     }
 }

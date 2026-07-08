@@ -5,7 +5,9 @@ use sqlx::PgPool;
 
 use crate::{
     adapters::{
+        activities::events::source::EventActivitySource,
         activities::paragliding::source::ParaglidingActivitySource,
+        activities::tours::source::TourActivitySource,
         cache::PersistentCache,
         combined_calendar::CombinedCalendar,
         crow_flies::CrowFlies,
@@ -17,8 +19,8 @@ use crate::{
     application::{Planner, solvers::Nsga2Solver},
     config::AppConfig,
     domain::ports::{
-        ActivitySource, CalendarProvider, GeoProvider, RoutingProvider, SettingsRepository,
-        SiteRepository, WeatherProvider, WeekSolver,
+        ActivitySource, CalendarProvider, EventRepository, GeoProvider, OutdoorTourRepository,
+        RoutingProvider, SettingsRepository, SiteRepository, WeatherProvider, WeekSolver,
     },
 };
 
@@ -26,6 +28,8 @@ use crate::{
 pub struct AppState {
     pub site_repo: Arc<dyn SiteRepository>,
     pub settings_repo: Arc<dyn SettingsRepository>,
+    pub outdoor_repo: Arc<dyn OutdoorTourRepository>,
+    pub event_repo: Arc<dyn EventRepository>,
     pub auth: Arc<WebFlowAuthenticator>,
     pub microsoft_auth: Option<Arc<O365Authenticator>>,
     pub routing: Arc<dyn RoutingProvider>,
@@ -41,7 +45,9 @@ impl AppState {
 
         let repo = Arc::new(PostgresRepository::new(pool.clone()));
         let site_repo: Arc<dyn SiteRepository> = repo.clone();
-        let settings_repo: Arc<dyn SettingsRepository> = repo;
+        let settings_repo: Arc<dyn SettingsRepository> = repo.clone();
+        let outdoor_repo: Arc<dyn OutdoorTourRepository> = repo.clone();
+        let event_repo: Arc<dyn EventRepository> = repo;
 
         let auth = Arc::new(WebFlowAuthenticator::new(
             cfg.google.client_id.clone(),
@@ -70,9 +76,16 @@ impl AppState {
         let paragliding_source: Arc<dyn ActivitySource> = Arc::new(
             ParaglidingActivitySource::new(site_repo.clone(), settings_repo.clone(), weather.clone()),
         );
+        let tour_source: Arc<dyn ActivitySource> = Arc::new(TourActivitySource::new(
+            outdoor_repo.clone(),
+            settings_repo.clone(),
+            weather.clone(),
+        ));
+        let event_source: Arc<dyn ActivitySource> =
+            Arc::new(EventActivitySource::new(event_repo.clone(), settings_repo.clone()));
         let solver: Arc<dyn WeekSolver> = Arc::new(Nsga2Solver::new(routing.clone()));
         let planner = Arc::new(Planner::new(
-            vec![paragliding_source],
+            vec![paragliding_source, tour_source, event_source],
             solver.clone(),
             geo.clone(),
         ));
@@ -87,6 +100,8 @@ impl AppState {
         Ok(Self {
             site_repo,
             settings_repo,
+            outdoor_repo,
+            event_repo,
             auth,
             microsoft_auth,
             routing,

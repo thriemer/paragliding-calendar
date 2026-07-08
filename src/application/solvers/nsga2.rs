@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;
-use chrono::Duration;
 use rand::{rngs::StdRng, RngExt, SeedableRng};
 
 use tracing::{debug, info, instrument, Span};
@@ -16,11 +15,9 @@ use tracing::{debug, info, instrument, Span};
 use crate::application::solvers::genome::{
     decode, night_count, overnight_candidates, repair, Gene, GeneAction, Genome,
 };
-use crate::domain::activities::OvernightSpot;
-use crate::application::solvers::greedy_diversity::{build_plan, GreedyDiversitySolver};
 use crate::application::solvers::placement::{build_matrix, partition_segments, DriveMatrix, Segment};
 use crate::domain::{
-    activities::{ActivitySuggestion, Plan, Timing},
+    activities::{ActivitySuggestion, OvernightSpot, Plan},
     ports::{RoutingProvider, SolverInput, WeekSolver},
 };
 
@@ -87,14 +84,8 @@ impl WeekSolver for Nsga2Solver {
         let overnight_pool = overnight_candidates(&input.origin);
         let mut rng = StdRng::seed_from_u64(self.seed);
 
-        // Initial population: random genomes + one seeded from the greedy solver's plan (the
-        // anti-regression floor — the front is never worse than greedy on fun).
+        // Initial population: random genomes.
         let mut pop: Vec<Individual> = Vec::with_capacity(self.pop_size);
-        pop.push(Individual::new(
-            greedy_seed(&self.routing, &input, &matrix, &segments, &overnight_pool),
-            &input,
-            &matrix,
-        ));
         while pop.len() < self.pop_size {
             let g = random_genome(&pool, &segments, &overnight_pool, &mut rng);
             pop.push(Individual::new(g, &input, &matrix));
@@ -187,92 +178,6 @@ fn random_genome(
         .map(|_| overnight_pool[rng.random_range(0..overnight_pool.len())].clone())
         .collect();
     Genome { segments: segment_genes, overnight }
-}
-
-/// Translate the greedy solver's chosen plan into a genome by reproducing each placed activity's
-/// duration segment-by-segment (§6 anti-regression floor). With uniform hourly scores this decodes
-/// to the same total fun as greedy; with commitments interfering, repair heals any overlap.
-fn greedy_seed(
-    routing: &Arc<dyn RoutingProvider>,
-    input: &SolverInput,
-    matrix: &DriveMatrix,
-    segments: &[Segment],
-    overnight_pool: &[Arc<OvernightSpot>],
-) -> Genome {
-    let greedy = GreedyDiversitySolver::new(routing.clone());
-    let plan = build_plan(&greedy, input, &[], matrix);
-
-    let mut items = plan.items;
-    items.sort_by_key(|a| a.start);
-    let mut segment_genes: Vec<Vec<Gene>> = vec![Vec::new(); segments.len()];
-    let mut carried = input.origin.clone();
-    let mut cursor: Vec<_> = segments.iter().map(|s| (s.start, s.start_loc.clone())).collect();
-
-    for item in &items {
-        let seg_idx = match segments.iter().position(|s| s.start <= item.start && item.start < s.end) {
-            Some(i) => i,
-            None => continue,
-        };
-        // Titles are not unique — one site yields a same-titled suggestion per day/flyable
-        // range — so also require the candidate's own timing to contain the placed span.
-        let Some(act) = input
-            .candidates
-            .iter()
-            .find(|c| {
-                c.title == item.title
-                    && match &c.timing {
-                        Timing::Flexible { window, .. } => {
-                            window.start <= item.start && item.end <= window.end
-                        }
-                        Timing::Fixed { start, end } => *start == item.start && *end == item.end,
-                    }
-            })
-            .cloned()
-            .map(Arc::new)
-        else {
-            continue;
-        };
-        let seg = &segments[seg_idx];
-        let start_loc = cursor[seg_idx].1.clone().unwrap_or_else(|| carried.clone());
-        let (time, loc) = (cursor[seg_idx].0, start_loc);
-
-        let greedy_dur = item.end - item.start;
-        let duration = match &act.timing {
-            Timing::Flexible { window, min_duration } => {
-                let drive_in = matrix.get(&loc, &act.location);
-                let start = (time + drive_in).max(window.start);
-                // Night boundaries drive out to the overnight spot (home for the seed); otherwise
-                // to the pinned commitment.
-                let end_loc = if seg.night_end {
-                    Some(&input.origin)
-                } else {
-                    seg.end_loc.as_ref()
-                };
-                let drive_out = end_loc
-                    .map(|e| matrix.get(&act.location, e))
-                    .unwrap_or_else(Duration::zero);
-                let feasible_max = window.end.min(seg.end - drive_out) - start;
-                normalize(greedy_dur, *min_duration, feasible_max)
-            }
-            // Pinned; decode ignores the duration.
-            Timing::Fixed { .. } => 0.0,
-        };
-        segment_genes[seg_idx].push(Gene { action: GeneAction::Do(act.clone()), duration });
-        cursor[seg_idx] = (item.end, Some(act.location.clone()));
-        carried = act.location.clone();
-    }
-    // The seed sleeps at home every night (overnight_pool[0] is home) — the anti-regression floor.
-    let overnight = vec![overnight_pool[0].clone(); night_count(segments)];
-    Genome { segments: segment_genes, overnight }
-}
-
-/// Back-solve the normalized `[0,1]` duration that maps onto `actual` within `[min, max]`.
-fn normalize(actual: Duration, min: Duration, max: Duration) -> f32 {
-    let span = (max - min).num_seconds() as f32;
-    if span <= 0.0 {
-        return 0.0;
-    }
-    (((actual - min).num_seconds() as f32) / span).clamp(0.0, 1.0)
 }
 
 // ---- domination, sorting, crowding -------------------------------------------------------
@@ -407,8 +312,8 @@ fn select_next(pop: Vec<Individual>, target: usize) -> Vec<Individual> {
     chosen.into_iter().map(|i| opt[i].take().unwrap()).collect()
 }
 
-/// The recommended plan (max fun on front 0 — ≥ greedy by the seed floor) first, then the rest of
-/// the front by crowding distance (spread), padded from subsequent fronts, deduped by trade-off.
+/// The recommended plan (max fun on front 0) first, then the rest of the front by crowding
+/// distance (spread), padded from subsequent fronts, deduped by trade-off.
 fn pick_alternatives(pop: &[Individual], num: usize) -> Vec<Plan> {
     let fronts = non_dominated_sort(pop);
 
@@ -541,12 +446,12 @@ fn mutate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Duration, TimeZone, Utc};
     use crate::domain::{
-        activities::{ActivityKind, Score, ScheduledActivity, TimeWindow},
+        activities::{ActivityKind, Score, ScheduledActivity, TimeWindow, Timing},
         location::Location,
         ports::MockRoutingProvider,
     };
-    use chrono::{DateTime, TimeZone, Utc};
 
     fn home() -> Location {
         Location::new(50.7, 13.0, "Home".into(), "DE".into())
@@ -588,6 +493,32 @@ mod tests {
         }
     }
 
+    fn fixed_cand(loc: Location, start_h: u32, end_h: u32, fun: f32) -> ActivitySuggestion {
+        let hours = (end_h - start_h).max(1) as usize;
+        ActivitySuggestion {
+            kind: ActivityKind::Event,
+            location: loc.clone(),
+            timing: Timing::Fixed { start: ts(start_h), end: ts(end_h) },
+            title: format!("fixed-{}", loc.name),
+            description: String::new(),
+            score: Some(Score { window_start: ts(start_h), hourly: vec![fun / hours as f32; hours], reasons: vec![] }),
+        }
+    }
+
+    #[tokio::test]
+    async fn fixed_candidate_is_placed_at_its_exact_times() {
+        // Fixed timing (events) must land at exactly [start, end], not shifted like Flexible.
+        let cands = vec![fixed_cand(site("E", 50.75), 10, 13, 3.0)];
+        let plans = small_solver(constant_routing(15)).solve(base_input(cands, 1)).await.unwrap();
+        let placed = plans[0]
+            .items
+            .iter()
+            .find(|i| i.kind == ActivityKind::Event)
+            .expect("fixed event should be scheduled");
+        assert_eq!(placed.start, ts(10));
+        assert_eq!(placed.end, ts(13));
+    }
+
     fn base_input(candidates: Vec<ActivitySuggestion>, num_alternatives: usize) -> SolverInput {
         SolverInput {
             candidates,
@@ -624,26 +555,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anti_regression_beats_or_matches_greedy() {
-        let cands = vec![
-            flex(site("A", 50.75), 8, 14, 0.9),
-            flex(site("B", 50.8), 10, 18, 0.6),
-        ];
-        let routing = constant_routing(15);
-        let greedy = GreedyDiversitySolver::new(routing.clone());
-        let greedy_fun = greedy.solve(base_input(cands.clone(), 1)).await.unwrap()[0].total_fun;
-
-        let best = small_solver(routing)
-            .solve(base_input(cands, 1))
-            .await
-            .unwrap()[0]
-            .total_fun;
-        assert!(best >= greedy_fun - 1e-4, "nsga2 {best} < greedy {greedy_fun}");
-    }
-
-    #[tokio::test]
     async fn optimal_pick_on_overlap_fixture() {
-        // Same fixture as greedy's `picks_higher_fun_when_overlapping`: only one fits, pick B (0.9).
+        // Overlapping windows: only one fits, pick the higher-fun one.
         let cands = vec![
             flex(site("A", 50.75), 10, 14, 0.5),
             flex(site("B", 50.8), 10, 14, 0.9),
@@ -675,25 +588,6 @@ mod tests {
             .map(|p| ((p.total_fun * 100.0) as i64, p.total_drive.num_seconds()))
             .collect();
         assert!(distinct.len() >= 2, "expected spread, got {distinct:?}");
-    }
-
-    #[tokio::test]
-    async fn greedy_seed_distinguishes_same_titled_windows() {
-        // One site → several same-titled suggestions (per flyable range). The seed must map
-        // each greedy placement back onto the candidate whose window contains it.
-        let routing = constant_routing(0);
-        let cands = vec![
-            flex(site("A", 50.75), 8, 12, 0.9),
-            flex(site("A", 50.75), 13, 18, 0.8),
-        ];
-        let input = base_input(cands, 1);
-        let matrix = build_matrix(routing.as_ref(), &input).await.unwrap();
-        let segments = partition_segments(&input.free_slots, &input.fixed, &input.origin);
-        let overnight_pool = overnight_candidates(&input.origin);
-
-        let genome = greedy_seed(&routing, &input, &matrix, &segments, &overnight_pool);
-        let plan = decode(&genome, &input, &matrix);
-        assert_eq!(plan.items.len(), 2, "both same-titled windows must survive the seed round-trip");
     }
 
     #[tokio::test]

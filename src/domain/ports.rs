@@ -14,8 +14,7 @@ pub struct SolverInput {
     pub candidates: Vec<ActivitySuggestion>,
     pub origin: Location,
     pub free_slots: Vec<TimeWindow>,
-    /// Fixed calendar commitments (fun = 0) the plan must schedule around. Consumed by the
-    /// genetic solver; greedy ignores it.
+    /// Fixed calendar commitments (fun = 0) the plan must schedule around.
     pub fixed: Vec<ScheduledActivity>,
     pub num_alternatives: usize,
 }
@@ -97,7 +96,19 @@ pub trait GeoProvider: Send + Sync {
     async fn fetch_elevation(&self, latitude: f64, longitude: f64) -> Result<f64>;
 }
 
-use crate::domain::paragliding::UserSettings;
+use crate::domain::{hiking::OutdoorTour, outdooractive::OutdoorEvent, paragliding::UserSettings};
+
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait OutdoorTourRepository: Send + Sync {
+    async fn count(&self) -> Result<i64>;
+    async fn save_batch(&self, tours: Vec<OutdoorTour>) -> Result<usize>;
+    async fn find_within_radius(
+        &self,
+        center: &Location,
+        radius_km: f64,
+    ) -> Result<Vec<(OutdoorTour, f64)>>;
+}
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
@@ -110,6 +121,20 @@ pub trait SiteRepository: Send + Sync {
         center: &Location,
         radius_km: f64,
     ) -> Result<Vec<(ParaglidingSite, f64)>>;
+}
+
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait EventRepository: Send + Sync {
+    async fn count(&self) -> Result<i64>;
+    async fn save_batch(&self, events: Vec<OutdoorEvent>) -> Result<usize>;
+    async fn find_within_radius_and_time(
+        &self,
+        center: &Location,
+        radius_km: f64,
+        time_from: DateTime<Utc>,
+        time_to: DateTime<Utc>,
+    ) -> Result<Vec<(OutdoorEvent, f64)>>;
 }
 
 #[cfg_attr(test, mockall::automock)]

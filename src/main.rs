@@ -35,6 +35,8 @@ async fn main() -> Result<()> {
     let state = AppState::new(&pool, &cfg)?;
 
     let job_state = state.clone();
+    let tour_sync_state = state.clone();
+    let event_sync_repo = state.event_repo.clone();
     tokio::join!(
         async { web::run(state).await },
         async move {
@@ -43,6 +45,34 @@ async fn main() -> Result<()> {
                 interval.tick().await;
                 if let Err(e) = application::calendar_job::run(&job_state).await {
                     tracing::error!(error = ?e, "Failed to create calendar entries");
+                }
+            }
+        },
+        async move {
+            match tour_sync_state.outdoor_repo.count().await {
+                Ok(0) => {
+                    tracing::info!("No outdoor tours found, starting initial sync");
+                    if let Err(e) = application::outdoor_sync::sync_tours(tour_sync_state.outdoor_repo.as_ref()).await {
+                        tracing::error!(error = ?e, "outdoor tour sync failed");
+                    }
+                }
+                Ok(n) => tracing::info!(tours = n, "outdoor tours already present, skipping sync"),
+                Err(e) => tracing::error!(error = ?e, "failed to check outdoor tour count"),
+            }
+        },
+        async move {
+            let mut interval = time::interval(time::Duration::from_secs(7 * 24 * 3600));
+            loop {
+                interval.tick().await;
+                if let Err(e) =
+                    application::outdoor_sync::sync_events(event_sync_repo.as_ref()).await
+                {
+                    tracing::error!(error = ?e, "outdoor event sync failed");
+                } else {
+                    match event_sync_repo.count().await {
+                        Ok(n) => tracing::info!(events = n, "outdoor events synced"),
+                        Err(e) => tracing::error!(error = ?e, "failed to count events after sync"),
+                    }
                 }
             }
         }

@@ -5,6 +5,14 @@ use crate::domain::location::Location;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityKind {
     Paragliding,
+    Hiking,
+    Biking,
+    Running,
+    MountainClimbing,
+    Kayaking,
+    /// A generic dated event (festival, theatre, kids' activity, …) — sourced from outdoor-active
+    /// but not itself an outdoor/weather-bound activity.
+    Event,
     /// A fixed calendar commitment (meeting, appointment) the planner schedules around.
     Commitment,
 }
@@ -34,6 +42,12 @@ pub enum Timing {
         window: TimeWindow,
         min_duration: Duration,
     },
+    /// An activity that takes exactly `duration` — it is placed at the earliest feasible
+    /// start within `window` (after Wait genes and drive-in), not stretched or shrunk.
+    ExactDuration {
+        window: TimeWindow,
+        duration: Duration,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +61,7 @@ pub struct Score {
 }
 
 impl Score {
+    #[allow(dead_code)]
     /// Total score = Σ hourly. Used for ranking.
     pub fn total(&self) -> f32 {
         self.hourly.iter().sum()

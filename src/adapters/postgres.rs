@@ -1,11 +1,14 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use crate::domain::{
+    hiking::OutdoorTour,
     location::Location,
+    outdooractive::{EventDate, OutdoorEvent},
     paragliding::{ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, SiteType, UserSettings},
-    ports::{SettingsRepository, SiteRepository},
+    ports::{EventRepository, OutdoorTourRepository, SettingsRepository, SiteRepository},
 };
 
 pub struct PostgresRepository {
@@ -214,6 +217,337 @@ impl SettingsRepository for PostgresRepository {
     }
 }
 
+#[async_trait]
+impl OutdoorTourRepository for PostgresRepository {
+    async fn count(&self) -> Result<i64> {
+        let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM outdoor_tours")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n)
+    }
+
+    async fn save_batch(&self, tours: Vec<OutdoorTour>) -> Result<usize> {
+        let mut tx = self.pool.begin().await?;
+        let mut saved = 0usize;
+        for tour in &tours {
+            sqlx::query(
+                "INSERT INTO outdoor_tours (id, title, category, location, location_name, description,
+                    duration_minutes, length_meters, ascent_meters, descent_meters,
+                    difficulty, stamina, landscape, experience, is_loop, season_bitmask, raw_json)
+                 VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326), $6, $7,
+                    $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb)
+                 ON CONFLICT (id) DO UPDATE SET
+                    title = EXCLUDED.title, category = EXCLUDED.category,
+                    location = EXCLUDED.location, location_name = EXCLUDED.location_name,
+                    description = EXCLUDED.description,
+                    duration_minutes = EXCLUDED.duration_minutes, length_meters = EXCLUDED.length_meters,
+                    ascent_meters = EXCLUDED.ascent_meters, descent_meters = EXCLUDED.descent_meters,
+                    difficulty = EXCLUDED.difficulty, stamina = EXCLUDED.stamina,
+                    landscape = EXCLUDED.landscape, experience = EXCLUDED.experience,
+                    is_loop = EXCLUDED.is_loop, season_bitmask = EXCLUDED.season_bitmask,
+                    raw_json = EXCLUDED.raw_json",
+            )
+            .bind(&tour.id)
+            .bind(&tour.title)
+            .bind(&tour.category)
+            .bind(tour.location.longitude)
+            .bind(tour.location.latitude)
+            .bind(&tour.location.name)
+            .bind(&tour.description)
+            .bind(tour.duration_minutes as i32)
+            .bind(tour.length_meters as i32)
+            .bind(tour.ascent_meters as i32)
+            .bind(tour.descent_meters as i32)
+            .bind(tour.difficulty as i16)
+            .bind(tour.stamina as i16)
+            .bind(tour.landscape as i16)
+            .bind(tour.experience as i16)
+            .bind(tour.is_loop)
+            .bind(tour.season_bitmask as i16)
+            .bind(&tour.raw_json)
+            .execute(&mut *tx)
+            .await?;
+            saved += 1;
+        }
+        tx.commit().await?;
+        Ok(saved)
+    }
+
+    async fn find_within_radius(
+        &self,
+        center: &Location,
+        radius_km: f64,
+    ) -> Result<Vec<(OutdoorTour, f64)>> {
+        let rows: Vec<TourWithDistRow> = sqlx::query_as(
+            "SELECT id, title, category, ST_X(location) AS lon, ST_Y(location) AS lat,
+                    location_name, description, duration_minutes, length_meters,
+                    ascent_meters, descent_meters, difficulty, stamina, landscape, experience,
+                    is_loop, season_bitmask, raw_json::text AS raw_json,
+                    ST_Distance(location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) / 1000.0 AS distance_km
+             FROM outdoor_tours
+             WHERE ST_DWithin(location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
+             ORDER BY distance_km",
+        )
+        .bind(center.longitude)
+        .bind(center.latitude)
+        .bind(radius_km * 1000.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| r.into_tour()).collect())
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct TourWithDistRow {
+    id: String,
+    title: String,
+    category: String,
+    lon: f64,
+    lat: f64,
+    location_name: String,
+    description: String,
+    duration_minutes: i32,
+    length_meters: i32,
+    ascent_meters: i32,
+    descent_meters: i32,
+    difficulty: i16,
+    stamina: i16,
+    landscape: i16,
+    experience: i16,
+    is_loop: bool,
+    season_bitmask: i16,
+    raw_json: String,
+    distance_km: f64,
+}
+
+impl TourWithDistRow {
+    fn into_tour(self) -> (OutdoorTour, f64) {
+        (
+            OutdoorTour {
+                id: self.id,
+                title: self.title,
+                category: self.category,
+                location: Location::new(self.lat, self.lon, self.location_name, String::new()),
+                description: self.description,
+                duration_minutes: self.duration_minutes as u32,
+                length_meters: self.length_meters as u32,
+                ascent_meters: self.ascent_meters as u32,
+                descent_meters: self.descent_meters as u32,
+                difficulty: self.difficulty as u8,
+                stamina: self.stamina as u8,
+                landscape: self.landscape as u8,
+                experience: self.experience as u8,
+                is_loop: self.is_loop,
+                season_bitmask: self.season_bitmask as u16,
+                raw_json: self.raw_json,
+            },
+            self.distance_km,
+        )
+    }
+}
+
+#[async_trait]
+impl EventRepository for PostgresRepository {
+    async fn count(&self) -> Result<i64> {
+        let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM outdooractive_events")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n)
+    }
+
+    async fn save_batch(&self, events: Vec<OutdoorEvent>) -> Result<usize> {
+        let mut saved = 0usize;
+        // Chunked transactions: the event set can be large, so avoid one giant transaction.
+        for chunk in events.chunks(500) {
+            let mut tx = self.pool.begin().await?;
+            for event in chunk {
+                let (lon, lat) = match &event.location {
+                    Some(l) => (Some(l.longitude), Some(l.latitude)),
+                    None => (None, None),
+                };
+                sqlx::query(
+                    r#"INSERT INTO outdooractive_events
+                       (id, title, location, category_id, category_title, category_keys,
+                        description_short, description_long, homepage, address, organizer,
+                        schedule_rules, data)
+                       VALUES ($1, $2,
+                           CASE WHEN $3::double precision IS NOT NULL
+                           THEN ST_SetSRID(ST_MakePoint($3, $4), 4326) END,
+                           $5, $6, $7, $8, $9, $10, $11::jsonb, $12,
+                           $13::jsonb, $14::jsonb)
+                       ON CONFLICT (id) DO UPDATE SET
+                           title = EXCLUDED.title,
+                           location = EXCLUDED.location,
+                           category_id = EXCLUDED.category_id,
+                           category_title = EXCLUDED.category_title,
+                           category_keys = EXCLUDED.category_keys,
+                           description_short = EXCLUDED.description_short,
+                           description_long = EXCLUDED.description_long,
+                           homepage = EXCLUDED.homepage,
+                           address = EXCLUDED.address,
+                           organizer = EXCLUDED.organizer,
+                           schedule_rules = EXCLUDED.schedule_rules,
+                           data = EXCLUDED.data,
+                           updated_at = now()"#,
+                )
+                .bind(&event.id)
+                .bind(&event.title)
+                .bind(lon)
+                .bind(lat)
+                .bind(&event.category_id)
+                .bind(&event.category_title)
+                .bind(&event.category_keys)
+                .bind(&event.description_short)
+                .bind(&event.description_long)
+                .bind(&event.homepage)
+                .bind(event.address.as_ref())
+                .bind(&event.organizer)
+                .bind(event.schedule_rules.as_ref())
+                .bind(&event.data)
+                .execute(&mut *tx)
+                .await?;
+
+                sqlx::query("DELETE FROM outdooractive_event_dates WHERE event_id = $1")
+                    .bind(&event.id)
+                    .execute(&mut *tx)
+                    .await?;
+
+                for date in &event.dates {
+                    sqlx::query(
+                        "INSERT INTO outdooractive_event_dates (event_id, time_from, time_to, date_text)
+                         VALUES ($1, $2, $3, $4)",
+                    )
+                    .bind(&event.id)
+                    .bind(date.time_from)
+                    .bind(date.time_to)
+                    .bind(&date.date_text)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+                saved += 1;
+            }
+            tx.commit().await?;
+        }
+        Ok(saved)
+    }
+
+    async fn find_within_radius_and_time(
+        &self,
+        center: &Location,
+        radius_km: f64,
+        time_from: DateTime<Utc>,
+        time_to: DateTime<Utc>,
+    ) -> Result<Vec<(OutdoorEvent, f64)>> {
+        let rows: Vec<EventWithDistRow> = sqlx::query_as(
+            r#"SELECT
+                e.id, e.title,
+                ST_X(e.location) AS lon, ST_Y(e.location) AS lat,
+                e.category_id, e.category_title, e.category_keys,
+                e.description_short, e.description_long, e.homepage,
+                e.address, e.organizer, e.schedule_rules, e.data,
+                jsonb_agg(
+                    jsonb_build_object(
+                        'time_from', d.time_from,
+                        'time_to', d.time_to,
+                        'date_text', d.date_text
+                    ) ORDER BY d.time_from
+                ) AS dates,
+                ST_Distance(e.location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) / 1000.0 AS distance_km
+             FROM outdooractive_events e
+             INNER JOIN outdooractive_event_dates d ON d.event_id = e.id
+                AND d.time_from < $4
+                AND d.time_to > $3
+             WHERE e.location IS NOT NULL
+                AND ST_DWithin(e.location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $5)
+             GROUP BY e.id
+             ORDER BY distance_km"#,
+        )
+        .bind(center.longitude)
+        .bind(center.latitude)
+        .bind(time_from)
+        .bind(time_to)
+        .bind(radius_km * 1000.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(|r| r.try_into_event()).collect()
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct EventWithDistRow {
+    id: String,
+    title: String,
+    lon: Option<f64>,
+    lat: Option<f64>,
+    category_id: Option<String>,
+    category_title: Option<String>,
+    category_keys: Vec<String>,
+    description_short: Option<String>,
+    description_long: Option<String>,
+    homepage: Option<String>,
+    address: Option<serde_json::Value>,
+    organizer: Option<String>,
+    schedule_rules: Option<serde_json::Value>,
+    data: serde_json::Value,
+    dates: serde_json::Value,
+    distance_km: f64,
+}
+
+impl EventWithDistRow {
+    fn try_into_event(self) -> Result<(OutdoorEvent, f64)> {
+        let location = match (self.lon, self.lat) {
+            (Some(lon), Some(lat)) => Some(Location::new(lat, lon, String::new(), String::new())),
+            _ => None,
+        };
+
+        let dates = self
+            .dates
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| {
+                        let time_from = v
+                            .get("time_from")?
+                            .as_str()?
+                            .parse::<DateTime<Utc>>()
+                            .ok()?;
+                        let time_to = v
+                            .get("time_to")?
+                            .as_str()?
+                            .parse::<DateTime<Utc>>()
+                            .ok()?;
+                        let date_text = v
+                            .get("date_text")
+                            .and_then(|v| v.as_str().map(String::from));
+                        Some(EventDate { time_from, time_to, date_text })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let event = OutdoorEvent {
+            id: self.id,
+            title: self.title,
+            location,
+            category_id: self.category_id,
+            category_title: self.category_title,
+            category_keys: self.category_keys,
+            description_short: self.description_short,
+            description_long: self.description_long,
+            homepage: self.homepage,
+            address: self.address,
+            organizer: self.organizer,
+            schedule_rules: self.schedule_rules,
+            dates,
+            data: self.data,
+        };
+
+        Ok((event, self.distance_km))
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct SiteRow {
     name: String,
@@ -397,7 +731,7 @@ mod tests {
             .unwrap();
 
         let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
-        let result = repo.find_within_radius(&home, 50.0).await.unwrap();
+        let result = SiteRepository::find_within_radius(&repo, &home, 50.0).await.unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0.name, "near");
@@ -417,7 +751,7 @@ mod tests {
             .unwrap();
 
         let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
-        let result = repo.find_within_radius(&home, 50.0).await.unwrap();
+        let result = SiteRepository::find_within_radius(&repo, &home, 50.0).await.unwrap();
 
         assert_eq!(result.len(), 3);
         let names: Vec<&str> = result.iter().map(|(s, _)| s.name.as_str()).collect();
@@ -449,5 +783,177 @@ mod tests {
         let repo = PostgresRepository::new(test_pool().await);
         let got = SettingsRepository::get(&repo).await.unwrap();
         assert!(got.is_none());
+    }
+
+    async fn insert_event(pool: &PgPool, id: &str, title: &str, lat: f64, lon: f64) {
+        sqlx::query(
+            "INSERT INTO outdooractive_events (id, title, location, category_keys, data)
+             VALUES ($1, $2, ST_SetSRID(ST_MakePoint($3, $4), 4326), $5, '{}'::jsonb)",
+        )
+        .bind(id)
+        .bind(title)
+        .bind(lon)
+        .bind(lat)
+        .bind(&Vec::<String>::new())
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_date(
+        pool: &PgPool,
+        event_id: &str,
+        time_from: DateTime<Utc>,
+        time_to: DateTime<Utc>,
+    ) {
+        sqlx::query(
+            "INSERT INTO outdooractive_event_dates (event_id, time_from, time_to)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(event_id)
+        .bind(time_from)
+        .bind(time_to)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn find_events_within_radius_and_time_returns_matching_events() {
+        let repo = PostgresRepository::new(test_pool().await);
+        let pool = &repo.pool;
+
+        insert_event(pool, "e1", "Mountain Hike", 50.71, 13.01).await;
+        let now = Utc::now();
+        insert_date(pool, "e1", now + chrono::Duration::hours(1), now + chrono::Duration::hours(3)).await;
+
+        let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
+        let result = repo
+            .find_within_radius_and_time(&home, 50.0, now, now + chrono::Duration::days(7))
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0.title, "Mountain Hike");
+    }
+
+    #[tokio::test]
+    async fn find_events_excludes_events_outside_radius() {
+        let repo = PostgresRepository::new(test_pool().await);
+        let pool = &repo.pool;
+
+        insert_event(pool, "e1", "Far Event", 55.0, 13.0).await;
+        let now = Utc::now();
+        insert_date(pool, "e1", now + chrono::Duration::hours(1), now + chrono::Duration::hours(3)).await;
+
+        let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
+        let result = repo
+            .find_within_radius_and_time(&home, 50.0, now, now + chrono::Duration::days(7))
+            .await
+            .unwrap();
+
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn find_events_excludes_events_outside_time_window() {
+        let repo = PostgresRepository::new(test_pool().await);
+        let pool = &repo.pool;
+
+        insert_event(pool, "e1", "Past Event", 50.71, 13.01).await;
+        let now = Utc::now();
+        insert_date(pool, "e1", now - chrono::Duration::days(10), now - chrono::Duration::days(9)).await;
+
+        let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
+        let result = repo
+            .find_within_radius_and_time(&home, 50.0, now, now + chrono::Duration::days(7))
+            .await
+            .unwrap();
+
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn find_events_returns_distance_in_km() {
+        let repo = PostgresRepository::new(test_pool().await);
+        let pool = &repo.pool;
+
+        insert_event(pool, "e1", "Near", 50.71, 13.01).await;
+        let now = Utc::now();
+        insert_date(pool, "e1", now + chrono::Duration::hours(1), now + chrono::Duration::hours(3)).await;
+
+        let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
+        let result = repo
+            .find_within_radius_and_time(&home, 50.0, now, now + chrono::Duration::days(7))
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        let dist = result[0].1;
+        assert!(dist > 0.0, "distance should be positive, got {dist}");
+        assert!(dist < 2.0, "expected ~1 km, got {dist}");
+    }
+
+    #[tokio::test]
+    async fn find_events_returns_multiple_dates_per_event() {
+        let repo = PostgresRepository::new(test_pool().await);
+        let pool = &repo.pool;
+
+        insert_event(pool, "e1", "Recurring", 50.71, 13.01).await;
+        let now = Utc::now();
+        insert_date(pool, "e1", now + chrono::Duration::hours(1), now + chrono::Duration::hours(2)).await;
+        insert_date(pool, "e1", now + chrono::Duration::days(1), now + chrono::Duration::days(1) + chrono::Duration::hours(2)).await;
+
+        let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
+        let result = repo
+            .find_within_radius_and_time(&home, 50.0, now, now + chrono::Duration::days(7))
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0.dates.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn find_events_filters_by_overlap_not_containment() {
+        let repo = PostgresRepository::new(test_pool().await);
+        let pool = &repo.pool;
+
+        insert_event(pool, "e1", "Ongoing", 50.71, 13.01).await;
+        let now = Utc::now();
+        // Event starts before the query window but ends inside it
+        insert_date(pool, "e1", now - chrono::Duration::days(1), now + chrono::Duration::days(1)).await;
+
+        let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
+        let result = repo
+            .find_within_radius_and_time(&home, 50.0, now, now + chrono::Duration::days(7))
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1, "overlapping events should be included");
+    }
+
+    #[tokio::test]
+    async fn find_events_sorts_by_proximity() {
+        let repo = PostgresRepository::new(test_pool().await);
+        let pool = &repo.pool;
+
+        insert_event(pool, "mid", "Mid", 50.75, 13.0).await;
+        insert_event(pool, "near", "Near", 50.71, 13.0).await;
+        insert_event(pool, "far", "Far", 50.85, 13.0).await;
+        let now = Utc::now();
+        for id in &["mid", "near", "far"] {
+            insert_date(pool, id, now, now + chrono::Duration::hours(1)).await;
+        }
+
+        let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
+        let result = repo
+            .find_within_radius_and_time(&home, 50.0, now, now + chrono::Duration::days(7))
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 3);
+        let titles: Vec<&str> = result.iter().map(|(e, _)| e.title.as_str()).collect();
+        assert_eq!(titles, vec!["Near", "Mid", "Far"]);
     }
 }

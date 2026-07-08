@@ -18,6 +18,7 @@ dhv_sites
 .idea/
 certs/
 data/
+.env_enc
 *.swp
 *.swo
 *~

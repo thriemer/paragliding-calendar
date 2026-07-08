@@ -73,6 +73,11 @@ impl Planner {
                         candidates.push(s);
                     }
                 }
+                Timing::ExactDuration { window, duration } => {
+                    if window.duration() >= *duration {
+                        candidates.push(s);
+                    }
+                }
             }
         }
 
@@ -176,7 +181,7 @@ fn free_slots_from_events(horizon: TimeWindow, events: &[CalendarEvent]) -> Vec<
 mod tests {
     use super::*;
     use crate::{
-        application::solvers::greedy_diversity::GreedyDiversitySolver,
+        application::solvers::Nsga2Solver,
         domain::{
             activities::Score,
             location::Location,
@@ -309,7 +314,7 @@ mod tests {
     }
 
     fn solver(routing: Arc<dyn RoutingProvider>) -> Arc<dyn WeekSolver> {
-        Arc::new(GreedyDiversitySolver::new(routing))
+        Arc::new(Nsga2Solver::new(routing))
     }
 
     fn activities_in(plan: &Plan) -> Vec<&str> {
@@ -325,8 +330,7 @@ mod tests {
         );
 
         let (plans, _) = planner.plan(&ctx(), &full_calendar()).await.unwrap();
-        assert_eq!(plans.len(), 2);
-        assert!(activities_in(&plans[0]).is_empty());
+        assert!(plans.is_empty(), "no free slots → no plans");
     }
 
     #[tokio::test]
@@ -350,7 +354,7 @@ mod tests {
         );
 
         let (plans, _) = planner.plan(&ctx(), &empty_calendar()).await.unwrap();
-        assert!(activities_in(&plans[0]).is_empty(), "1h window < 2h min_duration");
+        assert!(plans.is_empty(), "1h window < 2h min_duration → candidates dropped");
     }
 
     #[tokio::test]
@@ -377,7 +381,7 @@ mod tests {
         );
 
         let (plans, _) = planner.plan(&ctx(), &empty_calendar()).await.unwrap();
-        assert_eq!(plans.len(), 2);
+        assert_eq!(plans.len(), 1, "only one distinct trade-off (both fixed events placed)");
     }
 
     fn geocoding_planner(geo: MockGeoProvider) -> Planner {

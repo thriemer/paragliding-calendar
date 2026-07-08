@@ -130,6 +130,14 @@ fn walk_segment(
                     }
                     // Pinned span; `duration`/`Wait` don't apply. Unplaceable if we can't arrive
                     // in time or the pinned end overruns the segment's drive-out reservation.
+                    Timing::ExactDuration { window, duration } => {
+                        let start = (time + drive_in).max(window.start);
+                        let end = start + *duration;
+                        if end > window.end.min(seg.end - drive_out) {
+                            return WalkOutput { placed, end_loc: loc, unplaceable: Some(i) };
+                        }
+                        (start, end)
+                    }
                     Timing::Fixed { start, end } => {
                         if time + drive_in > *start || *end + drive_out > seg.end {
                             return WalkOutput { placed, end_loc: loc, unplaceable: Some(i) };
