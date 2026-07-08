@@ -1,4 +1,5 @@
 use anyhow::Result;
+use sqlx::postgres::PgPoolOptions;
 use tokio::time;
 
 use crate::{app_state::AppState, config::AppConfig};
@@ -9,7 +10,11 @@ mod application;
 mod config;
 mod domain;
 mod telemetry;
+#[cfg(test)]
+mod test_support;
 mod web;
+
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,8 +27,12 @@ async fn main() -> Result<()> {
         .expect("Failed to install rustls crypto provider");
 
     let cfg = AppConfig::from_env()?;
-    let db = fjall::Database::builder(&cfg.db_path).open()?;
-    let state = AppState::new(&db, &cfg)?;
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&cfg.database_url)
+        .await?;
+    MIGRATOR.run(&pool).await?;
+    let state = AppState::new(&pool, &cfg)?;
 
     let job_state = state.clone();
     tokio::join!(

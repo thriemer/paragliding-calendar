@@ -63,7 +63,7 @@ in {
     systemd.services.travelai = {
       description = "TravelAI - Paragliding and outdoor adventure planning";
       wantedBy = ["multi-user.target"];
-      after = ["network.target"];
+      after = ["network.target" "postgresql.service"];
 
       serviceConfig = {
         Type = "simple";
@@ -79,7 +79,6 @@ in {
           "OTEL_EXPORTER_OTLP_ENDPOINT=${cfg.otelEndpoint}"
           "OTEL_SERVICE_NAME=travelai"
         ];
-        CacheDirectory = "travelai";
         Restart = "on-failure";
         RestartSec = "10s";
       };

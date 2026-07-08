@@ -14,7 +14,7 @@ use crate::{
 
 #[tracing::instrument(skip_all, fields(event_count = tracing::field::Empty))]
 pub async fn run(state: &AppState) -> Result<()> {
-    let settings = match state.site_repo.get_settings().await? {
+    let settings = match state.settings_repo.get().await? {
         Some(s) => s,
         None => {
             tracing::warn!("No settings found, using defaults");

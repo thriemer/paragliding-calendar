@@ -1,30 +1,31 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use sqlx::PgPool;
 
 use crate::{
     adapters::{
-        activities::paragliding::{
-            repository::ParaglidingSiteRepository, source::ParaglidingActivitySource,
-        },
+        activities::paragliding::source::ParaglidingActivitySource,
         cache::PersistentCache,
         combined_calendar::CombinedCalendar,
         crow_flies::CrowFlies,
         google_calendar::{GoogleCalendar, WebFlowAuthenticator},
         microsoft_calendar::{MicrosoftCalendar, O365Authenticator},
         open_meteo::OpenMeteoClient,
-        store::PersistentStore,
+        postgres::PostgresRepository,
     },
     application::{Planner, solvers::Nsga2Solver},
     config::AppConfig,
     domain::ports::{
-        ActivitySource, CalendarProvider, GeoProvider, RoutingProvider, WeatherProvider, WeekSolver,
+        ActivitySource, CalendarProvider, GeoProvider, RoutingProvider, SettingsRepository,
+        SiteRepository, WeatherProvider, WeekSolver,
     },
 };
 
 #[derive(Clone)]
 pub struct AppState {
-    pub site_repo: Arc<ParaglidingSiteRepository>,
+    pub site_repo: Arc<dyn SiteRepository>,
+    pub settings_repo: Arc<dyn SettingsRepository>,
     pub auth: Arc<WebFlowAuthenticator>,
     pub microsoft_auth: Option<Arc<O365Authenticator>>,
     pub routing: Arc<dyn RoutingProvider>,
@@ -35,12 +36,12 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(db: &fjall::Database, cfg: &AppConfig) -> Result<Self> {
-        let cache_ks = db.keyspace("cache", fjall::KeyspaceCreateOptions::default)?;
-        let cache = Arc::new(PersistentCache::from_keyspace(cache_ks));
+    pub fn new(pool: &PgPool, cfg: &AppConfig) -> Result<Self> {
+        let cache = Arc::new(PersistentCache::new(pool.clone()));
 
-        let store_ks = db.keyspace("store", fjall::KeyspaceCreateOptions::default)?;
-        let store = Arc::new(PersistentStore::from_keyspace(store_ks));
+        let repo = Arc::new(PostgresRepository::new(pool.clone()));
+        let site_repo: Arc<dyn SiteRepository> = repo.clone();
+        let settings_repo: Arc<dyn SettingsRepository> = repo;
 
         let auth = Arc::new(WebFlowAuthenticator::new(
             cfg.google.client_id.clone(),
@@ -66,12 +67,9 @@ impl AppState {
         let weather: Arc<dyn WeatherProvider> = open_meteo.clone();
         let geo: Arc<dyn GeoProvider> = open_meteo;
 
-        let site_repo = Arc::new(ParaglidingSiteRepository::new(store.clone()));
-
-        let paragliding_source: Arc<dyn ActivitySource> = Arc::new(ParaglidingActivitySource::new(
-            site_repo.clone(),
-            weather.clone(),
-        ));
+        let paragliding_source: Arc<dyn ActivitySource> = Arc::new(
+            ParaglidingActivitySource::new(site_repo.clone(), settings_repo.clone(), weather.clone()),
+        );
         let solver: Arc<dyn WeekSolver> = Arc::new(Nsga2Solver::new(routing.clone()));
         let planner = Arc::new(Planner::new(
             vec![paragliding_source],
@@ -88,6 +86,7 @@ impl AppState {
 
         Ok(Self {
             site_repo,
+            settings_repo,
             auth,
             microsoft_auth,
             routing,

@@ -5,37 +5,43 @@ use async_trait::async_trait;
 use chrono::Duration;
 
 use crate::{
-    adapters::activities::paragliding::{repository::ParaglidingSiteRepository, site_evaluator},
+    adapters::activities::paragliding::site_evaluator,
     domain::{
         activities::{ActivityKind, ActivitySuggestion, PlanningContext, Score, TimeWindow, Timing},
-        ports::{ActivitySource, ParaglidingSiteProvider, WeatherProvider},
+        ports::{ActivitySource, SettingsRepository, SiteRepository, WeatherProvider},
     },
 };
 
 pub struct ParaglidingActivitySource {
-    site_repo: Arc<ParaglidingSiteRepository>,
+    site_repo: Arc<dyn SiteRepository>,
+    settings_repo: Arc<dyn SettingsRepository>,
     weather: Arc<dyn WeatherProvider>,
 }
 
 impl ParaglidingActivitySource {
     pub fn new(
-        site_repo: Arc<ParaglidingSiteRepository>,
+        site_repo: Arc<dyn SiteRepository>,
+        settings_repo: Arc<dyn SettingsRepository>,
         weather: Arc<dyn WeatherProvider>,
     ) -> Self {
-        Self { site_repo, weather }
+        Self {
+            site_repo,
+            settings_repo,
+            weather,
+        }
     }
 }
 
 #[async_trait]
 impl ActivitySource for ParaglidingActivitySource {
     async fn suggest(&self, ctx: &PlanningContext) -> Result<Vec<ActivitySuggestion>> {
-        let settings = self.site_repo.get_settings().await?.unwrap_or_default();
+        let settings = self.settings_repo.get().await?.unwrap_or_default();
         let min_duration = Duration::hours(settings.minimum_flyable_hours as i64);
 
         let sites = self
             .site_repo
-            .fetch_launches_within_radius(&ctx.home, settings.search_radius_km)
-            .await;
+            .find_within_radius(&ctx.home, settings.search_radius_km)
+            .await?;
 
         let mut out = Vec::new();
         for (site, _distance) in sites {
@@ -112,37 +118,14 @@ impl ActivitySource for ParaglidingActivitySource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        adapters::store::PersistentStore,
-        domain::{
-            location::Location,
-            paragliding::{
-                ParaglidingLaunch, ParaglidingSite, SiteType, UserSettings,
-            },
-            ports::MockWeatherProvider,
-            weather::{WeatherData, WeatherForecast},
-        },
+    use crate::domain::{
+        location::Location,
+        paragliding::{ParaglidingLaunch, ParaglidingSite, SiteType, UserSettings},
+        ports::{MockSettingsRepository, MockSiteRepository, MockWeatherProvider},
+        weather::{WeatherData, WeatherForecast},
     };
     use anyhow::anyhow;
     use chrono::{TimeZone, Utc};
-    use mockall::predicate::*;
-    use tempfile::TempDir;
-
-    struct TestRepo {
-        _dir: TempDir,
-        repo: Arc<ParaglidingSiteRepository>,
-    }
-
-    fn fresh_repo() -> TestRepo {
-        let dir = tempfile::tempdir().unwrap();
-        let db = fjall::Database::builder(dir.path()).open().unwrap();
-        let ks = db
-            .keyspace("store", fjall::KeyspaceCreateOptions::default)
-            .unwrap();
-        let store = Arc::new(PersistentStore::from_keyspace(ks));
-        let repo = Arc::new(ParaglidingSiteRepository::new(store));
-        TestRepo { _dir: dir, repo }
-    }
 
     fn home() -> Location {
         Location::new(50.7, 13.0, "Home".into(), "DE".into())
@@ -176,6 +159,18 @@ mod tests {
         }
     }
 
+    fn default_settings() -> UserSettings {
+        UserSettings {
+            location_name: "Home".into(),
+            location_latitude: 50.7,
+            location_longitude: 13.0,
+            search_radius_km: 100.0,
+            calendar_name: "Paragliding".into(),
+            minimum_flyable_hours: 1,
+            excluded_calendar_names: vec![],
+        }
+    }
+
     fn weather_at(ts: chrono::DateTime<Utc>, wind_speed_ms: f32) -> WeatherData {
         WeatherData {
             timestamp: ts,
@@ -202,18 +197,12 @@ mod tests {
         }
     }
 
-    async fn seed_settings(repo: &ParaglidingSiteRepository) {
-        repo.save_settings(&UserSettings {
-            location_name: "Home".into(),
-            location_latitude: 50.7,
-            location_longitude: 13.0,
-            search_radius_km: 100.0,
-            calendar_name: "Paragliding".into(),
-            minimum_flyable_hours: 1,
-            excluded_calendar_names: vec![],
-        })
-        .await
-        .unwrap();
+    fn mock_settings() -> MockSettingsRepository {
+        let mut settings = MockSettingsRepository::new();
+        settings
+            .expect_get()
+            .returning(|| Ok(Some(default_settings())));
+        settings
     }
 
     fn bad_weather_forecast() -> WeatherForecast {
@@ -241,38 +230,42 @@ mod tests {
 
     #[tokio::test]
     async fn all_bad_weather_returns_no_suggestions() {
-        let r = fresh_repo();
-        seed_settings(&r.repo).await;
-        r.repo
-            .save_site(site("S", None, vec![hang_launch()]))
-            .await
-            .unwrap();
+        let mut site_repo = MockSiteRepository::new();
+        site_repo
+            .expect_find_within_radius()
+            .returning(|_, _| Ok(vec![(site("S", None, vec![hang_launch()]), 5.0)]));
 
         let mut weather = MockWeatherProvider::new();
         weather
             .expect_get_forecast()
             .returning(|_, _| Ok(bad_weather_forecast()));
 
-        let source = ParaglidingActivitySource::new(r.repo.clone(), Arc::new(weather));
+        let source = ParaglidingActivitySource::new(
+            Arc::new(site_repo),
+            Arc::new(mock_settings()),
+            Arc::new(weather),
+        );
         let out = source.suggest(&ctx()).await.unwrap();
         assert!(out.is_empty(), "expected no suggestions, got {:?}", out);
     }
 
     #[tokio::test]
     async fn flyable_window_produces_one_suggestion() {
-        let r = fresh_repo();
-        seed_settings(&r.repo).await;
-        r.repo
-            .save_site(site("S", None, vec![hang_launch()]))
-            .await
-            .unwrap();
+        let mut site_repo = MockSiteRepository::new();
+        site_repo
+            .expect_find_within_radius()
+            .returning(|_, _| Ok(vec![(site("S", None, vec![hang_launch()]), 5.0)]));
 
         let mut weather = MockWeatherProvider::new();
         weather
             .expect_get_forecast()
             .returning(|_, _| Ok(flyable_window_forecast()));
 
-        let source = ParaglidingActivitySource::new(r.repo.clone(), Arc::new(weather));
+        let source = ParaglidingActivitySource::new(
+            Arc::new(site_repo),
+            Arc::new(mock_settings()),
+            Arc::new(weather),
+        );
         let out = source.suggest(&ctx()).await.unwrap();
         assert_eq!(out.len(), 1);
         let Timing::Flexible { window, .. } = &out[0].timing else {
@@ -280,7 +273,6 @@ mod tests {
         };
         let day = Utc.with_ymd_and_hms(2026, 6, 13, 0, 0, 0).unwrap();
         assert_eq!(window.start, day + chrono::Duration::hours(10));
-        // Hours 10..=14 are flyable, so the window closes when hour 14 ends.
         assert_eq!(window.end, day + chrono::Duration::hours(15));
         assert_eq!(out[0].title, "S");
         let score = out[0].score.as_ref().expect("expected a score");
@@ -291,53 +283,59 @@ mod tests {
 
     #[tokio::test]
     async fn muted_site_is_skipped_without_calling_weather() {
-        let r = fresh_repo();
-        seed_settings(&r.repo).await;
-        r.repo
-            .save_site(site("Muted", Some(true), vec![hang_launch()]))
-            .await
-            .unwrap();
+        let mut site_repo = MockSiteRepository::new();
+        site_repo
+            .expect_find_within_radius()
+            .returning(|_, _| Ok(vec![(site("Muted", Some(true), vec![hang_launch()]), 5.0)]));
 
         let mut weather = MockWeatherProvider::new();
         weather.expect_get_forecast().times(0);
 
-        let source = ParaglidingActivitySource::new(r.repo.clone(), Arc::new(weather));
+        let source = ParaglidingActivitySource::new(
+            Arc::new(site_repo),
+            Arc::new(mock_settings()),
+            Arc::new(weather),
+        );
         let out = source.suggest(&ctx()).await.unwrap();
         assert!(out.is_empty());
     }
 
     #[tokio::test]
     async fn site_without_launches_is_skipped() {
-        let r = fresh_repo();
-        seed_settings(&r.repo).await;
-        r.repo
-            .save_site(site("NoLaunches", None, vec![]))
-            .await
-            .unwrap();
+        let mut site_repo = MockSiteRepository::new();
+        site_repo
+            .expect_find_within_radius()
+            .returning(|_, _| Ok(vec![(site("NoLaunches", None, vec![]), 5.0)]));
 
         let mut weather = MockWeatherProvider::new();
         weather.expect_get_forecast().times(0);
 
-        let source = ParaglidingActivitySource::new(r.repo.clone(), Arc::new(weather));
+        let source = ParaglidingActivitySource::new(
+            Arc::new(site_repo),
+            Arc::new(mock_settings()),
+            Arc::new(weather),
+        );
         let out = source.suggest(&ctx()).await.unwrap();
         assert!(out.is_empty());
     }
 
     #[tokio::test]
     async fn weather_error_skips_site_without_panicking() {
-        let r = fresh_repo();
-        seed_settings(&r.repo).await;
-        r.repo
-            .save_site(site("S", None, vec![hang_launch()]))
-            .await
-            .unwrap();
+        let mut site_repo = MockSiteRepository::new();
+        site_repo
+            .expect_find_within_radius()
+            .returning(|_, _| Ok(vec![(site("S", None, vec![hang_launch()]), 5.0)]));
 
         let mut weather = MockWeatherProvider::new();
         weather
             .expect_get_forecast()
             .returning(|_, _| Err(anyhow!("upstream timeout")));
 
-        let source = ParaglidingActivitySource::new(r.repo.clone(), Arc::new(weather));
+        let source = ParaglidingActivitySource::new(
+            Arc::new(site_repo),
+            Arc::new(mock_settings()),
+            Arc::new(weather),
+        );
         let out = source.suggest(&ctx()).await.unwrap();
         assert!(out.is_empty());
     }

@@ -21,7 +21,7 @@
         nixosModules.travelai = import ./module.nix {inherit self;};
 
         devShells.default = pkgs.mkShell {
-          buildInputs = [pkgs.nodejs];
+          buildInputs = [pkgs.nodejs pkgs.postgresql];
         };
       }
     );

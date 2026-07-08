@@ -17,7 +17,6 @@ use crate::{
     domain::{
         location::Location,
         paragliding::{ParaglidingSite, UserSettings, flight::Track},
-        ports::ParaglidingSiteProvider,
         weather::WeatherModel,
     },
 };
@@ -107,8 +106,8 @@ async fn get_settings(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut settings: UserSettingsResponse = match state
-        .site_repo
-        .get_settings()
+        .settings_repo
+        .get()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     {
@@ -125,8 +124,8 @@ async fn save_settings(
     Json(settings): Json<UserSettings>,
 ) -> Result<StatusCode, StatusCode> {
     state
-        .site_repo
-        .save_settings(&settings)
+        .settings_repo
+        .save(&settings)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
@@ -165,7 +164,11 @@ async fn trigger_calendar_job(State(state): State<AppState>) -> StatusCode {
 
 #[instrument(skip(state))]
 async fn get_sites(State(state): State<AppState>) -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
-    let sites = state.site_repo.fetch_all_sites().await;
+    let sites = state
+        .site_repo
+        .find_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(sites))
 }
 
@@ -176,7 +179,7 @@ async fn update_site(
 ) -> Result<StatusCode, StatusCode> {
     state
         .site_repo
-        .save_site(site)
+        .save(site)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
@@ -189,7 +192,7 @@ async fn delete_site(
 ) -> Result<StatusCode, StatusCode> {
     state
         .site_repo
-        .delete_site(&site_name)
+        .delete(&site_name)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
@@ -227,7 +230,7 @@ async fn import_sites(
         Ok(sites) => {
             tracing::info!(parsed_sites = sites.len(), "Parsed sites from XML");
             for site in sites {
-                if let Err(e) = state.site_repo.save_site(site).await {
+                if let Err(e) = state.site_repo.save(site).await {
                     tracing::warn!(error = ?e, "Failed to save site");
                 } else {
                     imported_count += 1;

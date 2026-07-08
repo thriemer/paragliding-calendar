@@ -97,11 +97,24 @@ pub trait GeoProvider: Send + Sync {
     async fn fetch_elevation(&self, latitude: f64, longitude: f64) -> Result<f64>;
 }
 
-pub trait ParaglidingSiteProvider {
-    async fn fetch_all_sites(&self) -> Vec<ParaglidingSite>;
-    async fn fetch_launches_within_radius(
+use crate::domain::paragliding::UserSettings;
+
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait SiteRepository: Send + Sync {
+    async fn save(&self, site: ParaglidingSite) -> Result<()>;
+    async fn delete(&self, name: &str) -> Result<()>;
+    async fn find_all(&self) -> Result<Vec<ParaglidingSite>>;
+    async fn find_within_radius(
         &self,
         center: &Location,
         radius_km: f64,
-    ) -> Vec<(ParaglidingSite, f64)>;
+    ) -> Result<Vec<(ParaglidingSite, f64)>>;
+}
+
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait SettingsRepository: Send + Sync {
+    async fn get(&self) -> Result<Option<UserSettings>>;
+    async fn save(&self, settings: &UserSettings) -> Result<()>;
 }

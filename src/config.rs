@@ -37,9 +37,7 @@ pub struct MicrosoftOAuthConfig {
 }
 
 pub struct AppConfig {
-    pub db_path: String,
-    // Consumed once the routing stack (BRouter/Valhalla/GraphHopper fallback) is wired into
-    // AppState; the env vars stay required so a deployment is ready for that switch.
+    pub database_url: String,
     #[allow(dead_code)]
     pub brouter_base_url: String,
     #[allow(dead_code)]
@@ -50,10 +48,8 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn from_env() -> Result<Self> {
-        let db_path = env::var("XDG_DATA_HOME")
-            .ok()
-            .or_else(|| env::var("CACHE_DIRECTORY").ok())
-            .ok_or_else(|| anyhow::anyhow!("XDG_DATA_HOME or CACHE_DIRECTORY must be set"))?;
+        let database_url = env::var("DATABASE_URL")
+            .map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?;
 
         let brouter_base_url =
             env::var("BROUTER_BASE_URL").map_err(|_| anyhow::anyhow!("Missing BROUTER_BASE_URL"))?;
@@ -89,7 +85,7 @@ impl AppConfig {
         });
 
         Ok(Self {
-            db_path,
+            database_url,
             brouter_base_url,
             valhalla_base_url,
             google,

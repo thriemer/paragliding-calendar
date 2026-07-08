@@ -35,7 +35,6 @@ impl WeatherProvider for OpenMeteoClient {
             .as_deref()
             .map(|m| format!("_{}", m))
             .unwrap_or_default();
-        // v2: WeatherData layout changed (Option fields); postcard can't decode v1 entries.
         let key = format!("weather_v2_for_{}{}", source.to_key(), model_suffix);
 
         if let Some(cached) = self.cache.get::<WeatherForecast>(&key).await? {

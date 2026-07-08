@@ -12,5 +12,5 @@ pub mod microsoft_calendar;
 pub mod open_meteo;
 pub mod routing_error;
 pub mod routing_matrix;
-pub mod store;
+pub mod postgres;
 pub mod valhalla;

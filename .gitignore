@@ -16,6 +16,8 @@ dhv_sites
 # IDE files
 .vscode/
 .idea/
+certs/
+data/
 *.swp
 *.swo
 *~
