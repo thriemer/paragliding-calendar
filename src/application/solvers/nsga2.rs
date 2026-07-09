@@ -18,7 +18,7 @@ use crate::application::solvers::genome::{
 };
 use crate::application::solvers::placement::{build_matrix, partition_segments, DriveMatrix, Segment};
 use crate::domain::{
-    activities::{ActivitySuggestion, OvernightSpot, Plan},
+    activities::{ActivitySuggestion, OvernightSpot, Plan, TimeWindow},
     ports::{RoutingProvider, SolverInput, WeekSolver},
 };
 
@@ -37,7 +37,7 @@ impl Nsga2Solver {
         Self {
             routing,
             pop_size: 10_000,
-            generations: 100,
+            generations: 1000,
             mutation_rate: 0.3,
             seed: 42,
         }
@@ -81,6 +81,10 @@ impl WeekSolver for Nsga2Solver {
         Span::current().record("segments", segments.len());
         let pool: Vec<Arc<ActivitySuggestion>> =
             input.candidates.iter().cloned().map(Arc::new).collect();
+        // Per-segment candidate pools: an activity is only ever inserted into / moved to a segment
+        // its window overlaps, so operators don't seed wrong-day genes that repair would delete
+        // (shrinking good genes to zero on the way). See `segment_pools`.
+        let seg_pools = segment_pools(&pool, &segments);
         // Overnight-spot pool: home only today (see `overnight_candidates`). One choice per night.
         let overnight_pool = overnight_candidates(&input.origin);
         let mut rng = StdRng::seed_from_u64(self.seed);
@@ -88,7 +92,7 @@ impl WeekSolver for Nsga2Solver {
         // Initial population: random genomes.
         let mut pop: Vec<Individual> = Vec::with_capacity(self.pop_size);
         while pop.len() < self.pop_size {
-            let mut g = random_genome(&pool, &segments, &overnight_pool, &mut rng);
+            let mut g = random_genome(&seg_pools, &segments, &overnight_pool, &mut rng);
             dedup_single_use(&mut g);
             pop.push(Individual::new(g, &input, &matrix));
         }
@@ -108,7 +112,7 @@ impl WeekSolver for Nsga2Solver {
                 .map(|(i, (p1, p2))| {
                     let mut wrng = StdRng::seed_from_u64(seed ^ (generation as u64 * pop_size as u64 + i as u64));
                     let mut child = crossover(&pop[p1].genome, &pop[p2].genome, &mut wrng);
-                    mutate(&mut child, &pool, &overnight_pool, mutation_rate, &mut wrng);
+                    mutate(&mut child, &seg_pools, &segments, &overnight_pool, mutation_rate, &mut wrng);
                     dedup_single_use(&mut child);
                     repair(&mut child, &input, &matrix, &mut wrng);
                     Individual::new(child, &input, &matrix)
@@ -168,6 +172,30 @@ fn validate_fixed(input: &SolverInput, matrix: &DriveMatrix) -> Result<()> {
 
 // ---- initialization ----------------------------------------------------------------------
 
+/// True if an activity with time window `w` can occur inside segment `seg` (windows overlap). This
+/// is the only "fits" test the operators apply — drive-time and packing feasibility stay repair's
+/// job, so the search still explores tight/infeasible packings within a day.
+fn window_overlaps(w: &TimeWindow, seg: &Segment) -> bool {
+    w.start < seg.end && w.end > seg.start
+}
+
+/// For each segment, the candidates whose window overlaps it — the only activities an operator may
+/// place there. Preserves `pool` order (deterministic). Cheap: candidates × segments.
+fn segment_pools(
+    pool: &[Arc<ActivitySuggestion>],
+    segments: &[Segment],
+) -> Vec<Vec<Arc<ActivitySuggestion>>> {
+    segments
+        .iter()
+        .map(|seg| {
+            pool.iter()
+                .filter(|a| window_overlaps(&a.timing.window(), seg))
+                .cloned()
+                .collect()
+        })
+        .collect()
+}
+
 fn random_gene(pool: &[Arc<ActivitySuggestion>], rng: &mut StdRng) -> Gene {
     let duration = rng.random_range(0.0..1.0);
     if pool.is_empty() || rng.random_range(0.0..1.0) < 0.3 {
@@ -179,14 +207,14 @@ fn random_gene(pool: &[Arc<ActivitySuggestion>], rng: &mut StdRng) -> Gene {
 }
 
 fn random_genome(
-    pool: &[Arc<ActivitySuggestion>],
+    seg_pools: &[Vec<Arc<ActivitySuggestion>>],
     segments: &[Segment],
     overnight_pool: &[Arc<OvernightSpot>],
     rng: &mut StdRng,
 ) -> Genome {
-    let segment_genes = segments
+    let segment_genes = seg_pools
         .iter()
-        .map(|_| {
+        .map(|pool| {
             let n = rng.random_range(0..=3);
             (0..n).map(|_| random_gene(pool, rng)).collect()
         })
@@ -486,21 +514,23 @@ fn crossover(a: &Genome, b: &Genome, rng: &mut StdRng) -> Genome {
 
 fn mutate(
     genome: &mut Genome,
-    pool: &[Arc<ActivitySuggestion>],
+    seg_pools: &[Vec<Arc<ActivitySuggestion>>],
+    segments: &[Segment],
     overnight_pool: &[Arc<OvernightSpot>],
     rate: f32,
     rng: &mut StdRng,
 ) {
     let hit = |rng: &mut StdRng| rng.random_range(0.0..1.0) < rate;
 
-    for seg in genome.segments.iter_mut() {
+    for (i, seg) in genome.segments.iter_mut().enumerate() {
         for gene in seg.iter_mut() {
             if hit(rng) {
                 gene.duration = (gene.duration + rng.random_range(-0.2..0.2)).clamp(0.0, 1.0);
             }
         }
         if hit(rng) {
-            let g = random_gene(pool, rng);
+            // Insert only a candidate that can occur in this segment (or a Wait).
+            let g = random_gene(&seg_pools[i], rng);
             let at = rng.random_range(0..=seg.len());
             seg.insert(at, g);
         }
@@ -514,15 +544,26 @@ fn mutate(
         }
     }
 
-    // Move a gene across segments.
+    // Move a gene to another segment it can actually occur in — a `Do` gene only to segments its
+    // window overlaps (else the move just seeds a wrong-day gene for repair to delete); a `Wait`
+    // gene is day-agnostic, so any segment.
     if genome.segments.len() >= 2 && hit(rng) {
         let from = rng.random_range(0..genome.segments.len());
         if !genome.segments[from].is_empty() {
             let at = rng.random_range(0..genome.segments[from].len());
-            let gene = genome.segments[from].remove(at);
-            let to = rng.random_range(0..genome.segments.len());
-            let pos = rng.random_range(0..=genome.segments[to].len());
-            genome.segments[to].insert(pos, gene);
+            let gene_window = match &genome.segments[from][at].action {
+                GeneAction::Do(act) => Some(act.timing.window()),
+                GeneAction::Wait => None,
+            };
+            let valid: Vec<usize> = (0..genome.segments.len())
+                .filter(|&j| gene_window.is_none_or(|w| window_overlaps(&w, &segments[j])))
+                .collect();
+            if !valid.is_empty() {
+                let gene = genome.segments[from].remove(at);
+                let to = valid[rng.random_range(0..valid.len())];
+                let pos = rng.random_range(0..=genome.segments[to].len());
+                genome.segments[to].insert(pos, gene);
+            }
         }
     }
 
@@ -675,6 +716,59 @@ mod tests {
             let fast = ranks(&non_dominated_sort(&pop), n);
             let refr = ranks(&non_dominated_sort_ref(&pop), n);
             assert_eq!(fast, refr, "front partition mismatch (round {round}, n={n})");
+        }
+    }
+
+    /// A two-day free slot (→ per-day segments) and one flexible candidate per day.
+    fn two_day_setup() -> (Vec<Segment>, Vec<Arc<ActivitySuggestion>>) {
+        let slot = TimeWindow { start: ts(8), end: ts(18) + Duration::days(1) };
+        let segments = partition_segments(&[slot], &[], &home());
+        assert!(segments.len() >= 2, "expected a per-day split, got {}", segments.len());
+        let day0 = Arc::new(flex(site("A", 50.75), 9, 15, 0.5)); // window on day 0
+        let day1 = Arc::new(ActivitySuggestion {
+            timing: Timing::Flexible {
+                window: TimeWindow { start: ts(9) + Duration::days(1), end: ts(15) + Duration::days(1) },
+                min_duration: Duration::hours(2),
+            },
+            ..flex(site("B", 50.8), 9, 15, 0.5)
+        });
+        (segments, vec![day0, day1])
+    }
+
+    #[test]
+    fn segment_pools_membership_matches_window_overlap() {
+        let (segments, pool) = two_day_setup();
+        let pools = segment_pools(&pool, &segments);
+        // A candidate is in a segment's pool iff (and only iff) their windows overlap.
+        for (seg, p) in segments.iter().zip(&pools) {
+            for cand in &pool {
+                let present = p.iter().any(|x| Arc::ptr_eq(x, cand));
+                assert_eq!(present, window_overlaps(&cand.timing.window(), seg));
+            }
+        }
+    }
+
+    #[test]
+    fn operators_only_place_fitting_candidates() {
+        // Init + a heavy mutation pass must never leave a Do gene in a segment its window can't
+        // occur in — the wrong-day pathology this change removes.
+        let (segments, pool) = two_day_setup();
+        let seg_pools = segment_pools(&pool, &segments);
+        let overnight = overnight_candidates(&home());
+        let mut rng = StdRng::seed_from_u64(3);
+        let mut g = random_genome(&seg_pools, &segments, &overnight, &mut rng);
+        for _ in 0..200 {
+            mutate(&mut g, &seg_pools, &segments, &overnight, 0.9, &mut rng);
+        }
+        for (seg, genes) in segments.iter().zip(&g.segments) {
+            for gene in genes {
+                if let GeneAction::Do(act) = &gene.action {
+                    assert!(
+                        window_overlaps(&act.timing.window(), seg),
+                        "operator placed a non-fitting candidate in a segment"
+                    );
+                }
+            }
         }
     }
 

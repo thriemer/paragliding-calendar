@@ -50,6 +50,17 @@ pub enum Timing {
     },
 }
 
+impl Timing {
+    /// The time window the activity can occupy — used to check whether a candidate can occur in a
+    /// given placement segment before the solver ever tries to schedule it.
+    pub fn window(&self) -> TimeWindow {
+        match self {
+            Timing::Fixed { start, end } => TimeWindow { start: *start, end: *end },
+            Timing::Flexible { window, .. } | Timing::ExactDuration { window, .. } => *window,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Score {
     /// Clock time of the first hourly bucket (`hourly[0]` covers

@@ -156,15 +156,32 @@ fn loc_key(loc: &Option<Location>) -> Option<String> {
     loc.as_ref().map(Location::to_key)
 }
 
+/// Google Calendar `colorId` per activity kind so the week reads at a glance. All distinct and none
+/// is `"8"` (graphite, reserved for drive events — see `drive_to_event`). `Commitment` isn't
+/// rendered by us (it lives on the user's own calendars), so it falls through to the default color.
+fn color_for_kind(kind: ActivityKind) -> Option<String> {
+    let id = match kind {
+        ActivityKind::Paragliding => "9",      // Blueberry
+        ActivityKind::Hiking => "10",          // Basil
+        ActivityKind::Biking => "6",           // Tangerine
+        ActivityKind::Running => "4",          // Flamingo
+        ActivityKind::MountainClimbing => "3", // Grape
+        ActivityKind::Kayaking => "7",         // Peacock
+        ActivityKind::Event => "5",            // Banana
+        ActivityKind::Commitment => return None,
+    };
+    Some(id.to_string())
+}
+
 fn activity_to_event(a: ScheduledActivity) -> CalendarEvent {
     CalendarEvent {
         title: a.title.clone(),
         start_time: a.start,
         end_time: a.end,
         is_all_day: false,
+        color_id: color_for_kind(a.kind),
         location: Some(a.title),
         body: Some(format!("{}\n\nLast updated (Utc): {}", a.description, Utc::now())),
-        color_id: None,
     }
 }
 
@@ -281,5 +298,28 @@ mod tests {
             act(ActivityKind::Paragliding, "Rana", rana(), ts(9, 30), ts(11, 0)),
         ];
         assert_eq!(coalesce(chain).len(), 2);
+    }
+
+    #[test]
+    fn color_for_kind_is_distinct_and_never_the_drive_color() {
+        use std::collections::HashSet;
+        // Every plannable kind gets its own color, none clashing with the drive graphite "8".
+        let plannable = [
+            ActivityKind::Paragliding,
+            ActivityKind::Hiking,
+            ActivityKind::Biking,
+            ActivityKind::Running,
+            ActivityKind::MountainClimbing,
+            ActivityKind::Kayaking,
+            ActivityKind::Event,
+        ];
+        let mut seen = HashSet::new();
+        for kind in plannable {
+            let c = color_for_kind(kind).expect("plannable kind must have a color");
+            assert_ne!(c, "8", "{kind:?} collides with the drive color");
+            assert!(seen.insert(c.clone()), "{kind:?} reuses color {c}");
+        }
+        // Commitments are not rendered by us → default color.
+        assert_eq!(color_for_kind(ActivityKind::Commitment), None);
     }
 }
