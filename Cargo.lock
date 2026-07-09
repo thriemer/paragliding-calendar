@@ -5275,6 +5275,7 @@ dependencies = [
  "opentelemetry_sdk",
  "quick-xml",
  "rand 0.10.0",
+ "rayon",
  "reqwest 0.13.1",
  "reqwest-middleware",
  "reqwest-retry",

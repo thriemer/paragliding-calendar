@@ -25,6 +25,7 @@ futures = "0.3"
 async-trait = "0.1"
 chrono = {version ="0.4", features = ["serde"]}
 rand = "0.10"
+rayon = "1"
 tracing = {version = "0.1", features = ["log"]}
 tracing-subscriber = {version =  "0.3", features = ["env-filter"]}
 tracing-opentelemetry = "0.32"

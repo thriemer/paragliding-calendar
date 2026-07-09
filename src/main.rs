@@ -61,7 +61,8 @@ async fn main() -> Result<()> {
             }
         },
         async move {
-            let mut interval = time::interval(time::Duration::from_secs(7 * 24 * 3600));
+            let period = time::Duration::from_secs(7 * 24 * 3600);
+            let mut interval = time::interval_at(time::Instant::now() + period, period);
             loop {
                 interval.tick().await;
                 if let Err(e) =

@@ -219,6 +219,7 @@ mod tests {
     fn fixed_suggestion(start_hour: u32, end_hour: u32, score: Option<f32>) -> ActivitySuggestion {
         let duration_hours = (end_hour - start_hour).max(1) as f32;
         ActivitySuggestion {
+            id: format!("fixed-{start_hour}-{end_hour}"),
             kind: ActivityKind::Paragliding,
             location: site_loc(),
             timing: Timing::Fixed {
@@ -232,12 +233,14 @@ mod tests {
                 hourly: vec![v / duration_hours; duration_hours as usize],
                 reasons: vec![],
             }),
+            allow_multiple: false,
         }
     }
 
     fn flexible_suggestion(start_hour: u32, end_hour: u32) -> ActivitySuggestion {
         let window_hours = (end_hour - start_hour).max(1) as f32;
         ActivitySuggestion {
+            id: format!("flex-{start_hour}-{end_hour}"),
             kind: ActivityKind::Paragliding,
             location: site_loc(),
             timing: Timing::Flexible {
@@ -254,6 +257,7 @@ mod tests {
                 hourly: vec![0.5 / window_hours; window_hours as usize],
                 reasons: vec![],
             }),
+            allow_multiple: false,
         }
     }
 
@@ -314,7 +318,10 @@ mod tests {
     }
 
     fn solver(routing: Arc<dyn RoutingProvider>) -> Arc<dyn WeekSolver> {
-        Arc::new(Nsga2Solver::new(routing))
+        let mut s = Nsga2Solver::new(routing);
+        s.pop_size = 20;
+        s.generations = 10;
+        Arc::new(s)
     }
 
     fn activities_in(plan: &Plan) -> Vec<&str> {

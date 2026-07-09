@@ -87,12 +87,20 @@ impl Score {
 
 #[derive(Debug, Clone)]
 pub struct ActivitySuggestion {
+    /// Stable identity of the underlying activity (`tour.id` / `event.id` / site name). One activity
+    /// fans out into several per-day/per-window suggestions sharing this `id`; single-use dedup
+    /// (`allow_multiple = false`) collapses them to one. Not consulted when `allow_multiple = true`.
+    pub id: String,
     pub kind: ActivityKind,
     pub location: Location,
     pub timing: Timing,
     pub title: String,
     pub description: String,
     pub score: Option<Score>,
+    /// If `false` (default), this activity may appear at most once per plan.
+    /// Set to `true` for activities where revisiting the same candidate is legitimate
+    /// (e.g. paragliding — spots are scarce, conditions windows distinct).
+    pub allow_multiple: bool,
 }
 
 /// Where a day ends: the location you sleep at. Today only `Home`; a future version adds campable

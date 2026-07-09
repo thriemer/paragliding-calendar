@@ -9,11 +9,12 @@ use std::sync::Arc;
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 use rand::{rngs::StdRng, RngExt, SeedableRng};
+use rayon::prelude::*;
 
 use tracing::{debug, info, instrument, Span};
 
 use crate::application::solvers::genome::{
-    decode, night_count, overnight_candidates, repair, Gene, GeneAction, Genome,
+    decode, dedup_single_use, night_count, overnight_candidates, repair, Gene, GeneAction, Genome,
 };
 use crate::application::solvers::placement::{build_matrix, partition_segments, DriveMatrix, Segment};
 use crate::domain::{
@@ -35,7 +36,7 @@ impl Nsga2Solver {
     pub fn new(routing: Arc<dyn RoutingProvider>) -> Self {
         Self {
             routing,
-            pop_size: 100,
+            pop_size: 10_000,
             generations: 100,
             mutation_rate: 0.3,
             seed: 42,
@@ -87,25 +88,41 @@ impl WeekSolver for Nsga2Solver {
         // Initial population: random genomes.
         let mut pop: Vec<Individual> = Vec::with_capacity(self.pop_size);
         while pop.len() < self.pop_size {
-            let g = random_genome(&pool, &segments, &overnight_pool, &mut rng);
+            let mut g = random_genome(&pool, &segments, &overnight_pool, &mut rng);
+            dedup_single_use(&mut g);
             pop.push(Individual::new(g, &input, &matrix));
         }
 
-        for _ in 0..self.generations {
+        let seed = self.seed;
+        let mutation_rate = self.mutation_rate;
+        let pop_size = self.pop_size;
+        for generation in 0..self.generations {
             let (rank, crowd) = rank_and_crowding(&pop);
-            let mut offspring = Vec::with_capacity(self.pop_size);
-            for _ in 0..self.pop_size {
-                let p1 = tournament(&pop, &rank, &crowd, &mut rng);
-                let p2 = tournament(&pop, &rank, &crowd, &mut rng);
-                let mut child = crossover(&pop[p1].genome, &pop[p2].genome, &mut rng);
-                mutate(&mut child, &pool, &overnight_pool, self.mutation_rate, &mut rng);
-                repair(&mut child, &input, &matrix, &mut rng);
-                offspring.push(Individual::new(child, &input, &matrix));
-            }
+            // Parent selection is sequential (rng not Send); crossover/eval are parallel.
+            let pairs: Vec<(usize, usize)> = (0..pop_size)
+                .map(|_| (tournament(&pop, &rank, &crowd, &mut rng), tournament(&pop, &rank, &crowd, &mut rng)))
+                .collect();
+            let offspring: Vec<Individual> = pairs
+                .into_par_iter()
+                .enumerate()
+                .map(|(i, (p1, p2))| {
+                    let mut wrng = StdRng::seed_from_u64(seed ^ (generation as u64 * pop_size as u64 + i as u64));
+                    let mut child = crossover(&pop[p1].genome, &pop[p2].genome, &mut wrng);
+                    mutate(&mut child, &pool, &overnight_pool, mutation_rate, &mut wrng);
+                    dedup_single_use(&mut child);
+                    repair(&mut child, &input, &matrix, &mut wrng);
+                    Individual::new(child, &input, &matrix)
+                })
+                .collect();
             // (μ+λ) elitist: fill the next generation from parents ∪ offspring by rank, then
             // crowding distance on the boundary front.
             pop.extend(offspring);
             pop = select_next(pop, self.pop_size);
+
+            let best = pop.iter().max_by(|a, b| a.plan.total_fun.partial_cmp(&b.plan.total_fun).unwrap_or(Ordering::Equal));
+            if let Some(b) = best {
+                info!(generation, best_fun = b.plan.total_fun, best_drive_min = b.plan.total_drive.num_minutes(), "generation");
+            }
         }
 
         let plans = pick_alternatives(&pop, input.num_alternatives);
@@ -183,7 +200,10 @@ fn random_genome(
 // ---- domination, sorting, crowding -------------------------------------------------------
 
 /// `a` dominates `b`: no worse on both objectives and strictly better on one. Fun compared via
-/// `total_cmp` (may be NaN); drive as integer seconds.
+/// `total_cmp` (may be NaN); drive as integer seconds. The canonical definition `non_dominated_sort`
+/// must agree with — now only the oracle test calls it directly (the fast sort reduces domination
+/// to the drive axis), so it's test-only.
+#[cfg(test)]
 fn dominates(a: &Plan, b: &Plan) -> bool {
     let fun = a.total_fun.total_cmp(&b.total_fun);
     let (da, db) = (a.total_drive.num_seconds(), b.total_drive.num_seconds());
@@ -192,43 +212,114 @@ fn dominates(a: &Plan, b: &Plan) -> bool {
     no_worse && strictly_better
 }
 
+/// Fenwick tree for prefix-max over point updates (1-indexed internally). Used by the two-objective
+/// non-dominated sort to query, in O(log N), the deepest front reachable from a dominator.
+struct FenwickMax {
+    tree: Vec<i64>,
+}
+
+impl FenwickMax {
+    fn new(size: usize) -> Self {
+        Self { tree: vec![0; size + 1] }
+    }
+    /// Raise the value stored at 0-indexed `pos` to at least `val`.
+    fn update(&mut self, pos: usize, val: i64) {
+        let mut i = pos + 1;
+        while i < self.tree.len() {
+            self.tree[i] = self.tree[i].max(val);
+            i += i & i.wrapping_neg();
+        }
+    }
+    /// Max stored value over the prefix `[0, pos]` (inclusive). 0 if nothing was stored there.
+    fn prefix_max(&self, pos: usize) -> i64 {
+        let mut i = pos + 1;
+        let mut res = 0;
+        while i > 0 {
+            res = res.max(self.tree[i]);
+            i -= i & i.wrapping_neg();
+        }
+        res
+    }
+}
+
+/// O(N log N) non-dominated sort, valid because there are exactly two objectives (`total_fun` ↑,
+/// `total_drive` ↓). Produces the same front partition as the classic O(N²) Deb sort (verified by
+/// the `fast_sort_matches_reference_random_and_ties` oracle test) with no O(N²) adjacency
+/// structure — the Deb sort's multi-GB memory blowup at large `pop_size` is gone.
+///
+/// Order by fun desc (ties: drive asc), so every dominator of a point precedes it. Sweep fun-group
+/// by fun-group over a Fenwick prefix-max keyed by drive: a point's front is one past the deepest
+/// dominator. The group split is load-bearing — across groups (strictly higher fun) equal drive
+/// still dominates (weak, `<=`), but within a group (equal fun) domination needs strictly smaller
+/// drive (`<`). Committing each group to the tree only *after* computing its fronts keeps those two
+/// rules apart; intra-group strict domination is handled by a running best-of-smaller-drive.
+///
+/// Fronts come out in rank order; within-front order is unspecified (callers re-sort by crowding).
 fn non_dominated_sort(pop: &[Individual]) -> Vec<Vec<usize>> {
     let n = pop.len();
-    let mut dominated: Vec<Vec<usize>> = vec![Vec::new(); n];
-    let mut dom_count = vec![0usize; n];
-    let mut fronts: Vec<Vec<usize>> = vec![Vec::new()];
+    if n == 0 {
+        return Vec::new();
+    }
+    let drive = |i: usize| pop[i].plan.total_drive.num_seconds();
+    let fun_eq = |a: usize, b: usize| {
+        pop[a].plan.total_fun.total_cmp(&pop[b].plan.total_fun) == Ordering::Equal
+    };
 
-    for p in 0..n {
-        for q in 0..n {
-            if p == q {
-                continue;
-            }
-            if dominates(&pop[p].plan, &pop[q].plan) {
-                dominated[p].push(q);
-            } else if dominates(&pop[q].plan, &pop[p].plan) {
-                dom_count[p] += 1;
-            }
+    // Compress drive values → dense ranks for the Fenwick tree.
+    let mut uniq: Vec<i64> = (0..n).map(drive).collect();
+    uniq.sort_unstable();
+    uniq.dedup();
+    let rank = |d: i64| uniq.partition_point(|&x| x < d);
+
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| {
+        pop[b].plan.total_fun.total_cmp(&pop[a].plan.total_fun).then(drive(a).cmp(&drive(b)))
+    });
+
+    let mut tree = FenwickMax::new(uniq.len());
+    let mut front_of = vec![0usize; n]; // front index per individual
+    let mut max_front = 0usize;
+
+    let mut g = 0;
+    while g < n {
+        // Group [g, h) = one block of equal fun (already contiguous in `order`).
+        let mut h = g;
+        while h < n && fun_eq(order[h], order[g]) {
+            h += 1;
         }
-        if dom_count[p] == 0 {
-            fronts[0].push(p);
+
+        // Compute fronts for the group without letting its own members leak through the tree.
+        // `best_less` = max (front+1) among already-processed group members with strictly smaller
+        // drive; a whole equal-drive sub-run shares one front and none of them counts for the others.
+        let mut best_less: i64 = 0;
+        let mut a = g;
+        while a < h {
+            let d = drive(order[a]);
+            let mut b = a;
+            while b < h && drive(order[b]) == d {
+                b += 1;
+            }
+            // Deepest dominator: higher-fun points with drive ≤ d (tree) or smaller-drive same-fun
+            // members (`best_less`). Stored/compared as front+1, so 0 means "no dominator".
+            let f = tree.prefix_max(rank(d)).max(best_less) as usize;
+            for &i in &order[a..b] {
+                front_of[i] = f;
+            }
+            best_less = best_less.max(f as i64 + 1);
+            max_front = max_front.max(f);
+            a = b;
         }
+        // Commit the group so lower-fun groups can dominate through it (weak drive rule).
+        for &i in &order[g..h] {
+            tree.update(rank(drive(i)), front_of[i] as i64 + 1);
+        }
+        g = h;
     }
 
-    let mut i = 0;
-    while !fronts[i].is_empty() {
-        let mut next = Vec::new();
-        for &p in &fronts[i] {
-            for &q in dominated[p].clone().iter() {
-                dom_count[q] -= 1;
-                if dom_count[q] == 0 {
-                    next.push(q);
-                }
-            }
-        }
-        i += 1;
-        fronts.push(next);
+    let mut fronts: Vec<Vec<usize>> = vec![Vec::new(); max_front + 1];
+    for i in 0..n {
+        fronts[front_of[i]].push(i);
     }
-    fronts.pop(); // trailing empty
     fronts
 }
 
@@ -481,6 +572,7 @@ mod tests {
     fn flex(loc: Location, start_h: u32, end_h: u32, fun: f32) -> ActivitySuggestion {
         let hours = (end_h - start_h).max(1) as f32;
         ActivitySuggestion {
+            id: format!("flex-{}", loc.name),
             kind: ActivityKind::Paragliding,
             location: loc.clone(),
             timing: Timing::Flexible {
@@ -490,18 +582,99 @@ mod tests {
             title: format!("flex-{}", loc.name),
             description: String::new(),
             score: Some(Score { window_start: ts(start_h), hourly: vec![fun / hours; hours as usize], reasons: vec![] }),
+            allow_multiple: false,
         }
     }
 
     fn fixed_cand(loc: Location, start_h: u32, end_h: u32, fun: f32) -> ActivitySuggestion {
         let hours = (end_h - start_h).max(1) as usize;
         ActivitySuggestion {
+            id: format!("fixed-{}", loc.name),
             kind: ActivityKind::Event,
             location: loc.clone(),
             timing: Timing::Fixed { start: ts(start_h), end: ts(end_h) },
             title: format!("fixed-{}", loc.name),
             description: String::new(),
             score: Some(Score { window_start: ts(start_h), hourly: vec![fun / hours as f32; hours], reasons: vec![] }),
+            allow_multiple: false,
+        }
+    }
+
+    /// Reference O(N²) Deb non-dominated sort — the oracle the fast sort must match.
+    fn non_dominated_sort_ref(pop: &[Individual]) -> Vec<Vec<usize>> {
+        let n = pop.len();
+        let mut dominated: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut dom_count = vec![0usize; n];
+        let mut fronts: Vec<Vec<usize>> = vec![Vec::new()];
+        for p in 0..n {
+            for q in 0..n {
+                if p == q {
+                    continue;
+                }
+                if dominates(&pop[p].plan, &pop[q].plan) {
+                    dominated[p].push(q);
+                } else if dominates(&pop[q].plan, &pop[p].plan) {
+                    dom_count[p] += 1;
+                }
+            }
+            if dom_count[p] == 0 {
+                fronts[0].push(p);
+            }
+        }
+        let mut i = 0;
+        while !fronts[i].is_empty() {
+            let mut next = Vec::new();
+            for &p in fronts[i].clone().iter() {
+                for &q in dominated[p].clone().iter() {
+                    dom_count[q] -= 1;
+                    if dom_count[q] == 0 {
+                        next.push(q);
+                    }
+                }
+            }
+            i += 1;
+            fronts.push(next);
+        }
+        fronts.pop();
+        fronts
+    }
+
+    /// Per-individual rank (front index) from a fronts partition, for order-independent comparison.
+    fn ranks(fronts: &[Vec<usize>], n: usize) -> Vec<usize> {
+        let mut r = vec![usize::MAX; n];
+        for (f, front) in fronts.iter().enumerate() {
+            for &i in front {
+                r[i] = f;
+            }
+        }
+        r
+    }
+
+    /// A minimal individual carrying only the objectives the sort reads.
+    fn ind(fun: f32, drive_min: i64) -> Individual {
+        let plan = Plan { items: vec![], total_fun: fun, total_drive: Duration::minutes(drive_min) };
+        Individual { genome: Genome { segments: vec![], overnight: vec![] }, plan }
+    }
+
+    #[test]
+    fn fast_sort_matches_reference_random_and_ties() {
+        let mut rng = StdRng::seed_from_u64(1);
+        // Several random populations, plus a heavy-tie population (small value ranges → many equal
+        // fun, equal drive, and points equal on both — the case patience-sort ties can break).
+        for round in 0..40 {
+            let n = 1 + (round % 60);
+            let (fun_range, drive_range) = if round % 3 == 0 { (3i32, 3i64) } else { (50, 50) };
+            let pop: Vec<Individual> = (0..n)
+                .map(|_| {
+                    ind(
+                        rng.random_range(0..fun_range) as f32,
+                        rng.random_range(0..drive_range),
+                    )
+                })
+                .collect();
+            let fast = ranks(&non_dominated_sort(&pop), n);
+            let refr = ranks(&non_dominated_sort_ref(&pop), n);
+            assert_eq!(fast, refr, "front partition mismatch (round {round}, n={n})");
         }
     }
 

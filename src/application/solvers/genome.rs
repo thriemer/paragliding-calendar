@@ -2,6 +2,7 @@
 //! docs/genetic-planner-design.md). Phase 4: the data the GA (Phase 5) operates on plus the
 //! deterministic `decode` and Lamarckian `repair` — no GA loop yet.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
@@ -279,6 +280,24 @@ pub fn repair(genome: &mut Genome, input: &SolverInput, matrix: &DriveMatrix, rn
     }
 }
 
+/// Remove extra occurrences of non-repeatable activities across all segments.
+/// Activities with `allow_multiple = true` are untouched. Identity is the activity `id`, not the
+/// `Arc` pointer: one activity fans out into several per-day suggestions (distinct Arcs, same `id`),
+/// so pointer identity would let the same tour/event be scheduled on two different days.
+pub fn dedup_single_use(genome: &mut Genome) {
+    let mut seen: HashSet<String> = HashSet::new();
+    for seg in &mut genome.segments {
+        seg.retain(|g| {
+            if let GeneAction::Do(act) = &g.action {
+                if !act.allow_multiple {
+                    return seen.insert(act.id.clone());
+                }
+            }
+            true
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +339,7 @@ mod tests {
     /// Flexible suggestion; `hourly` is per-clock-hour fun over `[start_h, end_h)`.
     fn flex(loc: Location, start_h: u32, end_h: u32, hourly: Vec<f32>, min_h: i64) -> Arc<ActivitySuggestion> {
         Arc::new(ActivitySuggestion {
+            id: format!("flex-{}", loc.name),
             kind: ActivityKind::Paragliding,
             location: loc.clone(),
             timing: Timing::Flexible {
@@ -329,6 +349,7 @@ mod tests {
             title: format!("flex-{}", loc.name),
             description: String::new(),
             score: Some(Score { window_start: ts(start_h), hourly, reasons: vec![] }),
+            allow_multiple: false,
         })
     }
 
@@ -444,16 +465,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_gene_schedules_activity_twice() {
+    async fn duplicate_gene_schedules_activity_twice_when_allow_multiple() {
         let routing = constant_routing(0);
-        let a = flex(site("A", 50.75), 8, 18, vec![1.0; 10], 2);
+        // allow_multiple: true — same Arc may appear more than once in a plan.
+        let a = Arc::new(ActivitySuggestion {
+            allow_multiple: true,
+            ..(*flex(site("A", 50.75), 8, 18, vec![1.0; 10], 2)).clone()
+        });
         let inp = input(vec![a.clone()], vec![]);
         let matrix = matrix_for(&inp, &routing).await;
-        // Same Arc twice, each min duration (2h) → both fit in the 10h segment.
         let genome = gseg(vec![vec![do_gene(&a, 0.0), do_gene(&a, 0.0)]]);
         let plan = decode(&genome, &inp, &matrix);
         assert_eq!(plan.items.len(), 2);
         assert!(plan.items.iter().all(|i| i.location.as_ref().unwrap().name == "A"));
+    }
+
+    #[tokio::test]
+    async fn dedup_removes_non_repeatable_duplicate_leaves_repeatable() {
+        let once = flex(site("A", 50.75), 8, 18, vec![1.0; 10], 2); // allow_multiple: false
+        let many = Arc::new(ActivitySuggestion {
+            allow_multiple: true,
+            ..(*flex(site("B", 50.76), 8, 18, vec![1.0; 10], 2)).clone()
+        });
+
+        // Two copies of `once` and two copies of `many` across two segments.
+        let mut genome = gseg(vec![
+            vec![do_gene(&once, 0.0), do_gene(&many, 0.0)],
+            vec![do_gene(&once, 0.0), do_gene(&many, 0.0)],
+        ]);
+        dedup_single_use(&mut genome);
+
+        let once_count: usize = genome.segments.iter().flat_map(|s| s.iter()).filter(|g| matches!(&g.action, GeneAction::Do(a) if Arc::ptr_eq(a, &once))).count();
+        let many_count: usize = genome.segments.iter().flat_map(|s| s.iter()).filter(|g| matches!(&g.action, GeneAction::Do(a) if Arc::ptr_eq(a, &many))).count();
+        assert_eq!(once_count, 1, "non-repeatable should appear exactly once");
+        assert_eq!(many_count, 2, "repeatable should keep both occurrences");
+    }
+
+    #[tokio::test]
+    async fn dedup_collapses_same_id_across_distinct_arcs() {
+        // The real fan-out bug: one tour becomes several per-day suggestions — distinct Arcs, same
+        // `id`. Single-use dedup must treat them as one activity (else the hike lands twice).
+        let thursday = flex(site("Hike", 50.75), 8, 18, vec![1.0; 10], 2);
+        let monday = Arc::new(ActivitySuggestion {
+            title: "different-window".into(), // same id, different day/window → still one activity
+            ..(*flex(site("Hike", 50.75), 8, 18, vec![1.0; 10], 2)).clone()
+        });
+        assert_eq!(thursday.id, monday.id, "same underlying tour → same id");
+        assert!(!Arc::ptr_eq(&thursday, &monday), "distinct Arcs (distinct per-day suggestions)");
+
+        let mut genome = gseg(vec![vec![do_gene(&thursday, 0.0)], vec![do_gene(&monday, 0.0)]]);
+        dedup_single_use(&mut genome);
+
+        let kept: usize = genome.segments.iter().flat_map(|s| s.iter()).count();
+        assert_eq!(kept, 1, "same-id single-use activity must be scheduled at most once");
     }
 
     #[tokio::test]

@@ -79,12 +79,14 @@ impl ActivitySource for EventActivitySource {
                 };
 
                 out.push(ActivitySuggestion {
+                    id: event.id.clone(),
                     kind: ActivityKind::Event,
                     location: location.clone(),
                     timing: Timing::Fixed { start, end },
                     title: event.title.clone(),
                     description: outdooractive_link(&reason, &event.id),
                     score: Some(score),
+                    allow_multiple: false,
                 });
             }
         }

@@ -105,6 +105,7 @@ impl ActivitySource for TourActivitySource {
                 let score = Score { window_start, hourly, reasons };
 
                 out.push(ActivitySuggestion {
+                    id: tour.id.clone(),
                     kind,
                     location: tour.location.clone(),
                     timing: Timing::ExactDuration {
@@ -114,6 +115,7 @@ impl ActivitySource for TourActivitySource {
                     title: tour.title.clone(),
                     description: outdooractive_link(&tour.description, &tour.id),
                     score: Some(score),
+                    allow_multiple: false,
                 });
             }
         }

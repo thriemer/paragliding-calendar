@@ -90,6 +90,8 @@ impl ActivitySource for ParaglidingActivitySource {
                     };
 
                     out.push(ActivitySuggestion {
+                        // Never used for dedup (allow_multiple below); site name is a stable label.
+                        id: site.name.clone(),
                         kind: ActivityKind::Paragliding,
                         location: launch.location.clone(),
                         timing: Timing::Flexible {
@@ -106,6 +108,7 @@ impl ActivitySource for ParaglidingActivitySource {
                         // event body, so the event explains *why* the site is flyable.
                         description: score.reasons.join("\n"),
                         score: Some(score),
+                        allow_multiple: true,
                     });
                 }
             }
