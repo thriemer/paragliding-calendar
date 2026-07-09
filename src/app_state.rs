@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use reqwest_middleware::ClientBuilder;
+use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
+use reqwest_tracing::TracingMiddleware;
 use sqlx::PgPool;
 
 use crate::{
@@ -10,11 +13,11 @@ use crate::{
         activities::tours::source::TourActivitySource,
         cache::PersistentCache,
         combined_calendar::CombinedCalendar,
-        crow_flies::CrowFlies,
         google_calendar::{GoogleCalendar, WebFlowAuthenticator},
         microsoft_calendar::{MicrosoftCalendar, O365Authenticator},
         open_meteo::OpenMeteoClient,
         postgres::PostgresRepository,
+        valhalla::Valhalla,
     },
     application::{Planner, solvers::Nsga2Solver},
     config::AppConfig,
@@ -67,7 +70,13 @@ impl AppState {
             ))
         });
 
-        let routing: Arc<dyn RoutingProvider> = Arc::new(CrowFlies::new());
+        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
+        let http = ClientBuilder::new(reqwest::Client::new())
+            .with(TracingMiddleware::default())
+            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+            .build();
+        let routing: Arc<dyn RoutingProvider> =
+            Arc::new(Valhalla::new(cfg.valhalla_base_url.clone(), cache.clone(), http));
 
         let open_meteo = Arc::new(OpenMeteoClient::new(cache.clone()));
         let weather: Arc<dyn WeatherProvider> = open_meteo.clone();

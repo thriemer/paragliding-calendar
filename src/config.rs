@@ -40,7 +40,6 @@ pub struct AppConfig {
     pub database_url: String,
     #[allow(dead_code)]
     pub brouter_base_url: String,
-    #[allow(dead_code)]
     pub valhalla_base_url: String,
     pub google: GoogleOAuthConfig,
     pub microsoft: Option<MicrosoftOAuthConfig>,

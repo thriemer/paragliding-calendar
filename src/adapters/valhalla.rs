@@ -1,5 +1,3 @@
-#![allow(dead_code)] // ponytail: routing stack not wired into AppState yet (CrowFlies stands in); kept per owner's call.
-
 use std::{sync::Arc, time::Duration as StdDuration};
 
 use anyhow::{Result, anyhow};
@@ -15,12 +13,34 @@ use crate::{
     adapters::{
         cache::PersistentCache,
         routing_matrix::{
-            FetchPlan, assemble_from_cache, cache_pairs, fill_from_blocks, fill_unroutable,
-            finalize, plan_fetch,
+            FetchPlan, MatrixBlock, assemble_from_cache, cache_pairs, fill_from_blocks,
+            fill_unroutable, finalize, plan_fetch, tile_matrix,
         },
     },
     domain::{location::Location, ports::RoutingProvider},
 };
+
+/// Snap tuning — see Valhalla /route location options. Both are calibration knobs: raise
+/// `MIN_REACHABILITY` if points still snap onto disconnected islands ("Forward search
+/// exhausted"); raise `SNAP_RADIUS_M` if legit points sit just off the network.
+const SNAP_RADIUS_M: u32 = 200;
+const MIN_REACHABILITY: u32 = 500; // > Valhalla's default 50 to skip small islands
+
+/// Valhalla's /sources_to_targets caps locations per request (default 2500). Larger matrices are
+/// tiled; both sides are chunked to this, so a block sends ≤ 2·MAX_MATRIX_POINTS = 2000 locations,
+/// a safe margin under the cap. Tunable.
+const MAX_MATRIX_POINTS: usize = 250;
+
+/// A location with snapping hints so Valhalla correlates it to the *connected* road network
+/// rather than the nearest edge (which may be a disconnected island the router can't escape).
+fn snapped_point(l: &Location) -> serde_json::Value {
+    json!({
+        "lat": l.latitude,
+        "lon": l.longitude,
+        "radius": SNAP_RADIUS_M,
+        "minimum_reachability": MIN_REACHABILITY,
+    })
+}
 
 pub struct Valhalla {
     base_url: String,
@@ -48,10 +68,7 @@ impl Valhalla {
     ) -> Result<u64> {
         let url = format!("{}/route", self.base_url.trim_end_matches('/'));
         let body = json!({
-            "locations": [
-                {"lat": source.latitude, "lon": source.longitude},
-                {"lat": destination.latitude, "lon": destination.longitude},
-            ],
+            "locations": [snapped_point(source), snapped_point(destination)],
             "costing": "auto",
         });
         tracing::debug!(url = %url, "Calling the Valhalla API");
@@ -77,19 +94,21 @@ impl Valhalla {
 
         Ok(parsed.trip.summary.time.round() as u64)
     }
+}
 
+#[async_trait]
+impl MatrixBlock for Valhalla {
     /// One `/sources_to_targets` request for a `sources × targets` block. Result is indexed
     /// `[source][target]`; cells may be null (unroutable) — represented as `None`.
-    async fn matrix_call(
+    async fn matrix_block(
         &self,
         sources: &[Location],
         targets: &[Location],
     ) -> Result<Vec<Vec<Option<u64>>>> {
         let url = format!("{}/sources_to_targets", self.base_url.trim_end_matches('/'));
-        let point = |l: &Location| json!({"lat": l.latitude, "lon": l.longitude});
         let body = json!({
-            "sources": sources.iter().map(point).collect::<Vec<_>>(),
-            "targets": targets.iter().map(point).collect::<Vec<_>>(),
+            "sources": sources.iter().map(snapped_point).collect::<Vec<_>>(),
+            "targets": targets.iter().map(snapped_point).collect::<Vec<_>>(),
             "costing": "auto",
         });
         tracing::debug!(url = %url, s = sources.len(), t = targets.len(), "Calling the Valhalla matrix API");
@@ -135,8 +154,8 @@ impl RoutingProvider for Valhalla {
             return Ok(Duration::seconds(cached as i64));
         }
 
-        // ponytail: no snap-retry; Valhalla snaps to the road network itself. Add a retry
-        // loop if we see routing-failure errors in practice (BRouter's car-vario needs it).
+        // Snapping (radius + minimum_reachability, see `snapped_point`) steers Valhalla onto the
+        // connected network, so no coordinate-jitter retry loop like BRouter's is needed.
         let seconds = self.get_travel_time_call(source, destination).await?;
 
         let jitter: f32 = rand::rng().random_range(0.9..1.1);
@@ -156,15 +175,15 @@ impl RoutingProvider for Valhalla {
         match plan_fetch(&missing, locations.len()) {
             FetchPlan::None => {}
             FetchPlan::Full => {
-                let block = self.matrix_call(locations, locations).await?;
+                let block = tile_matrix(self, locations, locations, MAX_MATRIX_POINTS).await?;
                 for &(i, j) in &missing {
                     secs[i][j] = block[i][j];
                 }
             }
             FetchPlan::Incremental { cover } => {
                 let cover_locs: Vec<Location> = cover.iter().map(|&i| locations[i].clone()).collect();
-                let block_cover_all = self.matrix_call(&cover_locs, locations).await?;
-                let block_all_cover = self.matrix_call(locations, &cover_locs).await?;
+                let block_cover_all = tile_matrix(self, &cover_locs, locations, MAX_MATRIX_POINTS).await?;
+                let block_all_cover = tile_matrix(self, locations, &cover_locs, MAX_MATRIX_POINTS).await?;
                 fill_from_blocks(&mut secs, &missing, &cover, &block_cover_all, &block_all_cover);
             }
         }

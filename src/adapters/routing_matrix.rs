@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::time::Duration as StdDuration;
 
 use anyhow::Result;
+use async_trait::async_trait;
 use chrono::Duration;
 use rand::RngExt;
 
@@ -14,6 +15,43 @@ use crate::{
     adapters::cache::PersistentCache,
     domain::{location::Location, ports::RoutingProvider},
 };
+
+/// A provider's single `sources × targets` matrix request. Providers cap locations per request,
+/// so `tile_matrix` splits large grids into blocks and calls this per block.
+#[async_trait]
+pub trait MatrixBlock {
+    /// One request for a `sources × targets` block, indexed `[source][target]`;
+    /// null/unroutable cells are `None`.
+    async fn matrix_block(
+        &self,
+        sources: &[Location],
+        targets: &[Location],
+    ) -> Result<Vec<Vec<Option<u64>>>>;
+}
+
+/// Split a `sources × targets` matrix into `≤max_points`-per-side blocks, fetch each via the
+/// provider's `matrix_block`, and stitch them back into the full grid — keeping every request
+/// within the provider's per-request location cap.
+pub async fn tile_matrix(
+    provider: &(impl MatrixBlock + ?Sized),
+    sources: &[Location],
+    targets: &[Location],
+    max_points: usize,
+) -> Result<Vec<Vec<Option<u64>>>> {
+    let mut out = vec![vec![None; targets.len()]; sources.len()];
+    for (sb, s_chunk) in sources.chunks(max_points).enumerate() {
+        for (tb, t_chunk) in targets.chunks(max_points).enumerate() {
+            let block = provider.matrix_block(s_chunk, t_chunk).await?;
+            let (s_off, t_off) = (sb * max_points, tb * max_points);
+            for (r, row) in block.into_iter().enumerate() {
+                for (c, cell) in row.into_iter().enumerate() {
+                    out[s_off + r][t_off + c] = cell;
+                }
+            }
+        }
+    }
+    Ok(out)
+}
 
 /// Per-pair cache key — same scheme the single-route path uses.
 pub fn pair_key(from: &Location, to: &Location) -> String {
@@ -160,6 +198,44 @@ pub async fn cache_pairs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Encodes each location's global index in its latitude, and returns a block whose cells are
+    /// `source_index * 100 + target_index` — so a correctly-stitched full grid reads `i*100 + j`.
+    struct IndexEncodingProvider;
+
+    #[async_trait]
+    impl MatrixBlock for IndexEncodingProvider {
+        async fn matrix_block(
+            &self,
+            sources: &[Location],
+            targets: &[Location],
+        ) -> Result<Vec<Vec<Option<u64>>>> {
+            Ok(sources
+                .iter()
+                .map(|s| {
+                    targets
+                        .iter()
+                        .map(|t| Some(s.latitude as u64 * 100 + t.latitude as u64))
+                        .collect()
+                })
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn tile_matrix_stitches_blocks_by_offset() {
+        // 5 locations, chunk size 2 → 3×3 blocks of uneven size (2,2,1); indices survive stitching.
+        let locs: Vec<Location> =
+            (0..5).map(|i| Location::new(i as f64, 0.0, format!("l{i}"), "DE".into())).collect();
+        let out = tile_matrix(&IndexEncodingProvider, &locs, &locs, 2).await.unwrap();
+        assert_eq!(out.len(), 5);
+        for i in 0..5 {
+            assert_eq!(out[i].len(), 5);
+            for j in 0..5 {
+                assert_eq!(out[i][j], Some(i as u64 * 100 + j as u64), "cell [{i}][{j}]");
+            }
+        }
+    }
 
     #[test]
     fn cover_picks_the_single_new_location() {

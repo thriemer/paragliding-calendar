@@ -1,5 +1,6 @@
 //! Offline routing estimator: travel time from straight-line ("as the crow flies")
 //! distance, no external service. For testing the planner without GraphHopper/BRouter/Valhalla.
+#![allow(dead_code)] // ponytail: Valhalla is wired now; kept as the offline fallback.
 
 use anyhow::Result;
 use async_trait::async_trait;

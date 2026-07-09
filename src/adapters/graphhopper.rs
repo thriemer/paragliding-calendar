@@ -16,8 +16,8 @@ use crate::{
         cache::PersistentCache,
         routing_error::RoutingError,
         routing_matrix::{
-            FetchPlan, assemble_from_cache, cache_pairs, fill_from_blocks, fill_unroutable,
-            finalize, plan_fetch,
+            FetchPlan, MatrixBlock, assemble_from_cache, cache_pairs, fill_from_blocks,
+            fill_unroutable, finalize, plan_fetch, tile_matrix,
         },
     },
     domain::{location::Location, ports::RoutingProvider},
@@ -98,12 +98,15 @@ impl Routing {
         Err(last_error
             .unwrap_or(anyhow!("GraphHopper request failed after {MAX_RETRIES} retries")))
     }
+}
 
+#[async_trait]
+impl MatrixBlock for Routing {
     /// One `/matrix` request for a `sources × targets` block. Result is indexed
     /// `[source][target]`; cells may be null (unroutable) — represented as `None`. Maps
     /// 429/quota bodies to `RoutingError` so the caller can fall back, mirroring
     /// `get_travel_time_call`.
-    async fn matrix_call(
+    async fn matrix_block(
         &self,
         sources: &[Location],
         targets: &[Location],
@@ -140,28 +143,6 @@ impl Routing {
 
         let parsed: MatrixResponse = response.json().await?;
         Ok(parsed.times)
-    }
-
-    /// `matrix_call` split into ≤`MAX_MATRIX_POINTS`-per-side blocks and stitched back into
-    /// the full `sources × targets` grid, keeping every request within GraphHopper's point cap.
-    async fn matrix_tiled(
-        &self,
-        sources: &[Location],
-        targets: &[Location],
-    ) -> Result<Vec<Vec<Option<u64>>>> {
-        let mut out = vec![vec![None; targets.len()]; sources.len()];
-        for (sb, s_chunk) in sources.chunks(MAX_MATRIX_POINTS).enumerate() {
-            for (tb, t_chunk) in targets.chunks(MAX_MATRIX_POINTS).enumerate() {
-                let block = self.matrix_call(s_chunk, t_chunk).await?;
-                let (s_off, t_off) = (sb * MAX_MATRIX_POINTS, tb * MAX_MATRIX_POINTS);
-                for (r, row) in block.into_iter().enumerate() {
-                    for (c, cell) in row.into_iter().enumerate() {
-                        out[s_off + r][t_off + c] = cell;
-                    }
-                }
-            }
-        }
-        Ok(out)
     }
 }
 
@@ -212,15 +193,15 @@ impl RoutingProvider for Routing {
         match plan_fetch(&missing, locations.len()) {
             FetchPlan::None => {}
             FetchPlan::Full => {
-                let block = self.matrix_tiled(locations, locations).await?;
+                let block = tile_matrix(self, locations, locations, MAX_MATRIX_POINTS).await?;
                 for &(i, j) in &missing {
                     secs[i][j] = block[i][j];
                 }
             }
             FetchPlan::Incremental { cover } => {
                 let cover_locs: Vec<Location> = cover.iter().map(|&i| locations[i].clone()).collect();
-                let block_cover_all = self.matrix_tiled(&cover_locs, locations).await?;
-                let block_all_cover = self.matrix_tiled(locations, &cover_locs).await?;
+                let block_cover_all = tile_matrix(self, &cover_locs, locations, MAX_MATRIX_POINTS).await?;
+                let block_all_cover = tile_matrix(self, locations, &cover_locs, MAX_MATRIX_POINTS).await?;
                 fill_from_blocks(&mut secs, &missing, &cover, &block_cover_all, &block_all_cover);
             }
         }

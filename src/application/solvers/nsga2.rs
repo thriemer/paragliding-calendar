@@ -77,71 +77,92 @@ impl WeekSolver for Nsga2Solver {
         let matrix = build_matrix(self.routing.as_ref(), &input).await?;
         validate_fixed(&input, &matrix)?;
 
-        let segments = partition_segments(&input.free_slots, &input.fixed, &input.origin);
-        Span::current().record("segments", segments.len());
-        let pool: Vec<Arc<ActivitySuggestion>> =
-            input.candidates.iter().cloned().map(Arc::new).collect();
-        // Per-segment candidate pools: an activity is only ever inserted into / moved to a segment
-        // its window overlaps, so operators don't seed wrong-day genes that repair would delete
-        // (shrinking good genes to zero on the way). See `segment_pools`.
-        let seg_pools = segment_pools(&pool, &segments);
-        // Overnight-spot pool: home only today (see `overnight_candidates`). One choice per night.
-        let overnight_pool = overnight_candidates(&input.origin);
-        let mut rng = StdRng::seed_from_u64(self.seed);
-
-        // Initial population: random genomes.
-        let mut pop: Vec<Individual> = Vec::with_capacity(self.pop_size);
-        while pop.len() < self.pop_size {
-            let mut g = random_genome(&seg_pools, &segments, &overnight_pool, &mut rng);
-            dedup_single_use(&mut g);
-            pop.push(Individual::new(g, &input, &matrix));
-        }
-
-        let seed = self.seed;
-        let mutation_rate = self.mutation_rate;
-        let pop_size = self.pop_size;
-        for generation in 0..self.generations {
-            let (rank, crowd) = rank_and_crowding(&pop);
-            // Parent selection is sequential (rng not Send); crossover/eval are parallel.
-            let pairs: Vec<(usize, usize)> = (0..pop_size)
-                .map(|_| (tournament(&pop, &rank, &crowd, &mut rng), tournament(&pop, &rank, &crowd, &mut rng)))
-                .collect();
-            let offspring: Vec<Individual> = pairs
-                .into_par_iter()
-                .enumerate()
-                .map(|(i, (p1, p2))| {
-                    let mut wrng = StdRng::seed_from_u64(seed ^ (generation as u64 * pop_size as u64 + i as u64));
-                    let mut child = crossover(&pop[p1].genome, &pop[p2].genome, &mut wrng);
-                    mutate(&mut child, &seg_pools, &segments, &overnight_pool, mutation_rate, &mut wrng);
-                    dedup_single_use(&mut child);
-                    repair(&mut child, &input, &matrix, &mut wrng);
-                    Individual::new(child, &input, &matrix)
-                })
-                .collect();
-            // (μ+λ) elitist: fill the next generation from parents ∪ offspring by rank, then
-            // crowding distance on the boundary front.
-            pop.extend(offspring);
-            pop = select_next(pop, self.pop_size);
-
-            let best = pop.iter().max_by(|a, b| a.plan.total_fun.partial_cmp(&b.plan.total_fun).unwrap_or(Ordering::Equal));
-            if let Some(b) = best {
-                info!(generation, best_fun = b.plan.total_fun, best_drive_min = b.plan.total_drive.num_minutes(), "generation");
-            }
-        }
-
-        let plans = pick_alternatives(&pop, input.num_alternatives);
-        Span::current().record("alternatives", plans.len());
-        for (i, p) in plans.iter().enumerate() {
-            info!(
-                rank = i,
-                total_fun = p.total_fun,
-                drive_min = p.total_drive.num_minutes(),
-                items = p.items.len(),
-                "alternative plan"
-            );
-        }
-        Ok(plans)
+        // The GA is CPU-bound (rayon inside, sequential selection between generations). Run it on
+        // the blocking pool so it doesn't park a tokio worker for the whole solve. The span is
+        // propagated so field recording and per-generation logs stay attributed to this solve.
+        let (pop_size, generations, mutation_rate, seed) =
+            (self.pop_size, self.generations, self.mutation_rate, self.seed);
+        let span = Span::current();
+        tokio::task::spawn_blocking(move || {
+            let _guard = span.enter();
+            run_ga(input, matrix, pop_size, generations, mutation_rate, seed)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("solver task panicked: {e}"))
     }
+}
+
+/// The NSGA-II loop itself: pure CPU, no async. Split out of `solve` so it can run under
+/// `spawn_blocking`. Infallible — feasibility is checked in `solve` before we get here.
+fn run_ga(
+    input: SolverInput,
+    matrix: DriveMatrix,
+    pop_size: usize,
+    generations: usize,
+    mutation_rate: f32,
+    seed: u64,
+) -> Vec<Plan> {
+    let segments = partition_segments(&input.free_slots, &input.fixed, &input.origin);
+    Span::current().record("segments", segments.len());
+    let pool: Vec<Arc<ActivitySuggestion>> =
+        input.candidates.iter().cloned().map(Arc::new).collect();
+    // Per-segment candidate pools: an activity is only ever inserted into / moved to a segment
+    // its window overlaps, so operators don't seed wrong-day genes that repair would delete
+    // (shrinking good genes to zero on the way). See `segment_pools`.
+    let seg_pools = segment_pools(&pool, &segments);
+    // Overnight-spot pool: home only today (see `overnight_candidates`). One choice per night.
+    let overnight_pool = overnight_candidates(&input.origin);
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    // Initial population: random genomes.
+    let mut pop: Vec<Individual> = Vec::with_capacity(pop_size);
+    while pop.len() < pop_size {
+        let mut g = random_genome(&seg_pools, &segments, &overnight_pool, &mut rng);
+        dedup_single_use(&mut g);
+        pop.push(Individual::new(g, &input, &matrix));
+    }
+
+    for generation in 0..generations {
+        let (rank, crowd) = rank_and_crowding(&pop);
+        // Parent selection is sequential (rng not Send); crossover/eval are parallel.
+        let pairs: Vec<(usize, usize)> = (0..pop_size)
+            .map(|_| (tournament(&pop, &rank, &crowd, &mut rng), tournament(&pop, &rank, &crowd, &mut rng)))
+            .collect();
+        let offspring: Vec<Individual> = pairs
+            .into_par_iter()
+            .enumerate()
+            .map(|(i, (p1, p2))| {
+                let mut wrng = StdRng::seed_from_u64(seed ^ (generation as u64 * pop_size as u64 + i as u64));
+                let mut child = crossover(&pop[p1].genome, &pop[p2].genome, &mut wrng);
+                mutate(&mut child, &seg_pools, &segments, &overnight_pool, mutation_rate, &mut wrng);
+                dedup_single_use(&mut child);
+                repair(&mut child, &input, &matrix, &mut wrng);
+                Individual::new(child, &input, &matrix)
+            })
+            .collect();
+        // (μ+λ) elitist: fill the next generation from parents ∪ offspring by rank, then
+        // crowding distance on the boundary front.
+        pop.extend(offspring);
+        pop = select_next(pop, pop_size);
+
+        let best = pop.iter().max_by(|a, b| a.plan.total_fun.partial_cmp(&b.plan.total_fun).unwrap_or(Ordering::Equal));
+        if let Some(b) = best {
+            info!(generation, best_fun = b.plan.total_fun, best_drive_min = b.plan.total_drive.num_minutes(), "generation");
+        }
+    }
+
+    let plans = pick_alternatives(&pop, input.num_alternatives);
+    Span::current().record("alternatives", plans.len());
+    for (i, p) in plans.iter().enumerate() {
+        info!(
+            rank = i,
+            total_fun = p.total_fun,
+            drive_min = p.total_drive.num_minutes(),
+            items = p.items.len(),
+            "alternative plan"
+        );
+    }
+    plans
 }
 
 /// Err (no panic) if two consecutive located commitments can't be driven between in their gap.

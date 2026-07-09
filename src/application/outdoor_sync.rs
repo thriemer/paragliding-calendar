@@ -51,7 +51,13 @@ async fn try_download(client: &reqwest::Client, url: &str, path: &Path) -> Resul
         request = request.header("Range", format!("bytes={existing_len}-"));
     }
 
-    let response = request.send().await?.error_for_status()?;
+    let response = request.send().await?;
+    let status = response.status();
+    if status.is_client_error() && existing_len > 0 {
+        tracing::warn!(%status, "client error with partial download, removing cached file");
+        let _ = tokio::fs::remove_file(path).await;
+    }
+    let response = response.error_for_status()?;
 
     // `base` is the byte count already kept on disk: the existing bytes on a real 206 resume, else 0
     // because we truncated and start over. Progress counters count up from it.
