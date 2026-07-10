@@ -164,7 +164,9 @@ async fn trigger_calendar_job(State(state): State<AppState>) -> StatusCode {
 }
 
 #[instrument(skip(state))]
-async fn get_sites(State(state): State<AppState>) -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
+async fn get_sites(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
     let sites = state
         .site_repo
         .find_all()

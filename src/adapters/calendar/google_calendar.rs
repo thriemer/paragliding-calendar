@@ -106,7 +106,11 @@ impl WebFlowAuthenticator {
         loop {
             let (auth_url, csrf_state) = self.build_authorization_url();
             self.cache
-                .put(CSRF_STATE_KEY, csrf_state, Duration::from_secs(two_days_secs))
+                .put(
+                    CSRF_STATE_KEY,
+                    csrf_state,
+                    Duration::from_secs(two_days_secs),
+                )
                 .await?;
 
             tracing::info!("Sending authentication URL via email");
@@ -288,10 +292,7 @@ pub struct GoogleCalendar {
 }
 
 impl GoogleCalendar {
-    pub fn new(
-        auth: Arc<WebFlowAuthenticator>,
-        cache: Arc<PersistentCache>,
-    ) -> Result<Self> {
+    pub fn new(auth: Arc<WebFlowAuthenticator>, cache: Arc<PersistentCache>) -> Result<Self> {
         let connector = HttpsConnectorBuilder::new()
             .with_native_roots()
             .context("Failed to build HTTPS connector")?
@@ -497,9 +498,7 @@ impl CalendarProvider for GoogleCalendar {
 
         if let Some(id) = cal.id {
             let key = format!("calendar_name_id_map_{}", name);
-            self.cache
-                .put(&key, id, Duration::from_hours(24))
-                .await?;
+            self.cache.put(&key, id, Duration::from_hours(24)).await?;
         }
         Ok(())
     }
@@ -530,8 +529,7 @@ fn to_event_time(time: DateTime<Utc>) -> EventDateTime {
 /// Inverse of `From<CalendarEvent> for Event`. Returns `None` for events that don't block time:
 /// cancelled instances and ones marked free (`transparency == "transparent"`).
 fn to_calendar_event(e: Event) -> Option<CalendarEvent> {
-    if e.status.as_deref() == Some("cancelled")
-        || e.transparency.as_deref() == Some("transparent")
+    if e.status.as_deref() == Some("cancelled") || e.transparency.as_deref() == Some("transparent")
     {
         return None;
     }
@@ -567,8 +565,12 @@ mod tests {
     fn timed(summary: &str) -> Event {
         Event {
             summary: Some(summary.into()),
-            start: Some(to_event_time(Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap())),
-            end: Some(to_event_time(Utc.with_ymd_and_hms(2026, 6, 13, 11, 0, 0).unwrap())),
+            start: Some(to_event_time(
+                Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap(),
+            )),
+            end: Some(to_event_time(
+                Utc.with_ymd_and_hms(2026, 6, 13, 11, 0, 0).unwrap(),
+            )),
             ..Default::default()
         }
     }
@@ -612,7 +614,13 @@ mod tests {
         };
         let ce = to_calendar_event(e).unwrap();
         assert!(ce.is_all_day);
-        assert_eq!(ce.start_time, Utc.with_ymd_and_hms(2026, 6, 13, 0, 0, 0).unwrap());
-        assert_eq!(ce.end_time, Utc.with_ymd_and_hms(2026, 6, 14, 0, 0, 0).unwrap());
+        assert_eq!(
+            ce.start_time,
+            Utc.with_ymd_and_hms(2026, 6, 13, 0, 0, 0).unwrap()
+        );
+        assert_eq!(
+            ce.end_time,
+            Utc.with_ymd_and_hms(2026, 6, 14, 0, 0, 0).unwrap()
+        );
     }
 }

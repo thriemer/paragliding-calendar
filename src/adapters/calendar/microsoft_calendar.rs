@@ -25,7 +25,10 @@ const TOKEN_CACHE_KEY: &str = "microsoft_calendar_token";
 /// is valid. Verified by the OAuth callback before exchanging the code.
 const CSRF_STATE_KEY: &str = "microsoft_oauth_csrf_state";
 
-const SCOPES: [&str; 2] = ["offline_access", "https://graph.microsoft.com/Calendars.Read"];
+const SCOPES: [&str; 2] = [
+    "offline_access",
+    "https://graph.microsoft.com/Calendars.Read",
+];
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StoredToken {
@@ -100,7 +103,11 @@ impl O365Authenticator {
         loop {
             let (auth_url, csrf_state) = self.build_authorization_url();
             self.cache
-                .put(CSRF_STATE_KEY, csrf_state, Duration::from_secs(two_days_secs))
+                .put(
+                    CSRF_STATE_KEY,
+                    csrf_state,
+                    Duration::from_secs(two_days_secs),
+                )
                 .await?;
 
             tracing::info!("Sending Microsoft authentication URL via email");
@@ -452,7 +459,13 @@ impl CalendarProvider for MicrosoftCalendar {
 mod tests {
     use super::*;
 
-    fn evt(start: &str, end: &str, response: &str, cancelled: bool, show_as: Option<&str>) -> GraphEvent {
+    fn evt(
+        start: &str,
+        end: &str,
+        response: &str,
+        cancelled: bool,
+        show_as: Option<&str>,
+    ) -> GraphEvent {
         GraphEvent {
             start: GraphDateTime {
                 date_time: start.to_string(),
@@ -479,32 +492,62 @@ mod tests {
 
     #[test]
     fn accepted_event_in_window_is_busy() {
-        let e = evt("2026-06-15T10:00:00", "2026-06-15T11:00:00", "accepted", false, None);
+        let e = evt(
+            "2026-06-15T10:00:00",
+            "2026-06-15T11:00:00",
+            "accepted",
+            false,
+            None,
+        );
         assert!(e.is_user_accepted());
         assert!(e.overlaps(ts(9), ts(12)));
     }
 
     #[test]
     fn declined_event_is_not_counted() {
-        let e = evt("2026-06-15T10:00:00", "2026-06-15T11:00:00", "declined", false, None);
+        let e = evt(
+            "2026-06-15T10:00:00",
+            "2026-06-15T11:00:00",
+            "declined",
+            false,
+            None,
+        );
         assert!(!e.is_user_accepted());
     }
 
     #[test]
     fn tentative_event_is_not_counted() {
-        let e = evt("2026-06-15T10:00:00", "2026-06-15T11:00:00", "tentativelyAccepted", false, None);
+        let e = evt(
+            "2026-06-15T10:00:00",
+            "2026-06-15T11:00:00",
+            "tentativelyAccepted",
+            false,
+            None,
+        );
         assert!(!e.is_user_accepted());
     }
 
     #[test]
     fn organizer_event_is_counted() {
-        let e = evt("2026-06-15T10:00:00", "2026-06-15T11:00:00", "organizer", false, None);
+        let e = evt(
+            "2026-06-15T10:00:00",
+            "2026-06-15T11:00:00",
+            "organizer",
+            false,
+            None,
+        );
         assert!(e.is_user_accepted());
     }
 
     #[test]
     fn non_overlapping_event_is_not_busy() {
-        let e = evt("2026-06-15T14:00:00", "2026-06-15T15:00:00", "accepted", false, None);
+        let e = evt(
+            "2026-06-15T14:00:00",
+            "2026-06-15T15:00:00",
+            "accepted",
+            false,
+            None,
+        );
         assert!(!e.overlaps(ts(9), ts(12)));
     }
 

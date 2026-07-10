@@ -10,7 +10,7 @@ use reqwest::StatusCode;
 use tokio::io::AsyncWriteExt;
 
 use crate::adapters::ingest::{outdooractive_event, outdooractive_tour};
-use crate::domain::{tour::Tour, happening::Happening, ports::CatalogFeed};
+use crate::domain::{happening::Happening, ports::CatalogFeed, tour::Tour};
 
 const TOUR_ZIP_URL: &str = "https://www.opentourism.net/zip/outdooractive_opentourism_tour.zip";
 const EVENT_ZIP_URL: &str = "https://www.opentourism.net/zip/outdooractive_opentourism_event.zip";
@@ -84,7 +84,10 @@ async fn download_to_file(url: &str, path: &Path) -> Result<()> {
 }
 
 async fn try_download(client: &reqwest::Client, url: &str, path: &Path) -> Result<()> {
-    let existing_len = tokio::fs::metadata(path).await.map(|m| m.len()).unwrap_or(0);
+    let existing_len = tokio::fs::metadata(path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
 
     let mut request = client.get(url);
     if existing_len > 0 {
@@ -104,7 +107,10 @@ async fn try_download(client: &reqwest::Client, url: &str, path: &Path) -> Resul
     // because we truncated and start over. Progress counters count up from it.
     let (mut file, base) = match response.status() {
         StatusCode::PARTIAL_CONTENT => (
-            tokio::fs::OpenOptions::new().append(true).open(path).await?,
+            tokio::fs::OpenOptions::new()
+                .append(true)
+                .open(path)
+                .await?,
             existing_len,
         ),
         _ => {
@@ -125,7 +131,11 @@ async fn try_download(client: &reqwest::Client, url: &str, path: &Path) -> Resul
         if let Some(total) = total
             && downloaded % (50 * 1024 * 1024) < chunk.len() as u64
         {
-            tracing::info!(mb_downloaded = downloaded / (1024 * 1024), mb_total = total / (1024 * 1024), "download progress");
+            tracing::info!(
+                mb_downloaded = downloaded / (1024 * 1024),
+                mb_total = total / (1024 * 1024),
+                "download progress"
+            );
         }
     }
 

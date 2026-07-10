@@ -54,7 +54,10 @@ impl ActivitySource for ParaglidingActivitySource {
 
             let forecast = match self
                 .weather
-                .get_forecast(launch.location.clone(), site.preferred_weather_model.clone())
+                .get_forecast(
+                    launch.location.clone(),
+                    site.preferred_weather_model.clone(),
+                )
                 .await
             {
                 Ok(f) => f,
@@ -279,7 +282,11 @@ mod tests {
         assert_eq!(window.end, day + chrono::Duration::hours(15));
         assert_eq!(out[0].title, "S");
         let score = out[0].score.as_ref().expect("expected a score");
-        assert!((score.total() - 4.91).abs() < 0.1, "expected score ~4.91, got {}", score.total());
+        assert!(
+            (score.total() - 4.91).abs() < 0.1,
+            "expected score ~4.91, got {}",
+            score.total()
+        );
         assert_eq!(score.hourly.len(), 5, "expected one hourly bucket per hour");
         assert_eq!(score.reasons.len(), 5, "expected one reason per hour");
     }

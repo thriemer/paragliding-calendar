@@ -66,7 +66,10 @@ impl Planner {
         for s in raw {
             match &s.timing {
                 Timing::Fixed { .. } => candidates.push(s),
-                Timing::Flexible { window, min_duration } => {
+                Timing::Flexible {
+                    window,
+                    min_duration,
+                } => {
                     if window.duration() >= *min_duration {
                         candidates.push(s);
                     }
@@ -162,7 +165,10 @@ fn free_slots_from_events(horizon: TimeWindow, events: &[CalendarEvent]) -> Vec<
     let mut cursor = horizon.start;
     for (s, e) in spans {
         if s > cursor {
-            slots.push(TimeWindow { start: cursor, end: s });
+            slots.push(TimeWindow {
+                start: cursor,
+                end: s,
+            });
         }
         cursor = cursor.max(e);
     }
@@ -348,7 +354,10 @@ mod tests {
         );
 
         let (plans, _) = planner.plan(&ctx(), &empty_calendar()).await.unwrap();
-        assert!(plans.is_empty(), "1h window < 2h min_duration → candidates dropped");
+        assert!(
+            plans.is_empty(),
+            "1h window < 2h min_duration → candidates dropped"
+        );
     }
 
     #[tokio::test]
@@ -375,7 +384,11 @@ mod tests {
         );
 
         let (plans, _) = planner.plan(&ctx(), &empty_calendar()).await.unwrap();
-        assert_eq!(plans.len(), 1, "only one distinct trade-off (both fixed events placed)");
+        assert_eq!(
+            plans.len(),
+            1,
+            "only one distinct trade-off (both fixed events placed)"
+        );
     }
 
     fn geocoding_planner(geo: MockGeoProvider) -> Planner {
@@ -417,7 +430,10 @@ mod tests {
         let fixed = planner
             .commitments_from_events(&[commitment_event(Some("Konferenzraum 2. OG"))])
             .await;
-        assert!(fixed[0].location.is_none(), "geocode error must not propagate");
+        assert!(
+            fixed[0].location.is_none(),
+            "geocode error must not propagate"
+        );
     }
 
     #[tokio::test]
@@ -434,7 +450,10 @@ mod tests {
 
     #[test]
     fn free_slots_split_around_a_midday_event() {
-        let horizon = TimeWindow { start: ts(8), end: ts(18) };
+        let horizon = TimeWindow {
+            start: ts(8),
+            end: ts(18),
+        };
         let event = CalendarEvent {
             title: "lunch".into(),
             start_time: ts(12),
@@ -452,7 +471,10 @@ mod tests {
 
     #[test]
     fn free_slots_whole_horizon_when_no_events() {
-        let horizon = TimeWindow { start: ts(8), end: ts(18) };
+        let horizon = TimeWindow {
+            start: ts(8),
+            end: ts(18),
+        };
         let slots = free_slots_from_events(horizon, &[]);
         assert_eq!(slots.len(), 1);
         assert_eq!((slots[0].start, slots[0].end), (ts(8), ts(18)));

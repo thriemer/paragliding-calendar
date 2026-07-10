@@ -50,11 +50,7 @@ pub trait WeatherProvider: Send + Sync {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait RoutingProvider: Send + Sync {
-    async fn get_travel_time(
-        &self,
-        source: &Location,
-        destination: &Location,
-    ) -> Result<Duration>;
+    async fn get_travel_time(&self, source: &Location, destination: &Location) -> Result<Duration>;
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -81,7 +77,7 @@ pub trait GeoProvider: Send + Sync {
     async fn fetch_elevation(&self, latitude: f64, longitude: f64) -> Result<f64>;
 }
 
-use crate::domain::{tour::Tour, happening::Happening, settings::UserSettings};
+use crate::domain::{happening::Happening, settings::UserSettings, tour::Tour};
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]

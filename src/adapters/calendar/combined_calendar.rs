@@ -4,9 +4,7 @@ use chrono::{DateTime, Utc};
 use futures::future;
 
 use crate::{
-    adapters::calendar::{
-        google_calendar::GoogleCalendar, microsoft_calendar::MicrosoftCalendar,
-    },
+    adapters::calendar::{google_calendar::GoogleCalendar, microsoft_calendar::MicrosoftCalendar},
     domain::{calendar::CalendarEvent, ports::CalendarProvider},
 };
 

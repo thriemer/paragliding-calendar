@@ -6,10 +6,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
-use rand::{rngs::StdRng, RngExt};
+use rand::{RngExt, rngs::StdRng};
 
 use crate::application::solvers::placement::{
-    compute_total_drive, crow_flies_drive, partition_segments, Segment,
+    Segment, compute_total_drive, crow_flies_drive, partition_segments,
 };
 use crate::domain::{
     activities::{ActivitySuggestion, Timing},
@@ -71,8 +71,16 @@ fn map_duration(norm: f32, lo: Duration, hi: Duration) -> Duration {
     Duration::seconds(secs.round() as i64)
 }
 
-fn scheduled(act: &ActivitySuggestion, start: DateTime<Utc>, end: DateTime<Utc>) -> ScheduledActivity {
-    let fun = act.score.as_ref().map(|s| s.fun_between(start, end)).unwrap_or(0.0);
+fn scheduled(
+    act: &ActivitySuggestion,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> ScheduledActivity {
+    let fun = act
+        .score
+        .as_ref()
+        .map(|s| s.fun_between(start, end))
+        .unwrap_or(0.0);
     ScheduledActivity {
         kind: act.kind,
         location: Some(act.location.clone()),
@@ -120,13 +128,21 @@ fn walk_segment(
                 let drive_in = crow_flies_drive(&loc, &act.location);
 
                 let (start, end) = match &act.timing {
-                    Timing::Flexible { window, min_duration } => {
+                    Timing::Flexible {
+                        window,
+                        min_duration,
+                    } => {
                         let start = (time + drive_in).max(window.start);
                         let latest_feasible = window.end.min(seg.end - drive_out);
                         if latest_feasible - start < *min_duration {
-                            return WalkOutput { placed, end_loc: loc, unplaceable: Some(i) };
+                            return WalkOutput {
+                                placed,
+                                end_loc: loc,
+                                unplaceable: Some(i),
+                            };
                         }
-                        let dur = map_duration(gene.duration, *min_duration, latest_feasible - start);
+                        let dur =
+                            map_duration(gene.duration, *min_duration, latest_feasible - start);
                         (start, start + dur)
                     }
                     // Pinned span; `duration`/`Wait` don't apply. Unplaceable if we can't arrive
@@ -135,13 +151,21 @@ fn walk_segment(
                         let start = (time + drive_in).max(window.start);
                         let end = start + *duration;
                         if end > window.end.min(seg.end - drive_out) {
-                            return WalkOutput { placed, end_loc: loc, unplaceable: Some(i) };
+                            return WalkOutput {
+                                placed,
+                                end_loc: loc,
+                                unplaceable: Some(i),
+                            };
                         }
                         (start, end)
                     }
                     Timing::Fixed { start, end } => {
                         if time + drive_in > *start || *end + drive_out > seg.end {
-                            return WalkOutput { placed, end_loc: loc, unplaceable: Some(i) };
+                            return WalkOutput {
+                                placed,
+                                end_loc: loc,
+                                unplaceable: Some(i),
+                            };
                         }
                         (*start, *end)
                     }
@@ -154,7 +178,11 @@ fn walk_segment(
         }
     }
 
-    WalkOutput { placed, end_loc: loc, unplaceable: None }
+    WalkOutput {
+        placed,
+        end_loc: loc,
+        unplaceable: None,
+    }
 }
 
 /// Resolve a segment's start location: its pinned `start_loc`, or the location carried from the
@@ -183,7 +211,11 @@ pub fn decode(genome: &Genome, input: &SolverInput) -> Plan {
         } else {
             None
         };
-        let end_loc = if seg.night_end { overnight_loc.clone() } else { seg.end_loc.clone() };
+        let end_loc = if seg.night_end {
+            overnight_loc.clone()
+        } else {
+            seg.end_loc.clone()
+        };
         let out = walk_segment(genes, seg, &start_loc, end_loc.as_ref());
         carried = if seg.night_end {
             night_idx += 1;
@@ -210,7 +242,11 @@ pub fn decode(genome: &Genome, input: &SolverInput) -> Plan {
     chain.sort_by_key(|a| a.start);
     let total_drive = compute_total_drive(&chain, &input.origin);
 
-    Plan { items: placed_all, total_fun, total_drive }
+    Plan {
+        items: placed_all,
+        total_fun,
+        total_drive,
+    }
 }
 
 /// Make an over-packed segment feasible by shrinking (then, at the floor, removing) genes until
@@ -263,13 +299,21 @@ pub fn repair(genome: &mut Genome, input: &SolverInput, rng: &mut StdRng) {
         } else {
             None
         };
-        let end_loc = if seg.night_end { overnight_loc.clone() } else { seg.end_loc.clone() };
+        let end_loc = if seg.night_end {
+            overnight_loc.clone()
+        } else {
+            seg.end_loc.clone()
+        };
         if let Some(genes) = genome.segments.get_mut(i) {
             repair_segment(genes, seg, &start_loc, end_loc.as_ref(), rng);
             // Recompute the carry from the repaired (clean) walk; a night boundary carries the
             // overnight spot regardless of where the last activity sat.
             let walked = walk_segment(genes, seg, &start_loc, end_loc.as_ref()).end_loc;
-            carried = if seg.night_end { overnight_loc.unwrap_or(walked) } else { walked };
+            carried = if seg.night_end {
+                overnight_loc.unwrap_or(walked)
+            } else {
+                walked
+            };
         } else if seg.night_end {
             carried = overnight_loc.unwrap_or(carried);
         }
@@ -321,39 +365,67 @@ mod tests {
     }
 
     /// Flexible suggestion; `hourly` is per-clock-hour fun over `[start_h, end_h)`.
-    fn flex(loc: Location, start_h: u32, end_h: u32, hourly: Vec<f32>, min_h: i64) -> Arc<ActivitySuggestion> {
+    fn flex(
+        loc: Location,
+        start_h: u32,
+        end_h: u32,
+        hourly: Vec<f32>,
+        min_h: i64,
+    ) -> Arc<ActivitySuggestion> {
         Arc::new(ActivitySuggestion {
             id: format!("flex-{}", loc.name),
             kind: ActivityKind::Paragliding,
             location: loc.clone(),
             timing: Timing::Flexible {
-                window: TimeWindow { start: ts(start_h), end: ts(end_h) },
+                window: TimeWindow {
+                    start: ts(start_h),
+                    end: ts(end_h),
+                },
                 min_duration: Duration::hours(min_h),
             },
             title: format!("flex-{}", loc.name),
             description: String::new(),
-            score: Some(Score { window_start: ts(start_h), hourly, reasons: vec![] }),
+            score: Some(Score {
+                window_start: ts(start_h),
+                hourly,
+                reasons: vec![],
+            }),
             allow_multiple: false,
         })
     }
 
     fn do_gene(act: &Arc<ActivitySuggestion>, duration: f32) -> Gene {
-        Gene { action: GeneAction::Do(act.clone()), duration }
+        Gene {
+            action: GeneAction::Do(act.clone()),
+            duration,
+        }
     }
     /// Build a genome from segment gene-lists with no overnight choices (single-day test slots have
     /// no night boundaries).
     fn gseg(segments: Vec<Vec<Gene>>) -> Genome {
-        Genome { segments, overnight: vec![] }
+        Genome {
+            segments,
+            overnight: vec![],
+        }
     }
     fn wait_gene(duration: f32) -> Gene {
-        Gene { action: GeneAction::Wait, duration }
+        Gene {
+            action: GeneAction::Wait,
+            duration,
+        }
     }
 
-    fn input(candidates: Vec<Arc<ActivitySuggestion>>, fixed: Vec<ScheduledActivity>) -> SolverInput {
+    fn input(
+        candidates: Vec<Arc<ActivitySuggestion>>,
+        fixed: Vec<ScheduledActivity>,
+    ) -> SolverInput {
         SolverInput {
             candidates: candidates.iter().map(|a| (**a).clone()).collect(),
             origin: home(),
-            free_slots: vec![TimeWindow { start: ts(8), end: ts(18) }],
+            free_slots: vec![TimeWindow {
+                start: ts(8),
+                end: ts(18),
+            }],
             fixed,
             num_alternatives: 1,
         }
@@ -380,11 +452,17 @@ mod tests {
 
         // norm 0 → min_duration (2h)
         let p_min = decode(&gseg(vec![vec![do_gene(&a, 0.0)]]), &inp);
-        assert_eq!(p_min.items[0].end - p_min.items[0].start, Duration::hours(2));
+        assert_eq!(
+            p_min.items[0].end - p_min.items[0].start,
+            Duration::hours(2)
+        );
 
         // norm 1 → feasible_max: window is 8..18 (10h), start clamps to 8, so full 10h.
         let p_max = decode(&gseg(vec![vec![do_gene(&a, 1.0)]]), &inp);
-        assert_eq!(p_max.items[0].end - p_max.items[0].start, Duration::hours(10));
+        assert_eq!(
+            p_max.items[0].end - p_max.items[0].start,
+            Duration::hours(10)
+        );
     }
 
     #[test]
@@ -397,14 +475,26 @@ mod tests {
         let inp = input(vec![a.clone(), b.clone(), c.clone()], vec![]);
 
         // 3 × min 4h = 12h > 10h segment: even at duration 0 they can't all fit → a removal.
-        let mut genome = gseg(vec![vec![do_gene(&a, 1.0), do_gene(&b, 1.0), do_gene(&c, 1.0)]]);
+        let mut genome = gseg(vec![vec![
+            do_gene(&a, 1.0),
+            do_gene(&b, 1.0),
+            do_gene(&c, 1.0),
+        ]]);
         let mut rng = StdRng::seed_from_u64(42);
         repair(&mut genome, &inp, &mut rng);
 
-        assert!(genome.segments[0].len() < 3, "an over-full segment must drop a gene");
+        assert!(
+            genome.segments[0].len() < 3,
+            "an over-full segment must drop a gene"
+        );
         // Post-repair walk is clean: every remaining gene places.
         let segs = partition_segments(&inp.free_slots, &inp.fixed, &inp.origin);
-        let out = walk_segment(&genome.segments[0], &segs[0], &home(), segs[0].end_loc.as_ref());
+        let out = walk_segment(
+            &genome.segments[0],
+            &segs[0],
+            &home(),
+            segs[0].end_loc.as_ref(),
+        );
         assert!(out.unplaceable.is_none());
     }
 
@@ -426,14 +516,25 @@ mod tests {
     fn wait_into_better_hours_increases_fun() {
         // Site at home coords → no drive shifting the start; the wait alone moves placement.
         // Bad first hours, great last hours. min 1h so a short placement is legal.
-        let a = flex(here("A"), 8, 18, vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 10.0, 10.0], 1);
+        let a = flex(
+            here("A"),
+            8,
+            18,
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 10.0, 10.0],
+            1,
+        );
         let inp = input(vec![a.clone()], vec![]);
 
         // No wait, short duration → lands in the bad early hours.
         let early = decode(&gseg(vec![vec![do_gene(&a, 0.0)]]), &inp);
         // Wait most of the segment first → pushed into the good hours.
         let late = decode(&gseg(vec![vec![wait_gene(0.9), do_gene(&a, 0.0)]]), &inp);
-        assert!(late.total_fun > early.total_fun, "late {} > early {}", late.total_fun, early.total_fun);
+        assert!(
+            late.total_fun > early.total_fun,
+            "late {} > early {}",
+            late.total_fun,
+            early.total_fun
+        );
     }
 
     #[test]
@@ -447,7 +548,11 @@ mod tests {
         let genome = gseg(vec![vec![do_gene(&a, 0.0), do_gene(&a, 0.0)]]);
         let plan = decode(&genome, &inp);
         assert_eq!(plan.items.len(), 2);
-        assert!(plan.items.iter().all(|i| i.location.as_ref().unwrap().name == "A"));
+        assert!(
+            plan.items
+                .iter()
+                .all(|i| i.location.as_ref().unwrap().name == "A")
+        );
     }
 
     #[tokio::test]
@@ -465,8 +570,18 @@ mod tests {
         ]);
         dedup_single_use(&mut genome);
 
-        let once_count: usize = genome.segments.iter().flat_map(|s| s.iter()).filter(|g| matches!(&g.action, GeneAction::Do(a) if Arc::ptr_eq(a, &once))).count();
-        let many_count: usize = genome.segments.iter().flat_map(|s| s.iter()).filter(|g| matches!(&g.action, GeneAction::Do(a) if Arc::ptr_eq(a, &many))).count();
+        let once_count: usize = genome
+            .segments
+            .iter()
+            .flat_map(|s| s.iter())
+            .filter(|g| matches!(&g.action, GeneAction::Do(a) if Arc::ptr_eq(a, &once)))
+            .count();
+        let many_count: usize = genome
+            .segments
+            .iter()
+            .flat_map(|s| s.iter())
+            .filter(|g| matches!(&g.action, GeneAction::Do(a) if Arc::ptr_eq(a, &many)))
+            .count();
         assert_eq!(once_count, 1, "non-repeatable should appear exactly once");
         assert_eq!(many_count, 2, "repeatable should keep both occurrences");
     }
@@ -481,13 +596,22 @@ mod tests {
             ..(*flex(site("Hike", 50.75), 8, 18, vec![1.0; 10], 2)).clone()
         });
         assert_eq!(thursday.id, monday.id, "same underlying tour → same id");
-        assert!(!Arc::ptr_eq(&thursday, &monday), "distinct Arcs (distinct per-day suggestions)");
+        assert!(
+            !Arc::ptr_eq(&thursday, &monday),
+            "distinct Arcs (distinct per-day suggestions)"
+        );
 
-        let mut genome = gseg(vec![vec![do_gene(&thursday, 0.0)], vec![do_gene(&monday, 0.0)]]);
+        let mut genome = gseg(vec![
+            vec![do_gene(&thursday, 0.0)],
+            vec![do_gene(&monday, 0.0)],
+        ]);
         dedup_single_use(&mut genome);
 
         let kept: usize = genome.segments.iter().flat_map(|s| s.iter()).count();
-        assert_eq!(kept, 1, "same-id single-use activity must be scheduled at most once");
+        assert_eq!(
+            kept, 1,
+            "same-id single-use activity must be scheduled at most once"
+        );
     }
 
     #[test]

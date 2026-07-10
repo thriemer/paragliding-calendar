@@ -173,7 +173,7 @@ async fn geocode_raw(location_name: &str) -> Result<Vec<Location>> {
 }
 
 mod openmeteo {
-    
+
     use serde::Deserialize;
 
     use super::{Location, WeatherForecast};
@@ -308,7 +308,11 @@ mod openmeteo {
                 }
             }
             if skipped > 0 {
-                tracing::debug!(skipped, kept = forecasts.len(), "dropped incomplete forecast hours");
+                tracing::debug!(
+                    skipped,
+                    kept = forecasts.len(),
+                    "dropped incomplete forecast hours"
+                );
             }
 
             Self {
@@ -343,10 +347,17 @@ mod openmeteo {
             let loc = Location::new(50.7, 13.0, "Test".into(), "DE".into());
             let forecast = WeatherForecast::from_openmeteo(&response, loc);
 
-            assert_eq!(forecast.forecast.len(), 1, "only the complete hour survives");
+            assert_eq!(
+                forecast.forecast.len(),
+                1,
+                "only the complete hour survives"
+            );
             let hour = &forecast.forecast[0];
             assert_eq!(hour.wind_speed_ms, 3.0);
-            assert_eq!(hour.visibility, None, "missing visibility is None, not a sentinel");
+            assert_eq!(
+                hour.visibility, None,
+                "missing visibility is None, not a sentinel"
+            );
         }
     }
 }

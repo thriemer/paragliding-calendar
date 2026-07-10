@@ -23,7 +23,10 @@ impl EventActivitySource {
         event_repo: Arc<dyn HappeningRepository>,
         settings_repo: Arc<dyn SettingsRepository>,
     ) -> Self {
-        Self { event_repo, settings_repo }
+        Self {
+            event_repo,
+            settings_repo,
+        }
     }
 }
 
@@ -91,8 +94,8 @@ impl ActivitySource for EventActivitySource {
 mod tests {
     use super::*;
     use crate::domain::{
+        happening::{Happening, HappeningDate},
         location::Location,
-        happening::{HappeningDate, Happening},
         ports::{MockHappeningRepository, MockSettingsRepository},
         settings::UserSettings,
     };
@@ -166,7 +169,13 @@ mod tests {
 
     #[tokio::test]
     async fn located_event_becomes_one_fixed_suggestion() {
-        let out = run(vec![event(Some(Location::new(50.8, 13.1, "Venue".into(), "DE".into())))]).await;
+        let out = run(vec![event(Some(Location::new(
+            50.8,
+            13.1,
+            "Venue".into(),
+            "DE".into(),
+        )))])
+        .await;
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].kind, ActivityKind::Event);
         let day = Utc.with_ymd_and_hms(2026, 6, 14, 0, 0, 0).unwrap();
@@ -191,7 +200,9 @@ mod tests {
         e.dates[0].time_to = day + Duration::hours(72); // 3-day festival
         let out = run(vec![e]).await;
         assert_eq!(out.len(), 1);
-        let Timing::Fixed { start, end } = out[0].timing else { panic!() };
+        let Timing::Fixed { start, end } = out[0].timing else {
+            panic!()
+        };
         assert_eq!(end - start, MAX_ATTEND);
     }
 }

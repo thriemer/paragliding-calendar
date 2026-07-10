@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::domain::ports::{HappeningRepository, CatalogFeed, TourRepository};
+use crate::domain::ports::{CatalogFeed, HappeningRepository, TourRepository};
 
 pub async fn sync_tours(feed: &dyn CatalogFeed, repo: &dyn TourRepository) -> Result<usize> {
     let tours = feed.fetch_tours().await?;

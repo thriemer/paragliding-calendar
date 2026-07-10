@@ -46,7 +46,12 @@ impl Location {
     /// is plenty and per-tour forecasts would otherwise be one API call each.
     pub fn snapped_to_grid(&self, grid_deg: f64) -> Location {
         let snap = |v: f64| (v / grid_deg).round() * grid_deg;
-        Location::new(snap(self.latitude), snap(self.longitude), String::new(), String::new())
+        Location::new(
+            snap(self.latitude),
+            snap(self.longitude),
+            String::new(),
+            String::new(),
+        )
     }
 }
 
@@ -90,9 +95,15 @@ mod tests {
         // Two tours ~2 km apart in the same cell, with different names, snap to one cache key.
         let a = Location::new(50.72, 13.03, "Tour A".into(), "DE".into());
         let b = Location::new(50.74, 13.01, "Tour B".into(), "DE".into());
-        assert_eq!(a.snapped_to_grid(0.1).to_key(), b.snapped_to_grid(0.1).to_key());
+        assert_eq!(
+            a.snapped_to_grid(0.1).to_key(),
+            b.snapped_to_grid(0.1).to_key()
+        );
         // A distant point still lands in a different cell.
         let c = Location::new(51.24, 13.0, "Tour C".into(), "DE".into());
-        assert_ne!(a.snapped_to_grid(0.1).to_key(), c.snapped_to_grid(0.1).to_key());
+        assert_ne!(
+            a.snapped_to_grid(0.1).to_key(),
+            c.snapped_to_grid(0.1).to_key()
+        );
     }
 }

@@ -44,8 +44,8 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn from_env() -> Result<Self> {
-        let database_url = env::var("DATABASE_URL")
-            .map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?;
+        let database_url =
+            env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?;
 
         let google = GoogleOAuthConfig {
             client_id: env::var("GOOGLE_CLIENT_ID")

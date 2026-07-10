@@ -103,7 +103,11 @@ pub fn analyse_flight(track: &Track) -> Result<FlightAnalysis> {
         min_speed: format!("{}", min_speed),
         max_speed: format!("{}", max_speed),
         min_glide,
-        avg_glide: if count > 0 { sum_glide / count as f64 } else { 0.0 },
+        avg_glide: if count > 0 {
+            sum_glide / count as f64
+        } else {
+            0.0
+        },
         total_elevation_gain: format!("{}", total_height_gained),
     })
 }
@@ -246,8 +250,7 @@ mod tests {
                 longitude: lon,
                 height,
             },
-            time: Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap()
-                + Duration::seconds(secs),
+            time: Utc.with_ymd_and_hms(2026, 6, 13, 10, 0, 0).unwrap() + Duration::seconds(secs),
         }
     }
 
@@ -273,15 +276,26 @@ mod tests {
     #[test]
     fn analyse_flight_errors_instead_of_panicking_on_short_tracks() {
         for n in [0usize, 1, 2, 10] {
-            let t = track((0..n).map(|i| point(50.0, 13.0, 1000.0, i as i64)).collect());
-            assert!(analyse_flight(&t).is_err(), "{n}-point track must err, not panic");
+            let t = track(
+                (0..n)
+                    .map(|i| point(50.0, 13.0, 1000.0, i as i64))
+                    .collect(),
+            );
+            assert!(
+                analyse_flight(&t).is_err(),
+                "{n}-point track must err, not panic"
+            );
         }
     }
 
     #[test]
     fn analyse_flight_succeeds_on_a_never_sinking_track() {
         // Long enough for the 60-sample windows, monotonically climbing → no finite glide.
-        let t = track((0..100).map(|i| point(50.0, 13.0, 1000.0 + i as f64, i as i64)).collect());
+        let t = track(
+            (0..100)
+                .map(|i| point(50.0, 13.0, 1000.0 + i as f64, i as i64))
+                .collect(),
+        );
         let a = analyse_flight(&t).unwrap();
         assert_eq!(a.avg_glide, 0.0);
         assert_eq!(a.min_glide, 0.0);

@@ -52,7 +52,12 @@ async fn main() -> Result<()> {
             match tour_sync_state.outdoor_repo.count().await {
                 Ok(0) => {
                     tracing::info!("No outdoor tours found, starting initial sync");
-                    if let Err(e) = application::outdoor_sync::sync_tours(tour_sync_state.outdoor_feed.as_ref(), tour_sync_state.outdoor_repo.as_ref()).await {
+                    if let Err(e) = application::outdoor_sync::sync_tours(
+                        tour_sync_state.outdoor_feed.as_ref(),
+                        tour_sync_state.outdoor_repo.as_ref(),
+                    )
+                    .await
+                    {
                         tracing::error!(error = ?e, "outdoor tour sync failed");
                     }
                 }
@@ -65,8 +70,11 @@ async fn main() -> Result<()> {
             let mut interval = time::interval_at(time::Instant::now() + period, period);
             loop {
                 interval.tick().await;
-                if let Err(e) =
-                    application::outdoor_sync::sync_events(event_sync_feed.as_ref(), event_sync_repo.as_ref()).await
+                if let Err(e) = application::outdoor_sync::sync_events(
+                    event_sync_feed.as_ref(),
+                    event_sync_repo.as_ref(),
+                )
+                .await
                 {
                     tracing::error!(error = ?e, "outdoor event sync failed");
                 } else {

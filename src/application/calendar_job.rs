@@ -82,8 +82,15 @@ pub async fn run(state: &AppState) -> Result<()> {
             let day = a.start.date_naive();
             if cur_day.is_some() && cur_day != Some(day) {
                 // Day changed: drive home from where the previous day ended.
-                event_counter +=
-                    emit_return_home(cal, &settings.calendar_name, state, &ctx.home, &prev, day_end).await?;
+                event_counter += emit_return_home(
+                    cal,
+                    &settings.calendar_name,
+                    state,
+                    &ctx.home,
+                    &prev,
+                    day_end,
+                )
+                .await?;
                 prev = ctx.home.clone();
                 day_end = None;
             }
@@ -112,8 +119,15 @@ pub async fn run(state: &AppState) -> Result<()> {
             }
         }
         // Final evening return home for the last day.
-        event_counter +=
-            emit_return_home(cal, &settings.calendar_name, state, &ctx.home, &prev, day_end).await?;
+        event_counter += emit_return_home(
+            cal,
+            &settings.calendar_name,
+            state,
+            &ctx.home,
+            &prev,
+            day_end,
+        )
+        .await?;
     }
 
     tracing::Span::current().record("event_count", event_counter);
@@ -182,7 +196,12 @@ fn activity_to_event(a: ScheduledActivity) -> CalendarEvent {
         is_all_day: false,
         color_id: color_for_kind(a.kind),
         location: Some(a.title),
-        body: Some(format!("{}\n\nLast updated (Utc): {}", a.description, Utc::now())),
+        body: Some(format!(
+            "{:?}\n\n{}\n\nLast updated (Utc): {}",
+            a.kind,
+            a.description,
+            Utc::now()
+        )),
     }
 }
 
@@ -250,7 +269,13 @@ mod tests {
     fn loc(name: &str) -> Location {
         Location::new(50.7, 13.0, name.into(), "DE".into())
     }
-    fn act(kind: ActivityKind, title: &str, location: Option<Location>, s: DateTime<Utc>, e: DateTime<Utc>) -> ScheduledActivity {
+    fn act(
+        kind: ActivityKind,
+        title: &str,
+        location: Option<Location>,
+        s: DateTime<Utc>,
+        e: DateTime<Utc>,
+    ) -> ScheduledActivity {
         ScheduledActivity {
             kind,
             location,
@@ -266,9 +291,27 @@ mod tests {
     fn coalesce_folds_contiguous_same_site_blocks() {
         let rana = || Some(loc("Rana"));
         let chain = vec![
-            act(ActivityKind::Paragliding, "Rana", rana(), ts(7, 0), ts(9, 0)),
-            act(ActivityKind::Paragliding, "Rana", rana(), ts(9, 0), ts(11, 0)),
-            act(ActivityKind::Paragliding, "Rana", rana(), ts(11, 0), ts(15, 0)),
+            act(
+                ActivityKind::Paragliding,
+                "Rana",
+                rana(),
+                ts(7, 0),
+                ts(9, 0),
+            ),
+            act(
+                ActivityKind::Paragliding,
+                "Rana",
+                rana(),
+                ts(9, 0),
+                ts(11, 0),
+            ),
+            act(
+                ActivityKind::Paragliding,
+                "Rana",
+                rana(),
+                ts(11, 0),
+                ts(15, 0),
+            ),
         ];
         let out = coalesce(chain);
         assert_eq!(out.len(), 1);
@@ -279,9 +322,27 @@ mod tests {
     fn coalesce_keeps_split_when_commitment_sits_between() {
         let rana = || Some(loc("Rana"));
         let chain = vec![
-            act(ActivityKind::Paragliding, "Rana", rana(), ts(7, 0), ts(11, 0)),
-            act(ActivityKind::Commitment, "Seminar", Some(loc("Uni")), ts(11, 0), ts(13, 0)),
-            act(ActivityKind::Paragliding, "Rana", rana(), ts(13, 0), ts(15, 0)),
+            act(
+                ActivityKind::Paragliding,
+                "Rana",
+                rana(),
+                ts(7, 0),
+                ts(11, 0),
+            ),
+            act(
+                ActivityKind::Commitment,
+                "Seminar",
+                Some(loc("Uni")),
+                ts(11, 0),
+                ts(13, 0),
+            ),
+            act(
+                ActivityKind::Paragliding,
+                "Rana",
+                rana(),
+                ts(13, 0),
+                ts(15, 0),
+            ),
         ];
         let out = coalesce(chain);
         // The meeting breaks the run → two Rana blocks survive around it.
@@ -295,8 +356,20 @@ mod tests {
         let rana = || Some(loc("Rana"));
         // A 30-min gap (> slack) with nothing between → left as two blocks.
         let chain = vec![
-            act(ActivityKind::Paragliding, "Rana", rana(), ts(7, 0), ts(9, 0)),
-            act(ActivityKind::Paragliding, "Rana", rana(), ts(9, 30), ts(11, 0)),
+            act(
+                ActivityKind::Paragliding,
+                "Rana",
+                rana(),
+                ts(7, 0),
+                ts(9, 0),
+            ),
+            act(
+                ActivityKind::Paragliding,
+                "Rana",
+                rana(),
+                ts(9, 30),
+                ts(11, 0),
+            ),
         ];
         assert_eq!(coalesce(chain).len(), 2);
     }

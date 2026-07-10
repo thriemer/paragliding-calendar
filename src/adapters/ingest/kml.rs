@@ -105,7 +105,8 @@ impl Track {
             return Err(anyhow!("No coordinates found in track placemark"));
         }
 
-        let base_time = time_of_first_point.ok_or_else(|| anyhow!("Missing time_of_first_point"))?;
+        let base_time =
+            time_of_first_point.ok_or_else(|| anyhow!("Missing time_of_first_point"))?;
         let base_datetime = parse_datetime(&base_time)?;
 
         let coord_strings: Vec<&str> = coords_raw

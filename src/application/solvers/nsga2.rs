@@ -6,17 +6,17 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
-use rand::{rngs::StdRng, RngExt, SeedableRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rayon::prelude::*;
 
-use tracing::{debug, info, instrument, Span};
+use tracing::{Span, debug, info, instrument};
 
 use crate::application::solvers::genome::{
-    decode, dedup_single_use, night_count, overnight_candidates, repair, Gene, GeneAction, Genome,
+    Gene, GeneAction, Genome, decode, dedup_single_use, night_count, overnight_candidates, repair,
 };
-use crate::application::solvers::placement::{crow_flies_drive, partition_segments, Segment};
+use crate::application::solvers::placement::{Segment, crow_flies_drive, partition_segments};
 use crate::domain::{
     activities::{ActivitySuggestion, TimeWindow},
     plan::{OvernightSpot, Plan},
@@ -84,8 +84,12 @@ impl WeekSolver for Nsga2Solver {
         // The GA is CPU-bound (rayon inside, sequential selection between generations). Run it on
         // the blocking pool so it doesn't park a tokio worker for the whole solve. The span is
         // propagated so field recording and per-generation logs stay attributed to this solve.
-        let (pop_size, generations, mutation_rate, seed) =
-            (self.pop_size, self.generations, self.mutation_rate, self.seed);
+        let (pop_size, generations, mutation_rate, seed) = (
+            self.pop_size,
+            self.generations,
+            self.mutation_rate,
+            self.seed,
+        );
         let span = Span::current();
         tokio::task::spawn_blocking(move || {
             let _guard = span.enter();
@@ -129,15 +133,28 @@ fn run_ga(
         let (rank, crowd) = rank_and_crowding(&pop);
         // Parent selection is sequential (rng not Send); crossover/eval are parallel.
         let pairs: Vec<(usize, usize)> = (0..pop_size)
-            .map(|_| (tournament(&pop, &rank, &crowd, &mut rng), tournament(&pop, &rank, &crowd, &mut rng)))
+            .map(|_| {
+                (
+                    tournament(&pop, &rank, &crowd, &mut rng),
+                    tournament(&pop, &rank, &crowd, &mut rng),
+                )
+            })
             .collect();
         let offspring: Vec<Individual> = pairs
             .into_par_iter()
             .enumerate()
             .map(|(i, (p1, p2))| {
-                let mut wrng = StdRng::seed_from_u64(seed ^ (generation as u64 * pop_size as u64 + i as u64));
+                let mut wrng =
+                    StdRng::seed_from_u64(seed ^ (generation as u64 * pop_size as u64 + i as u64));
                 let mut child = crossover(&pop[p1].genome, &pop[p2].genome, &mut wrng);
-                mutate(&mut child, &seg_pools, &segments, &overnight_pool, mutation_rate, &mut wrng);
+                mutate(
+                    &mut child,
+                    &seg_pools,
+                    &segments,
+                    &overnight_pool,
+                    mutation_rate,
+                    &mut wrng,
+                );
                 dedup_single_use(&mut child);
                 repair(&mut child, &input, &mut wrng);
                 Individual::new(child, &input)
@@ -148,9 +165,19 @@ fn run_ga(
         pop.extend(offspring);
         pop = select_next(pop, pop_size);
 
-        let best = pop.iter().max_by(|a, b| a.plan.total_fun.partial_cmp(&b.plan.total_fun).unwrap_or(Ordering::Equal));
+        let best = pop.iter().max_by(|a, b| {
+            a.plan
+                .total_fun
+                .partial_cmp(&b.plan.total_fun)
+                .unwrap_or(Ordering::Equal)
+        });
         if let Some(b) = best {
-            info!(generation, best_fun = b.plan.total_fun, best_drive_min = b.plan.total_drive.num_minutes(), "generation");
+            info!(
+                generation,
+                best_fun = b.plan.total_fun,
+                best_drive_min = b.plan.total_drive.num_minutes(),
+                "generation"
+            );
         }
     }
 
@@ -223,10 +250,16 @@ fn segment_pools(
 fn random_gene(pool: &[Arc<ActivitySuggestion>], rng: &mut StdRng) -> Gene {
     let duration = rng.random_range(0.0..1.0);
     if pool.is_empty() || rng.random_range(0.0..1.0) < 0.3 {
-        Gene { action: GeneAction::Wait, duration }
+        Gene {
+            action: GeneAction::Wait,
+            duration,
+        }
     } else {
         let act = pool[rng.random_range(0..pool.len())].clone();
-        Gene { action: GeneAction::Do(act), duration }
+        Gene {
+            action: GeneAction::Do(act),
+            duration,
+        }
     }
 }
 
@@ -246,7 +279,10 @@ fn random_genome(
     let overnight = (0..night_count(segments))
         .map(|_| overnight_pool[rng.random_range(0..overnight_pool.len())].clone())
         .collect();
-    Genome { segments: segment_genes, overnight }
+    Genome {
+        segments: segment_genes,
+        overnight,
+    }
 }
 
 // ---- domination, sorting, crowding -------------------------------------------------------
@@ -272,7 +308,9 @@ struct FenwickMax {
 
 impl FenwickMax {
     fn new(size: usize) -> Self {
-        Self { tree: vec![0; size + 1] }
+        Self {
+            tree: vec![0; size + 1],
+        }
     }
     /// Raise the value stored at 0-indexed `pos` to at least `val`.
     fn update(&mut self, pos: usize, val: i64) {
@@ -325,7 +363,11 @@ fn non_dominated_sort(pop: &[Individual]) -> Vec<Vec<usize>> {
 
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|&a, &b| {
-        pop[b].plan.total_fun.total_cmp(&pop[a].plan.total_fun).then(drive(a).cmp(&drive(b)))
+        pop[b]
+            .plan
+            .total_fun
+            .total_cmp(&pop[a].plan.total_fun)
+            .then(drive(a).cmp(&drive(b)))
     });
 
     let mut tree = FenwickMax::new(uniq.len());
@@ -385,10 +427,16 @@ fn crowding(front: &[usize], pop: &[Individual]) -> Vec<f32> {
 
     // Objective: fun.
     let mut order: Vec<usize> = (0..m).collect();
-    order.sort_by(|&x, &y| pop[front[x]].plan.total_fun.total_cmp(&pop[front[y]].plan.total_fun));
+    order.sort_by(|&x, &y| {
+        pop[front[x]]
+            .plan
+            .total_fun
+            .total_cmp(&pop[front[y]].plan.total_fun)
+    });
     dist[order[0]] = f32::INFINITY;
     dist[order[m - 1]] = f32::INFINITY;
-    let range = (pop[front[order[m - 1]]].plan.total_fun - pop[front[order[0]]].plan.total_fun).max(1e-9);
+    let range =
+        (pop[front[order[m - 1]]].plan.total_fun - pop[front[order[0]]].plan.total_fun).max(1e-9);
     for k in 1..m - 1 {
         let d = pop[front[order[k + 1]]].plan.total_fun - pop[front[order[k - 1]]].plan.total_fun;
         dist[order[k]] += d / range;
@@ -464,12 +512,21 @@ fn pick_alternatives(pop: &[Individual], num: usize) -> Vec<Plan> {
     let mut order: Vec<usize> = Vec::new();
     if let Some(front0) = fronts.first()
         && let Some(&best) = front0.iter().max_by(|&&a, &&b| {
-            pop[a].plan.total_fun.total_cmp(&pop[b].plan.total_fun).then_with(|| {
-                pop[b].plan.total_drive.num_seconds().cmp(&pop[a].plan.total_drive.num_seconds())
-            })
-        }) {
-            order.push(best);
-        }
+            pop[a]
+                .plan
+                .total_fun
+                .total_cmp(&pop[b].plan.total_fun)
+                .then_with(|| {
+                    pop[b]
+                        .plan
+                        .total_drive
+                        .num_seconds()
+                        .cmp(&pop[a].plan.total_drive.num_seconds())
+                })
+        })
+    {
+        order.push(best);
+    }
     for front in &fronts {
         let cd = crowding(front, pop);
         let mut idx: Vec<usize> = (0..front.len()).collect();
@@ -487,7 +544,10 @@ fn pick_alternatives(pop: &[Individual], num: usize) -> Vec<Plan> {
         if plan.items.is_empty() {
             continue;
         }
-        let sig = ((plan.total_fun * 1000.0) as i64, plan.total_drive.num_seconds());
+        let sig = (
+            (plan.total_fun * 1000.0) as i64,
+            plan.total_drive.num_seconds(),
+        );
         if seen.contains(&sig) {
             continue;
         }
@@ -531,9 +591,18 @@ fn crossover(a: &Genome, b: &Genome, rng: &mut StdRng) -> Genome {
         .overnight
         .iter()
         .zip(b.overnight.iter())
-        .map(|(oa, ob)| if rng.random_range(0.0..1.0) < 0.5 { oa.clone() } else { ob.clone() })
+        .map(|(oa, ob)| {
+            if rng.random_range(0.0..1.0) < 0.5 {
+                oa.clone()
+            } else {
+                ob.clone()
+            }
+        })
         .collect();
-    Genome { segments, overnight }
+    Genome {
+        segments,
+        overnight,
+    }
 }
 
 fn mutate(
@@ -563,7 +632,10 @@ fn mutate(
             seg.remove(at);
         }
         if hit(rng) && seg.len() >= 2 {
-            let (i, j) = (rng.random_range(0..seg.len()), rng.random_range(0..seg.len()));
+            let (i, j) = (
+                rng.random_range(0..seg.len()),
+                rng.random_range(0..seg.len()),
+            );
             seg.swap(i, j);
         }
     }
@@ -602,12 +674,12 @@ fn mutate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, Duration, TimeZone, Utc};
     use crate::domain::{
         activities::{ActivityKind, Score, TimeWindow, Timing},
         location::Location,
         plan::ScheduledActivity,
     };
+    use chrono::{DateTime, Duration, TimeZone, Utc};
 
     fn home() -> Location {
         Location::new(50.7, 13.0, "Home".into(), "DE".into())
@@ -626,12 +698,19 @@ mod tests {
             kind: ActivityKind::Paragliding,
             location: loc.clone(),
             timing: Timing::Flexible {
-                window: TimeWindow { start: ts(start_h), end: ts(end_h) },
+                window: TimeWindow {
+                    start: ts(start_h),
+                    end: ts(end_h),
+                },
                 min_duration: Duration::hours(2),
             },
             title: format!("flex-{}", loc.name),
             description: String::new(),
-            score: Some(Score { window_start: ts(start_h), hourly: vec![fun / hours; hours as usize], reasons: vec![] }),
+            score: Some(Score {
+                window_start: ts(start_h),
+                hourly: vec![fun / hours; hours as usize],
+                reasons: vec![],
+            }),
             allow_multiple: false,
         }
     }
@@ -642,10 +721,17 @@ mod tests {
             id: format!("fixed-{}", loc.name),
             kind: ActivityKind::Event,
             location: loc.clone(),
-            timing: Timing::Fixed { start: ts(start_h), end: ts(end_h) },
+            timing: Timing::Fixed {
+                start: ts(start_h),
+                end: ts(end_h),
+            },
             title: format!("fixed-{}", loc.name),
             description: String::new(),
-            score: Some(Score { window_start: ts(start_h), hourly: vec![fun / hours as f32; hours], reasons: vec![] }),
+            score: Some(Score {
+                window_start: ts(start_h),
+                hourly: vec![fun / hours as f32; hours],
+                reasons: vec![],
+            }),
             allow_multiple: false,
         }
     }
@@ -702,8 +788,18 @@ mod tests {
 
     /// A minimal individual carrying only the objectives the sort reads.
     fn ind(fun: f32, drive_min: i64) -> Individual {
-        let plan = Plan { items: vec![], total_fun: fun, total_drive: Duration::minutes(drive_min) };
-        Individual { genome: Genome { segments: vec![], overnight: vec![] }, plan }
+        let plan = Plan {
+            items: vec![],
+            total_fun: fun,
+            total_drive: Duration::minutes(drive_min),
+        };
+        Individual {
+            genome: Genome {
+                segments: vec![],
+                overnight: vec![],
+            },
+            plan,
+        }
     }
 
     #[test]
@@ -713,7 +809,11 @@ mod tests {
         // fun, equal drive, and points equal on both — the case patience-sort ties can break).
         for round in 0..40 {
             let n = 1 + (round % 60);
-            let (fun_range, drive_range) = if round % 3 == 0 { (3i32, 3i64) } else { (50, 50) };
+            let (fun_range, drive_range) = if round % 3 == 0 {
+                (3i32, 3i64)
+            } else {
+                (50, 50)
+            };
             let pop: Vec<Individual> = (0..n)
                 .map(|_| {
                     ind(
@@ -724,19 +824,32 @@ mod tests {
                 .collect();
             let fast = ranks(&non_dominated_sort(&pop), n);
             let refr = ranks(&non_dominated_sort_ref(&pop), n);
-            assert_eq!(fast, refr, "front partition mismatch (round {round}, n={n})");
+            assert_eq!(
+                fast, refr,
+                "front partition mismatch (round {round}, n={n})"
+            );
         }
     }
 
     /// A two-day free slot (→ per-day segments) and one flexible candidate per day.
     fn two_day_setup() -> (Vec<Segment>, Vec<Arc<ActivitySuggestion>>) {
-        let slot = TimeWindow { start: ts(8), end: ts(18) + Duration::days(1) };
+        let slot = TimeWindow {
+            start: ts(8),
+            end: ts(18) + Duration::days(1),
+        };
         let segments = partition_segments(&[slot], &[], &home());
-        assert!(segments.len() >= 2, "expected a per-day split, got {}", segments.len());
+        assert!(
+            segments.len() >= 2,
+            "expected a per-day split, got {}",
+            segments.len()
+        );
         let day0 = Arc::new(flex(site("A", 50.75), 9, 15, 0.5)); // window on day 0
         let day1 = Arc::new(ActivitySuggestion {
             timing: Timing::Flexible {
-                window: TimeWindow { start: ts(9) + Duration::days(1), end: ts(15) + Duration::days(1) },
+                window: TimeWindow {
+                    start: ts(9) + Duration::days(1),
+                    end: ts(15) + Duration::days(1),
+                },
                 min_duration: Duration::hours(2),
             },
             ..flex(site("B", 50.8), 9, 15, 0.5)
@@ -799,7 +912,10 @@ mod tests {
         SolverInput {
             candidates,
             origin: home(),
-            free_slots: vec![TimeWindow { start: ts(8), end: ts(18) }],
+            free_slots: vec![TimeWindow {
+                start: ts(8),
+                end: ts(18),
+            }],
             fixed: vec![],
             num_alternatives,
         }
@@ -838,7 +954,11 @@ mod tests {
             flex(site("B", 50.8), 10, 14, 0.9),
         ];
         let plans = small_solver().solve(base_input(cands, 1)).await.unwrap();
-        assert!(plans[0].total_fun >= 0.9 - 1e-4, "should reach B's fun, got {}", plans[0].total_fun);
+        assert!(
+            plans[0].total_fun >= 0.9 - 1e-4,
+            "should reach B's fun, got {}",
+            plans[0].total_fun
+        );
     }
 
     #[tokio::test]

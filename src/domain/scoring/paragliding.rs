@@ -129,7 +129,10 @@ fn wind_direction_score(wind_dir: u16, start: f64, stop: f64) -> f32 {
 
 fn score_hour(weather: &WeatherData, launch: &ParaglidingLaunch) -> (f32, String) {
     if !matches!(launch.site_type, SiteType::Hang) {
-        return (0.0, "Winch launch site is not suitable for free flying".into());
+        return (
+            0.0,
+            "Winch launch site is not suitable for free flying".into(),
+        );
     }
     if weather.precipitation != 0.0 {
         return (
@@ -237,7 +240,11 @@ pub async fn evaluate_site(
             });
         }
 
-        let mut daily_summary = DailySummary { date, hourly_scores, ranges: vec![] };
+        let mut daily_summary = DailySummary {
+            date,
+            hourly_scores,
+            ranges: vec![],
+        };
         daily_summary.calculate_flyable_time_ranges();
         daily_summaries.push(daily_summary);
     }
@@ -536,7 +543,10 @@ mod tests {
         w.cloud_cover = 20;
         let (score, reason) = score_hour(&w, &l);
         assert!(score > 0.0);
-        assert!(reason.contains("Thermal"), "Expected thermal, got: {reason}");
+        assert!(
+            reason.contains("Thermal"),
+            "Expected thermal, got: {reason}"
+        );
     }
 
     #[test]

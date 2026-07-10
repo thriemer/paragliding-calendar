@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use chrono::Duration;
 use rand::RngExt;
-use reqwest::{StatusCode, Client};
+use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use tracing::instrument;
 
@@ -25,11 +25,7 @@ impl Graphhopper {
         Self { cache, http }
     }
 
-    async fn get_travel_time_call(
-        &self,
-        source: &Location,
-        destination: &Location,
-    ) -> Result<u64> {
+    async fn get_travel_time_call(&self, source: &Location, destination: &Location) -> Result<u64> {
         tracing::debug!("Calling the API");
         let url = format!(
             "https://graphhopper.com/api/1/route?point={},{}&point={},{}&profile=car&points_encoded=false&calc_points=false&key={}",
@@ -50,8 +46,8 @@ impl Graphhopper {
                         let headers = response.headers().clone();
                         let body = response.text().await.unwrap_or_default();
                         if body.contains("Minutely") {
-                            let wait = parse_retry_after(&headers)
-                                .unwrap_or(StdDuration::from_secs(60));
+                            let wait =
+                                parse_retry_after(&headers).unwrap_or(StdDuration::from_secs(60));
                             tracing::warn!(
                                 attempt,
                                 wait_ms = wait.as_millis(),
@@ -69,7 +65,8 @@ impl Graphhopper {
                     }
                     let parsed: ApiResponse = response.json().await?;
                     return parsed
-                        .paths.first()
+                        .paths
+                        .first()
                         .map(|path| path.time / 1000)
                         .ok_or(anyhow!("No paths in response"));
                 }
@@ -82,8 +79,9 @@ impl Graphhopper {
             }
         }
 
-        Err(last_error
-            .unwrap_or(anyhow!("GraphHopper request failed after {MAX_RETRIES} retries")))
+        Err(last_error.unwrap_or(anyhow!(
+            "GraphHopper request failed after {MAX_RETRIES} retries"
+        )))
     }
 }
 
@@ -104,11 +102,7 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<StdDuration
 #[async_trait]
 impl RoutingProvider for Graphhopper {
     #[instrument(skip(self))]
-    async fn get_travel_time(
-        &self,
-        source: &Location,
-        destination: &Location,
-    ) -> Result<Duration> {
+    async fn get_travel_time(&self, source: &Location, destination: &Location) -> Result<Duration> {
         let key = source.to_key() + "-" + &destination.to_key();
 
         if let Some(cached) = self.cache.get::<u64>(&key).await? {

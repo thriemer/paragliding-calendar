@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::Deserialize;
 
 use super::detail_url;
-use crate::domain::{tour::Tour, location::Location};
+use crate::domain::{location::Location, tour::Tour};
 
 pub fn parse_tour(json: &str) -> Result<Tour> {
     let resp: OAResponse = serde_json::from_str(json)?;
@@ -39,10 +39,7 @@ pub fn parse_tour(json: &str) -> Result<Tour> {
         None => (0, 0),
     };
 
-    let is_loop = tour
-        .properties
-        .iter()
-        .any(|p| p.name == "loopTour");
+    let is_loop = tour.properties.iter().any(|p| p.name == "loopTour");
 
     let season_bitmask = season_to_bitmask(&tour.season);
 
@@ -69,9 +66,18 @@ pub fn parse_tour(json: &str) -> Result<Tour> {
 
 fn season_to_bitmask(season: &OASeason) -> u16 {
     let months = [
-        &season.jan, &season.feb, &season.mar, &season.apr,
-        &season.may, &season.jun, &season.jul, &season.aug,
-        &season.sep, &season.oct, &season.nov, &season.dec,
+        &season.jan,
+        &season.feb,
+        &season.mar,
+        &season.apr,
+        &season.may,
+        &season.jun,
+        &season.jul,
+        &season.aug,
+        &season.sep,
+        &season.oct,
+        &season.nov,
+        &season.dec,
     ];
     let mut mask: u16 = 0;
     for (i, val) in months.iter().enumerate() {

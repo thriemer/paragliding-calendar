@@ -9,7 +9,7 @@ use super::with_source_url;
 use crate::domain::{
     activities::{ActivitySuggestion, Score, TimeWindow, Timing, kind_from_category},
     plan::PlanningContext,
-    ports::{ActivitySource, TourRepository, SettingsRepository, WeatherProvider},
+    ports::{ActivitySource, SettingsRepository, TourRepository, WeatherProvider},
     scoring::tours::{intrinsic_quality, weather_suitability},
     weather::{self, WeatherData},
 };
@@ -35,7 +35,11 @@ impl TourActivitySource {
         settings_repo: Arc<dyn SettingsRepository>,
         weather: Arc<dyn WeatherProvider>,
     ) -> Self {
-        Self { tour_repo, settings_repo, weather }
+        Self {
+            tour_repo,
+            settings_repo,
+            weather,
+        }
     }
 }
 
@@ -73,14 +77,18 @@ impl ActivitySource for TourActivitySource {
             // Group the forecast by calendar day so each in-season day yields one daylight window.
             let mut by_day: HashMap<NaiveDate, Vec<WeatherData>> = HashMap::new();
             for wd in forecast.forecast {
-                by_day.entry(wd.timestamp.date_naive()).or_default().push(wd);
+                by_day
+                    .entry(wd.timestamp.date_naive())
+                    .or_default()
+                    .push(wd);
             }
 
             for (date, mut day) in by_day {
                 if !tour.in_season(date.month()) {
                     continue;
                 }
-                let Ok((sunrise, sunset)) = weather::get_sunrise_sunset(&tour.location, date) else {
+                let Ok((sunrise, sunset)) = weather::get_sunrise_sunset(&tour.location, date)
+                else {
                     continue;
                 };
                 day.sort_by_key(|w| w.timestamp);
@@ -103,14 +111,21 @@ impl ActivitySource for TourActivitySource {
 
                 let window_start = daylight.first().unwrap().timestamp;
                 let window_end = daylight.last().unwrap().timestamp + Duration::hours(1);
-                let score = Score { window_start, hourly, reasons };
+                let score = Score {
+                    window_start,
+                    hourly,
+                    reasons,
+                };
 
                 out.push(ActivitySuggestion {
                     id: tour.id.clone(),
                     kind,
                     location: tour.location.clone(),
                     timing: Timing::ExactDuration {
-                        window: TimeWindow { start: window_start, end: window_end },
+                        window: TimeWindow {
+                            start: window_start,
+                            end: window_end,
+                        },
                         duration: Duration::minutes(tour.duration_minutes as i64),
                     },
                     title: tour.title.clone(),
@@ -130,10 +145,10 @@ mod tests {
     use super::*;
     use crate::domain::{
         activities::ActivityKind,
-        tour::Tour,
         location::Location,
-        ports::{MockTourRepository, MockSettingsRepository, MockWeatherProvider},
+        ports::{MockSettingsRepository, MockTourRepository, MockWeatherProvider},
         settings::UserSettings,
+        tour::Tour,
         weather::WeatherForecast,
     };
     use chrono::{TimeZone, Utc};
@@ -242,7 +257,9 @@ mod tests {
         repo.expect_find_within_radius()
             .returning(move |_, _| Ok(tours.iter().cloned().map(|t| (t, 5.0)).collect()));
         let mut weather = MockWeatherProvider::new();
-        weather.expect_get_forecast().returning(move |_, _| Ok(forecast.clone()));
+        weather
+            .expect_get_forecast()
+            .returning(move |_, _| Ok(forecast.clone()));
         let source =
             TourActivitySource::new(Arc::new(repo), Arc::new(mock_settings()), Arc::new(weather));
         source.suggest(&ctx()).await.unwrap()
@@ -250,20 +267,32 @@ mod tests {
 
     #[tokio::test]
     async fn non_loop_tour_is_skipped() {
-        let out = run(vec![tour("Wanderung", false, 0b1111_1111_1111)], nice_forecast()).await;
+        let out = run(
+            vec![tour("Wanderung", false, 0b1111_1111_1111)],
+            nice_forecast(),
+        )
+        .await;
         assert!(out.is_empty());
     }
 
     #[tokio::test]
     async fn out_of_season_tour_yields_nothing() {
         // Season = January only; horizon is June.
-        let out = run(vec![tour("Wanderung", true, 0b0000_0000_0001)], nice_forecast()).await;
+        let out = run(
+            vec![tour("Wanderung", true, 0b0000_0000_0001)],
+            nice_forecast(),
+        )
+        .await;
         assert!(out.is_empty());
     }
 
     #[tokio::test]
     async fn in_season_loop_produces_one_daylight_suggestion() {
-        let out = run(vec![tour("Wanderung", true, 0b1111_1111_1111)], nice_forecast()).await;
+        let out = run(
+            vec![tour("Wanderung", true, 0b1111_1111_1111)],
+            nice_forecast(),
+        )
+        .await;
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].kind, ActivityKind::Hiking);
         let score = out[0].score.as_ref().unwrap();
@@ -274,10 +303,21 @@ mod tests {
     #[tokio::test]
     async fn kind_specific_weather_hiking_beats_kayaking_when_windy() {
         // Same windy/wet day: wind on open water crushes kayaking far more than hiking.
-        let hike = run(vec![tour("Wanderung", true, 0b1111_1111_1111)], windy_wet_forecast()).await;
-        let kayak = run(vec![tour("Kanu", true, 0b1111_1111_1111)], windy_wet_forecast()).await;
+        let hike = run(
+            vec![tour("Wanderung", true, 0b1111_1111_1111)],
+            windy_wet_forecast(),
+        )
+        .await;
+        let kayak = run(
+            vec![tour("Kanu", true, 0b1111_1111_1111)],
+            windy_wet_forecast(),
+        )
+        .await;
         let hike_fun = hike[0].score.as_ref().unwrap().total();
         let kayak_fun = kayak[0].score.as_ref().unwrap().total();
-        assert!(hike_fun > kayak_fun, "hike {hike_fun} should beat kayak {kayak_fun} when windy");
+        assert!(
+            hike_fun > kayak_fun,
+            "hike {hike_fun} should beat kayak {kayak_fun} when windy"
+        );
     }
 }

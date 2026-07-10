@@ -274,7 +274,10 @@ mod tests {
     fn launch_range_with_unknown_direction_is_dropped() {
         let loc = location_with_text("XYZ-S");
         let ranges = loc.get_launch_ranges();
-        assert!(ranges.is_empty(), "unknown directions should be skipped, not become north");
+        assert!(
+            ranges.is_empty(),
+            "unknown directions should be skipped, not become north"
+        );
     }
 
     fn location_with_text(text: &str) -> DHVLocation {

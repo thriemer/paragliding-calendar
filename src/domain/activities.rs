@@ -61,7 +61,7 @@ impl TimeWindow {
 
 #[derive(Debug, Clone)]
 pub enum Timing {
-   Fixed {
+    Fixed {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     },
@@ -82,7 +82,10 @@ impl Timing {
     /// given placement segment before the solver ever tries to schedule it.
     pub fn window(&self) -> TimeWindow {
         match self {
-            Timing::Fixed { start, end } => TimeWindow { start: *start, end: *end },
+            Timing::Fixed { start, end } => TimeWindow {
+                start: *start,
+                end: *end,
+            },
             Timing::Flexible { window, .. } | Timing::ExactDuration { window, .. } => *window,
         }
     }
@@ -194,17 +197,32 @@ mod tests {
         let whole = s.fun_between(ws, ws + Duration::hours(4));
         let split = s.fun_between(ws, ws + Duration::hours(2))
             + s.fun_between(ws + Duration::hours(2), ws + Duration::hours(4));
-        assert!((whole - split).abs() < 1e-6, "whole {whole} != split {split}");
+        assert!(
+            (whole - split).abs() < 1e-6,
+            "whole {whole} != split {split}"
+        );
     }
 
     #[test]
     fn category_mapping_covers_the_five_kinds() {
         assert_eq!(kind_from_category("Wanderung"), Some(ActivityKind::Hiking));
-        assert_eq!(kind_from_category("Winterwandern"), Some(ActivityKind::Hiking));
-        assert_eq!(kind_from_category("Mountainbike"), Some(ActivityKind::Biking));
+        assert_eq!(
+            kind_from_category("Winterwandern"),
+            Some(ActivityKind::Hiking)
+        );
+        assert_eq!(
+            kind_from_category("Mountainbike"),
+            Some(ActivityKind::Biking)
+        );
         assert_eq!(kind_from_category("Radtour"), Some(ActivityKind::Biking));
-        assert_eq!(kind_from_category("Trailrunning"), Some(ActivityKind::Running));
-        assert_eq!(kind_from_category("Bergtour"), Some(ActivityKind::MountainClimbing));
+        assert_eq!(
+            kind_from_category("Trailrunning"),
+            Some(ActivityKind::Running)
+        );
+        assert_eq!(
+            kind_from_category("Bergtour"),
+            Some(ActivityKind::MountainClimbing)
+        );
         assert_eq!(kind_from_category("Kanu"), Some(ActivityKind::Kayaking));
         // Out of scope → skipped.
         assert_eq!(kind_from_category("Skitour"), None);

@@ -114,7 +114,10 @@ mod tests {
         let cache = PersistentCache::new(test_pool().await);
         cache.put("k", 42u32, Duration::ZERO).await.unwrap();
         let got: Option<u32> = cache.get("k").await.unwrap();
-        assert!(got.is_none(), "expires_at == now should be expired (strict <)");
+        assert!(
+            got.is_none(),
+            "expires_at == now should be expired (strict <)"
+        );
     }
 
     #[tokio::test]
@@ -132,14 +135,8 @@ mod tests {
     #[tokio::test]
     async fn put_overwrites_existing_entry_and_resets_ttl() {
         let cache = PersistentCache::new(test_pool().await);
-        cache
-            .put("k", 1u32, Duration::from_secs(60))
-            .await
-            .unwrap();
-        cache
-            .put("k", 2u32, Duration::from_secs(60))
-            .await
-            .unwrap();
+        cache.put("k", 1u32, Duration::from_secs(60)).await.unwrap();
+        cache.put("k", 2u32, Duration::from_secs(60)).await.unwrap();
         let got: Option<u32> = cache.get("k").await.unwrap();
         assert_eq!(got, Some(2));
     }

@@ -26,22 +26,44 @@ struct Sensitivity {
 fn sensitivity(kind: ActivityKind) -> Sensitivity {
     match kind {
         // Wet rock / exposed ridges — rain and wind matter most.
-        ActivityKind::MountainClimbing => {
-            Sensitivity { rain_kill: 2.0, wind_ok: 8.0, wind_kill: 15.0, ideal_temp: 15.0, temp_span: 18.0 }
-        }
+        ActivityKind::MountainClimbing => Sensitivity {
+            rain_kill: 2.0,
+            wind_ok: 8.0,
+            wind_kill: 15.0,
+            ideal_temp: 15.0,
+            temp_span: 18.0,
+        },
         // Wind on open water is the killer.
-        ActivityKind::Kayaking => {
-            Sensitivity { rain_kill: 6.0, wind_ok: 5.0, wind_kill: 12.0, ideal_temp: 20.0, temp_span: 18.0 }
-        }
+        ActivityKind::Kayaking => Sensitivity {
+            rain_kill: 6.0,
+            wind_ok: 5.0,
+            wind_kill: 12.0,
+            ideal_temp: 20.0,
+            temp_span: 18.0,
+        },
         // Dislikes rain; heat-sensitive (narrow, cool comfort band).
-        ActivityKind::Running => {
-            Sensitivity { rain_kill: 6.0, wind_ok: 10.0, wind_kill: 20.0, ideal_temp: 12.0, temp_span: 14.0 }
-        }
-        ActivityKind::Biking => {
-            Sensitivity { rain_kill: 4.0, wind_ok: 8.0, wind_kill: 18.0, ideal_temp: 18.0, temp_span: 18.0 }
-        }
+        ActivityKind::Running => Sensitivity {
+            rain_kill: 6.0,
+            wind_ok: 10.0,
+            wind_kill: 20.0,
+            ideal_temp: 12.0,
+            temp_span: 14.0,
+        },
+        ActivityKind::Biking => Sensitivity {
+            rain_kill: 4.0,
+            wind_ok: 8.0,
+            wind_kill: 18.0,
+            ideal_temp: 18.0,
+            temp_span: 18.0,
+        },
         // Hiking (and the default) — most weather-tolerant.
-        _ => Sensitivity { rain_kill: 8.0, wind_ok: 12.0, wind_kill: 25.0, ideal_temp: 15.0, temp_span: 20.0 },
+        _ => Sensitivity {
+            rain_kill: 8.0,
+            wind_ok: 12.0,
+            wind_kill: 25.0,
+            ideal_temp: 15.0,
+            temp_span: 20.0,
+        },
     }
 }
 

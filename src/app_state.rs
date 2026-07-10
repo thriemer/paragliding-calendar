@@ -22,8 +22,8 @@ use crate::{
     },
     config::AppConfig,
     domain::ports::{
-        ActivitySource, CalendarProvider, HappeningRepository, GeoProvider, CatalogFeed,
-        TourRepository, RoutingProvider, SettingsRepository, SiteRepository, WeatherProvider,
+        ActivitySource, CalendarProvider, CatalogFeed, GeoProvider, HappeningRepository,
+        RoutingProvider, SettingsRepository, SiteRepository, TourRepository, WeatherProvider,
         WeekSolver,
     },
 };
@@ -80,16 +80,20 @@ impl AppState {
         let weather: Arc<dyn WeatherProvider> = open_meteo.clone();
         let geo: Arc<dyn GeoProvider> = open_meteo;
 
-        let paragliding_source: Arc<dyn ActivitySource> = Arc::new(
-            ParaglidingActivitySource::new(site_repo.clone(), settings_repo.clone(), weather.clone()),
-        );
+        let paragliding_source: Arc<dyn ActivitySource> = Arc::new(ParaglidingActivitySource::new(
+            site_repo.clone(),
+            settings_repo.clone(),
+            weather.clone(),
+        ));
         let tour_source: Arc<dyn ActivitySource> = Arc::new(TourActivitySource::new(
             outdoor_repo.clone(),
             settings_repo.clone(),
             weather.clone(),
         ));
-        let event_source: Arc<dyn ActivitySource> =
-            Arc::new(EventActivitySource::new(event_repo.clone(), settings_repo.clone()));
+        let event_source: Arc<dyn ActivitySource> = Arc::new(EventActivitySource::new(
+            event_repo.clone(),
+            settings_repo.clone(),
+        ));
         let solver: Arc<dyn WeekSolver> = Arc::new(Nsga2Solver::new());
         let planner = Arc::new(Planner::new(
             vec![paragliding_source, tour_source, event_source],

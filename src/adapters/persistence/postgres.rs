@@ -4,12 +4,12 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use crate::domain::{
-    tour::Tour,
+    happening::{Happening, HappeningDate},
     location::Location,
-    happening::{HappeningDate, Happening},
     paragliding::{ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, SiteType},
-    ports::{HappeningRepository, TourRepository, SettingsRepository, SiteRepository},
+    ports::{HappeningRepository, SettingsRepository, SiteRepository, TourRepository},
     settings::UserSettings,
+    tour::Tour,
 };
 
 pub struct PostgresRepository {
@@ -520,15 +520,15 @@ impl EventWithDistRow {
                             .as_str()?
                             .parse::<DateTime<Utc>>()
                             .ok()?;
-                        let time_to = v
-                            .get("time_to")?
-                            .as_str()?
-                            .parse::<DateTime<Utc>>()
-                            .ok()?;
+                        let time_to = v.get("time_to")?.as_str()?.parse::<DateTime<Utc>>().ok()?;
                         let date_text = v
                             .get("date_text")
                             .and_then(|v| v.as_str().map(String::from));
-                        Some(HappeningDate { time_from, time_to, date_text })
+                        Some(HappeningDate {
+                            time_from,
+                            time_to,
+                            date_text,
+                        })
                     })
                     .collect()
             })
@@ -739,7 +739,9 @@ mod tests {
             .unwrap();
 
         let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
-        let result = SiteRepository::find_within_radius(&repo, &home, 50.0).await.unwrap();
+        let result = SiteRepository::find_within_radius(&repo, &home, 50.0)
+            .await
+            .unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0.name, "near");
@@ -759,7 +761,9 @@ mod tests {
             .unwrap();
 
         let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
-        let result = SiteRepository::find_within_radius(&repo, &home, 50.0).await.unwrap();
+        let result = SiteRepository::find_within_radius(&repo, &home, 50.0)
+            .await
+            .unwrap();
 
         assert_eq!(result.len(), 3);
         let names: Vec<&str> = result.iter().map(|(s, _)| s.name.as_str()).collect();
@@ -833,7 +837,13 @@ mod tests {
 
         insert_event(pool, "e1", "Mountain Hike", 50.71, 13.01).await;
         let now = Utc::now();
-        insert_date(pool, "e1", now + chrono::Duration::hours(1), now + chrono::Duration::hours(3)).await;
+        insert_date(
+            pool,
+            "e1",
+            now + chrono::Duration::hours(1),
+            now + chrono::Duration::hours(3),
+        )
+        .await;
 
         let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
         let result = repo
@@ -852,7 +862,13 @@ mod tests {
 
         insert_event(pool, "e1", "Far Event", 55.0, 13.0).await;
         let now = Utc::now();
-        insert_date(pool, "e1", now + chrono::Duration::hours(1), now + chrono::Duration::hours(3)).await;
+        insert_date(
+            pool,
+            "e1",
+            now + chrono::Duration::hours(1),
+            now + chrono::Duration::hours(3),
+        )
+        .await;
 
         let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
         let result = repo
@@ -870,7 +886,13 @@ mod tests {
 
         insert_event(pool, "e1", "Past Event", 50.71, 13.01).await;
         let now = Utc::now();
-        insert_date(pool, "e1", now - chrono::Duration::days(10), now - chrono::Duration::days(9)).await;
+        insert_date(
+            pool,
+            "e1",
+            now - chrono::Duration::days(10),
+            now - chrono::Duration::days(9),
+        )
+        .await;
 
         let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
         let result = repo
@@ -888,7 +910,13 @@ mod tests {
 
         insert_event(pool, "e1", "Near", 50.71, 13.01).await;
         let now = Utc::now();
-        insert_date(pool, "e1", now + chrono::Duration::hours(1), now + chrono::Duration::hours(3)).await;
+        insert_date(
+            pool,
+            "e1",
+            now + chrono::Duration::hours(1),
+            now + chrono::Duration::hours(3),
+        )
+        .await;
 
         let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
         let result = repo
@@ -909,8 +937,20 @@ mod tests {
 
         insert_event(pool, "e1", "Recurring", 50.71, 13.01).await;
         let now = Utc::now();
-        insert_date(pool, "e1", now + chrono::Duration::hours(1), now + chrono::Duration::hours(2)).await;
-        insert_date(pool, "e1", now + chrono::Duration::days(1), now + chrono::Duration::days(1) + chrono::Duration::hours(2)).await;
+        insert_date(
+            pool,
+            "e1",
+            now + chrono::Duration::hours(1),
+            now + chrono::Duration::hours(2),
+        )
+        .await;
+        insert_date(
+            pool,
+            "e1",
+            now + chrono::Duration::days(1),
+            now + chrono::Duration::days(1) + chrono::Duration::hours(2),
+        )
+        .await;
 
         let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
         let result = repo
@@ -930,7 +970,13 @@ mod tests {
         insert_event(pool, "e1", "Ongoing", 50.71, 13.01).await;
         let now = Utc::now();
         // Event starts before the query window but ends inside it
-        insert_date(pool, "e1", now - chrono::Duration::days(1), now + chrono::Duration::days(1)).await;
+        insert_date(
+            pool,
+            "e1",
+            now - chrono::Duration::days(1),
+            now + chrono::Duration::days(1),
+        )
+        .await;
 
         let home = Location::new(50.7, 13.0, "Home".into(), "DE".into());
         let result = repo

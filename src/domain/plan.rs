@@ -27,7 +27,10 @@ pub struct OvernightSpot {
 
 impl OvernightSpot {
     pub fn home(location: Location) -> Self {
-        Self { location, kind: OvernightKind::Home }
+        Self {
+            location,
+            kind: OvernightKind::Home,
+        }
     }
 }
 

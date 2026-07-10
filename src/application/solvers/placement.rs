@@ -6,9 +6,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 
-use crate::domain::{
-    location::Location, plan::ScheduledActivity, weather::overnight_deadline,
-};
+use crate::domain::{location::Location, plan::ScheduledActivity, weather::overnight_deadline};
 
 // ponytail: GA only needs an over-estimate. 70 km/h × 1.5 circuity, straight-line, no cache —
 // it's cheaper to recompute than to store an N×N matrix. Real times come from GraphHopper for
@@ -91,7 +89,13 @@ pub fn partition_segments(
         let mut start_loc: Option<Location> = None;
         for c in overlapping {
             if cursor < c.start {
-                segments.extend(split_by_day(cursor, c.start, start_loc.clone(), c.location.clone(), home));
+                segments.extend(split_by_day(
+                    cursor,
+                    c.start,
+                    start_loc.clone(),
+                    c.location.clone(),
+                    home,
+                ));
             }
             cursor = c.end.max(cursor);
             start_loc = c.location.clone();
@@ -122,16 +126,32 @@ fn split_by_day(
         let date = day_start.date_naive();
         // `start_loc` pins only the first emitted sub-segment (the piece's entry location); later
         // days start from the carried overnight location.
-        let seg_start_loc = if out.is_empty() { start_loc.clone() } else { None };
+        let seg_start_loc = if out.is_empty() {
+            start_loc.clone()
+        } else {
+            None
+        };
 
         if end.date_naive() == date {
-            out.push(Segment { start: day_start, end, start_loc: seg_start_loc, end_loc: end_loc.clone(), night_end: false });
+            out.push(Segment {
+                start: day_start,
+                end,
+                start_loc: seg_start_loc,
+                end_loc: end_loc.clone(),
+                night_end: false,
+            });
             break;
         }
 
         let deadline = overnight_deadline(home, date);
         if day_start < deadline {
-            out.push(Segment { start: day_start, end: deadline, start_loc: seg_start_loc, end_loc: None, night_end: true });
+            out.push(Segment {
+                start: day_start,
+                end: deadline,
+                start_loc: seg_start_loc,
+                end_loc: None,
+                night_end: true,
+            });
         }
         let next = date.succ_opt().expect("date within chrono range");
         day_start = next.and_time(NaiveTime::MIN).and_utc();
@@ -176,7 +196,10 @@ mod tests {
 
     #[test]
     fn no_commitments_yields_one_segment_per_slot() {
-        let slots = vec![TimeWindow { start: ts(8), end: ts(18) }];
+        let slots = vec![TimeWindow {
+            start: ts(8),
+            end: ts(18),
+        }];
         let segs = partition_segments(&slots, &[], &loc("Home"));
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].start, ts(8));
@@ -188,10 +211,16 @@ mod tests {
     #[test]
     fn multi_day_slot_splits_per_day_with_night_boundaries() {
         // A 3-day slot with no commitments → three day-pieces; the first two end at a night.
-        let slots = vec![TimeWindow { start: ts(8), end: ts(18) + Duration::days(2) }];
+        let slots = vec![TimeWindow {
+            start: ts(8),
+            end: ts(18) + Duration::days(2),
+        }];
         let segs = partition_segments(&slots, &[], &loc("Home"));
         assert_eq!(segs.len(), 3, "one placeable piece per day");
-        assert!(segs[0].night_end && segs[1].night_end, "days before the last end at a night");
+        assert!(
+            segs[0].night_end && segs[1].night_end,
+            "days before the last end at a night"
+        );
         assert!(!segs[2].night_end, "the last day is not a night boundary");
         // Each night piece ends at that day's sunset − 1h, before the calendar-day rollover.
         assert!(segs[0].end < ts(8) + Duration::days(1));
@@ -199,8 +228,15 @@ mod tests {
 
     #[test]
     fn located_commitment_splits_slot_and_pins_boundary() {
-        let slots = vec![TimeWindow { start: ts(8), end: ts(18) }];
-        let segs = partition_segments(&slots, &[commitment(12, 13, Some(loc("Office")))], &loc("Home"));
+        let slots = vec![TimeWindow {
+            start: ts(8),
+            end: ts(18),
+        }];
+        let segs = partition_segments(
+            &slots,
+            &[commitment(12, 13, Some(loc("Office")))],
+            &loc("Home"),
+        );
         assert_eq!(segs.len(), 2);
         // before: 8→12, ends at the office
         assert_eq!((segs[0].start, segs[0].end), (ts(8), ts(12)));
@@ -217,11 +253,20 @@ mod tests {
         // The planner subtracts events from free slots, so the commitment sits exactly in the
         // gap: [8,12] + meeting [12,13] + [13,18]. Touching must pin like overlapping does.
         let slots = vec![
-            TimeWindow { start: ts(8), end: ts(12) },
-            TimeWindow { start: ts(13), end: ts(18) },
+            TimeWindow {
+                start: ts(8),
+                end: ts(12),
+            },
+            TimeWindow {
+                start: ts(13),
+                end: ts(18),
+            },
         ];
-        let segs =
-            partition_segments(&slots, &[commitment(12, 13, Some(loc("Office")))], &loc("Home"));
+        let segs = partition_segments(
+            &slots,
+            &[commitment(12, 13, Some(loc("Office")))],
+            &loc("Home"),
+        );
         assert_eq!(segs.len(), 2);
         assert_eq!((segs[0].start, segs[0].end), (ts(8), ts(12)));
         assert_eq!(segs[0].end_loc.as_ref().unwrap().name, "Office");
@@ -231,7 +276,10 @@ mod tests {
 
     #[test]
     fn online_commitment_splits_time_but_carries_location() {
-        let slots = vec![TimeWindow { start: ts(8), end: ts(18) }];
+        let slots = vec![TimeWindow {
+            start: ts(8),
+            end: ts(18),
+        }];
         let segs = partition_segments(&slots, &[commitment(12, 13, None)], &loc("Home"));
         assert_eq!(segs.len(), 2);
         assert_eq!((segs[0].start, segs[0].end), (ts(8), ts(12)));
