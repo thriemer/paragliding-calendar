@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use reqwest_middleware::ClientBuilder;
-use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
-use reqwest_tracing::TracingMiddleware;
 use sqlx::PgPool;
 
 use crate::{
@@ -16,7 +13,7 @@ use crate::{
         ingest::outdooractive_feed::OutdoorActiveFeed,
         open_meteo::OpenMeteoClient,
         persistence::{cache::PersistentCache, postgres::PostgresRepository},
-        routing::valhalla::Valhalla,
+        routing::Graphhopper,
     },
     application::{
         Planner,
@@ -76,13 +73,8 @@ impl AppState {
             ))
         });
 
-        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
-        let http = ClientBuilder::new(reqwest::Client::new())
-            .with(TracingMiddleware::default())
-            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-            .build();
         let routing: Arc<dyn RoutingProvider> =
-            Arc::new(Valhalla::new(cfg.valhalla_base_url.clone(), cache.clone(), http));
+            Arc::new(Graphhopper::new(cache.clone(), reqwest::Client::new()));
 
         let open_meteo = Arc::new(OpenMeteoClient::new(cache.clone()));
         let weather: Arc<dyn WeatherProvider> = open_meteo.clone();
@@ -98,7 +90,7 @@ impl AppState {
         ));
         let event_source: Arc<dyn ActivitySource> =
             Arc::new(EventActivitySource::new(event_repo.clone(), settings_repo.clone()));
-        let solver: Arc<dyn WeekSolver> = Arc::new(Nsga2Solver::new(routing.clone()));
+        let solver: Arc<dyn WeekSolver> = Arc::new(Nsga2Solver::new());
         let planner = Arc::new(Planner::new(
             vec![paragliding_source, tour_source, event_source],
             solver.clone(),

@@ -185,10 +185,7 @@ mod tests {
         domain::{
             activities::Score,
             location::Location,
-            ports::{
-                MockActivitySource, MockCalendarProvider, MockGeoProvider, MockRoutingProvider,
-                RoutingProvider,
-            },
+            ports::{MockActivitySource, MockCalendarProvider, MockGeoProvider},
         },
     };
     use chrono::{TimeDelta, TimeZone};
@@ -302,14 +299,6 @@ mod tests {
         Arc::new(MockGeoProvider::new())
     }
 
-    fn fixed_travel() -> Arc<dyn RoutingProvider> {
-        let mut r = MockRoutingProvider::new();
-        r.expect_travel_time_matrix().returning(|locs| {
-            Ok(vec![vec![TimeDelta::minutes(30); locs.len()]; locs.len()])
-        });
-        Arc::new(r)
-    }
-
     fn source_with(suggestions: Vec<ActivitySuggestion>) -> Arc<dyn ActivitySource> {
         let mut src = MockActivitySource::new();
         src.expect_suggest()
@@ -317,8 +306,8 @@ mod tests {
         Arc::new(src)
     }
 
-    fn solver(routing: Arc<dyn RoutingProvider>) -> Arc<dyn WeekSolver> {
-        let mut s = Nsga2Solver::new(routing);
+    fn solver() -> Arc<dyn WeekSolver> {
+        let mut s = Nsga2Solver::new();
         s.pop_size = 20;
         s.generations = 10;
         Arc::new(s)
@@ -332,7 +321,7 @@ mod tests {
     async fn fixed_dropped_when_calendar_busy() {
         let planner = Planner::new(
             vec![source_with(vec![fixed_suggestion(10, 12, None)])],
-            solver(fixed_travel()),
+            solver(),
             no_geo(),
         );
 
@@ -344,7 +333,7 @@ mod tests {
     async fn fixed_kept_when_calendar_free() {
         let planner = Planner::new(
             vec![source_with(vec![fixed_suggestion(10, 12, None)])],
-            solver(fixed_travel()),
+            solver(),
             no_geo(),
         );
 
@@ -356,7 +345,7 @@ mod tests {
     async fn flexible_dropped_when_window_below_min_duration() {
         let planner = Planner::new(
             vec![source_with(vec![flexible_suggestion(10, 11)])],
-            solver(fixed_travel()),
+            solver(),
             no_geo(),
         );
 
@@ -368,7 +357,7 @@ mod tests {
     async fn flexible_kept_when_window_equals_min_after_travel() {
         let planner = Planner::new(
             vec![source_with(vec![flexible_suggestion(10, 13)])],
-            solver(fixed_travel()),
+            solver(),
             no_geo(),
         );
 
@@ -383,7 +372,7 @@ mod tests {
                 fixed_suggestion(10, 12, Some(0.9)),
                 fixed_suggestion(14, 16, Some(0.5)),
             ])],
-            solver(fixed_travel()),
+            solver(),
             no_geo(),
         );
 
@@ -392,7 +381,7 @@ mod tests {
     }
 
     fn geocoding_planner(geo: MockGeoProvider) -> Planner {
-        Planner::new(vec![], solver(fixed_travel()), Arc::new(geo))
+        Planner::new(vec![], solver(), Arc::new(geo))
     }
 
     #[tokio::test]

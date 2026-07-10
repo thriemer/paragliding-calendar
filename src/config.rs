@@ -38,9 +38,6 @@ pub struct MicrosoftOAuthConfig {
 
 pub struct AppConfig {
     pub database_url: String,
-    #[allow(dead_code)]
-    pub brouter_base_url: String,
-    pub valhalla_base_url: String,
     pub google: GoogleOAuthConfig,
     pub microsoft: Option<MicrosoftOAuthConfig>,
 }
@@ -49,12 +46,6 @@ impl AppConfig {
     pub fn from_env() -> Result<Self> {
         let database_url = env::var("DATABASE_URL")
             .map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?;
-
-        let brouter_base_url =
-            env::var("BROUTER_BASE_URL").map_err(|_| anyhow::anyhow!("Missing BROUTER_BASE_URL"))?;
-
-        let valhalla_base_url = env::var("VALHALLA_BASE_URL")
-            .map_err(|_| anyhow::anyhow!("Missing VALHALLA_BASE_URL"))?;
 
         let google = GoogleOAuthConfig {
             client_id: env::var("GOOGLE_CLIENT_ID")
@@ -85,8 +76,6 @@ impl AppConfig {
 
         Ok(Self {
             database_url,
-            brouter_base_url,
-            valhalla_base_url,
             google,
             microsoft,
         })

@@ -43,6 +43,9 @@ pub trait WeatherProvider: Send + Sync {
     fn available_models(&self) -> Vec<WeatherModel>;
 }
 
+/// Real drive-time lookup for a single leg. The GA plans on cheap crow-flies estimates
+/// (`application::solvers::placement::crow_flies_drive`); this port is only hit to put real
+/// numbers on the final rendered plan.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait RoutingProvider: Send + Sync {
@@ -51,25 +54,6 @@ pub trait RoutingProvider: Send + Sync {
         source: &Location,
         destination: &Location,
     ) -> Result<Duration>;
-
-    /// All pairwise drive times among `locations`, row-major and aligned to input order:
-    /// `matrix[i][j]` is the drive from `locations[i]` to `locations[j]` (diagonal = zero).
-    /// Default builds it pairwise via `get_travel_time` for providers without a matrix API.
-    async fn travel_time_matrix(&self, locations: &[Location]) -> Result<Vec<Vec<Duration>>> {
-        let mut rows = Vec::with_capacity(locations.len());
-        for from in locations {
-            let mut row = Vec::with_capacity(locations.len());
-            for to in locations {
-                if from.to_key() == to.to_key() {
-                    row.push(Duration::zero());
-                } else {
-                    row.push(self.get_travel_time(from, to).await?);
-                }
-            }
-            rows.push(row);
-        }
-        Ok(rows)
-    }
 }
 
 #[cfg_attr(test, mockall::automock)]

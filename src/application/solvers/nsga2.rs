@@ -16,14 +16,13 @@ use tracing::{debug, info, instrument, Span};
 use crate::application::solvers::genome::{
     decode, dedup_single_use, night_count, overnight_candidates, repair, Gene, GeneAction, Genome,
 };
-use crate::application::solvers::placement::{build_matrix, partition_segments, DriveMatrix, Segment};
+use crate::application::solvers::placement::{crow_flies_drive, partition_segments, Segment};
 use crate::domain::{
     activities::{ActivitySuggestion, OvernightSpot, Plan, TimeWindow},
-    ports::{RoutingProvider, SolverInput, WeekSolver},
+    ports::{SolverInput, WeekSolver},
 };
 
 pub struct Nsga2Solver {
-    routing: Arc<dyn RoutingProvider>,
     pub pop_size: usize,
     pub generations: usize,
     /// Per-operator probability applied per segment during mutation.
@@ -33,14 +32,19 @@ pub struct Nsga2Solver {
 }
 
 impl Nsga2Solver {
-    pub fn new(routing: Arc<dyn RoutingProvider>) -> Self {
+    pub fn new() -> Self {
         Self {
-            routing,
             pop_size: 10_000,
             generations: 1000,
             mutation_rate: 0.3,
             seed: 42,
         }
+    }
+}
+
+impl Default for Nsga2Solver {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -52,8 +56,8 @@ struct Individual {
 }
 
 impl Individual {
-    fn new(genome: Genome, input: &SolverInput, matrix: &DriveMatrix) -> Self {
-        let plan = decode(&genome, input, matrix);
+    fn new(genome: Genome, input: &SolverInput) -> Self {
+        let plan = decode(&genome, input);
         Self { genome, plan }
     }
 }
@@ -74,8 +78,7 @@ impl WeekSolver for Nsga2Solver {
         )
     )]
     async fn solve(&self, input: SolverInput) -> Result<Vec<Plan>> {
-        let matrix = build_matrix(self.routing.as_ref(), &input).await?;
-        validate_fixed(&input, &matrix)?;
+        validate_fixed(&input)?;
 
         // The GA is CPU-bound (rayon inside, sequential selection between generations). Run it on
         // the blocking pool so it doesn't park a tokio worker for the whole solve. The span is
@@ -85,7 +88,7 @@ impl WeekSolver for Nsga2Solver {
         let span = Span::current();
         tokio::task::spawn_blocking(move || {
             let _guard = span.enter();
-            run_ga(input, matrix, pop_size, generations, mutation_rate, seed)
+            run_ga(input, pop_size, generations, mutation_rate, seed)
         })
         .await
         .map_err(|e| anyhow::anyhow!("solver task panicked: {e}"))
@@ -96,7 +99,6 @@ impl WeekSolver for Nsga2Solver {
 /// `spawn_blocking`. Infallible — feasibility is checked in `solve` before we get here.
 fn run_ga(
     input: SolverInput,
-    matrix: DriveMatrix,
     pop_size: usize,
     generations: usize,
     mutation_rate: f32,
@@ -119,7 +121,7 @@ fn run_ga(
     while pop.len() < pop_size {
         let mut g = random_genome(&seg_pools, &segments, &overnight_pool, &mut rng);
         dedup_single_use(&mut g);
-        pop.push(Individual::new(g, &input, &matrix));
+        pop.push(Individual::new(g, &input));
     }
 
     for generation in 0..generations {
@@ -136,8 +138,8 @@ fn run_ga(
                 let mut child = crossover(&pop[p1].genome, &pop[p2].genome, &mut wrng);
                 mutate(&mut child, &seg_pools, &segments, &overnight_pool, mutation_rate, &mut wrng);
                 dedup_single_use(&mut child);
-                repair(&mut child, &input, &matrix, &mut wrng);
-                Individual::new(child, &input, &matrix)
+                repair(&mut child, &input, &mut wrng);
+                Individual::new(child, &input)
             })
             .collect();
         // (μ+λ) elitist: fill the next generation from parents ∪ offspring by rank, then
@@ -166,7 +168,7 @@ fn run_ga(
 }
 
 /// Err (no panic) if two consecutive located commitments can't be driven between in their gap.
-fn validate_fixed(input: &SolverInput, matrix: &DriveMatrix) -> Result<()> {
+fn validate_fixed(input: &SolverInput) -> Result<()> {
     let mut located: Vec<_> = input
         .fixed
         .iter()
@@ -177,7 +179,7 @@ fn validate_fixed(input: &SolverInput, matrix: &DriveMatrix) -> Result<()> {
     // two located ones. Refine if that under-reports infeasibility in practice.
     for pair in located.windows(2) {
         let (a, b) = (pair[0], pair[1]);
-        let drive = matrix.get(a.location.as_ref().unwrap(), b.location.as_ref().unwrap());
+        let drive = crow_flies_drive(a.location.as_ref().unwrap(), b.location.as_ref().unwrap());
         if drive > b.start - a.end {
             bail!(
                 "un-driveable commitments: {} → {} needs {} min but only {} min between them",
@@ -603,7 +605,6 @@ mod tests {
     use crate::domain::{
         activities::{ActivityKind, Score, ScheduledActivity, TimeWindow, Timing},
         location::Location,
-        ports::MockRoutingProvider,
     };
 
     fn home() -> Location {
@@ -614,21 +615,6 @@ mod tests {
     }
     fn ts(h: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 6, 13, h, 0, 0).unwrap()
-    }
-
-    fn matrix_routing(
-        f: impl Fn(&Location, &Location) -> Duration + Send + Sync + 'static,
-    ) -> Arc<dyn RoutingProvider> {
-        let f = Arc::new(f);
-        let mut r = MockRoutingProvider::new();
-        r.expect_travel_time_matrix().returning(move |locs| {
-            let f = f.clone();
-            Ok(locs.iter().map(|a| locs.iter().map(|b| f(a, b)).collect()).collect())
-        });
-        Arc::new(r)
-    }
-    fn constant_routing(minutes: i64) -> Arc<dyn RoutingProvider> {
-        matrix_routing(move |_, _| Duration::minutes(minutes))
     }
 
     fn flex(loc: Location, start_h: u32, end_h: u32, fun: f32) -> ActivitySuggestion {
@@ -797,7 +783,7 @@ mod tests {
     async fn fixed_candidate_is_placed_at_its_exact_times() {
         // Fixed timing (events) must land at exactly [start, end], not shifted like Flexible.
         let cands = vec![fixed_cand(site("E", 50.75), 10, 13, 3.0)];
-        let plans = small_solver(constant_routing(15)).solve(base_input(cands, 1)).await.unwrap();
+        let plans = small_solver().solve(base_input(cands, 1)).await.unwrap();
         let placed = plans[0]
             .items
             .iter()
@@ -817,8 +803,8 @@ mod tests {
         }
     }
 
-    fn small_solver(routing: Arc<dyn RoutingProvider>) -> Nsga2Solver {
-        let mut s = Nsga2Solver::new(routing);
+    fn small_solver() -> Nsga2Solver {
+        let mut s = Nsga2Solver::new();
         s.pop_size = 30;
         s.generations = 20;
         s
@@ -830,8 +816,8 @@ mod tests {
             flex(site("A", 50.75), 8, 14, 0.9),
             flex(site("B", 50.8), 10, 18, 0.6),
         ];
-        let s1 = small_solver(constant_routing(15));
-        let s2 = small_solver(constant_routing(15));
+        let s1 = small_solver();
+        let s2 = small_solver();
         let p1 = s1.solve(base_input(cands.clone(), 3)).await.unwrap();
         let p2 = s2.solve(base_input(cands, 3)).await.unwrap();
         assert_eq!(p1.len(), p2.len());
@@ -849,27 +835,18 @@ mod tests {
             flex(site("A", 50.75), 10, 14, 0.5),
             flex(site("B", 50.8), 10, 14, 0.9),
         ];
-        let plans = small_solver(constant_routing(15)).solve(base_input(cands, 1)).await.unwrap();
+        let plans = small_solver().solve(base_input(cands, 1)).await.unwrap();
         assert!(plans[0].total_fun >= 0.9 - 1e-4, "should reach B's fun, got {}", plans[0].total_fun);
     }
 
     #[tokio::test]
     async fn pareto_spread_returns_distinct_tradeoffs() {
-        // A near + cheap-ish, B far → different fun/drive trade-offs on the front.
-        let home_key = home().to_key();
-        let routing = matrix_routing(move |from, to| {
-            let far = from.name == "B" || to.name == "B";
-            if from.to_key() == home_key || to.to_key() == home_key {
-                if far { Duration::hours(2) } else { Duration::minutes(20) }
-            } else {
-                Duration::minutes(30)
-            }
-        });
+        // A near, B far (crow-flies from home coords) → different fun/drive trade-offs on the front.
         let cands = vec![
-            flex(site("A", 50.75), 8, 18, 0.5),
-            flex(site("B", 50.8), 8, 18, 0.9),
+            flex(site("A", 50.75), 8, 18, 0.5), // ~5 km north of home
+            flex(site("B", 51.6), 8, 18, 0.9),  // ~100 km north → real drive cost
         ];
-        let plans = small_solver(routing).solve(base_input(cands, 3)).await.unwrap();
+        let plans = small_solver().solve(base_input(cands, 3)).await.unwrap();
         // At least two genuinely different trade-offs.
         let distinct: std::collections::HashSet<(i64, i64)> = plans
             .iter()
@@ -880,8 +857,7 @@ mod tests {
 
     #[tokio::test]
     async fn undriveable_commitments_error_without_panic() {
-        // Two located meetings 30 min apart in time but 2 h of driving between them.
-        let routing = matrix_routing(|_, _| Duration::hours(2));
+        // Two located meetings with a 0-min gap but real driving between them → infeasible.
         let commit = |start: u32, end: u32, loc: Location| ScheduledActivity {
             kind: ActivityKind::Commitment,
             location: Some(loc),
@@ -896,7 +872,7 @@ mod tests {
             commit(10, 11, site("X", 50.9)),
             commit(11, 12, site("Y", 51.0)), // only 0 min gap, needs 2 h
         ];
-        let err = small_solver(routing).solve(input).await;
+        let err = small_solver().solve(input).await;
         assert!(err.is_err());
     }
 }

@@ -9,7 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 use rand::{rngs::StdRng, RngExt};
 
 use crate::application::solvers::placement::{
-    compute_total_drive, partition_segments, DriveMatrix, Segment,
+    compute_total_drive, crow_flies_drive, partition_segments, Segment,
 };
 use crate::domain::{
     activities::{ActivitySuggestion, OvernightKind, OvernightSpot, Plan, ScheduledActivity, Timing},
@@ -98,7 +98,6 @@ fn walk_segment(
     seg: &Segment,
     start_loc: &Location,
     end_loc: Option<&Location>,
-    matrix: &DriveMatrix,
 ) -> WalkOutput {
     let span = seg.end - seg.start;
     let mut time = seg.start;
@@ -115,9 +114,9 @@ fn walk_segment(
                 // overnight spot at a night boundary) is reserved so the final activity can still
                 // reach it in time; a carried (`None`) boundary needs no reservation.
                 let drive_out = end_loc
-                    .map(|e| matrix.get(&act.location, e))
+                    .map(|e| crow_flies_drive(&act.location, e))
                     .unwrap_or_else(Duration::zero);
-                let drive_in = matrix.get(&loc, &act.location);
+                let drive_in = crow_flies_drive(&loc, &act.location);
 
                 let (start, end) = match &act.timing {
                     Timing::Flexible { window, min_duration } => {
@@ -167,7 +166,7 @@ fn resolve_start(seg: &Segment, carried: &Location) -> Location {
 /// Segments are decoded independently then chained through the fixed commitments for the drive
 /// total. `Plan.items` is only the optional activities the GA placed — commitments are already
 /// on the calendar.
-pub fn decode(genome: &Genome, input: &SolverInput, matrix: &DriveMatrix) -> Plan {
+pub fn decode(genome: &Genome, input: &SolverInput) -> Plan {
     let segments = partition_segments(&input.free_slots, &input.fixed, &input.origin);
     let mut placed_all: Vec<ScheduledActivity> = Vec::new();
     let mut carried = input.origin.clone();
@@ -184,7 +183,7 @@ pub fn decode(genome: &Genome, input: &SolverInput, matrix: &DriveMatrix) -> Pla
             None
         };
         let end_loc = if seg.night_end { overnight_loc.clone() } else { seg.end_loc.clone() };
-        let out = walk_segment(genes, seg, &start_loc, end_loc.as_ref(), matrix);
+        let out = walk_segment(genes, seg, &start_loc, end_loc.as_ref());
         carried = if seg.night_end {
             night_idx += 1;
             overnight_loc.unwrap_or(carried) // sleep at the overnight spot → depart there tomorrow
@@ -208,7 +207,7 @@ pub fn decode(genome: &Genome, input: &SolverInput, matrix: &DriveMatrix) -> Pla
     let mut chain = placed_all.clone();
     chain.extend(input.fixed.iter().cloned());
     chain.sort_by_key(|a| a.start);
-    let total_drive = compute_total_drive(matrix, &chain, &input.origin);
+    let total_drive = compute_total_drive(&chain, &input.origin);
 
     Plan { items: placed_all, total_fun, total_drive }
 }
@@ -221,11 +220,10 @@ fn repair_segment(
     seg: &Segment,
     start_loc: &Location,
     end_loc: Option<&Location>,
-    matrix: &DriveMatrix,
     rng: &mut StdRng,
 ) {
     loop {
-        let idx = match walk_segment(genes, seg, start_loc, end_loc, matrix).unplaceable {
+        let idx = match walk_segment(genes, seg, start_loc, end_loc).unplaceable {
             None => return,
             Some(i) => i,
         };
@@ -252,7 +250,7 @@ fn repair_segment(
 
 /// Repair every segment of a genome in partition order, carrying location across segments the
 /// same way `decode` does (§5). Deterministic given a seeded `rng`.
-pub fn repair(genome: &mut Genome, input: &SolverInput, matrix: &DriveMatrix, rng: &mut StdRng) {
+pub fn repair(genome: &mut Genome, input: &SolverInput, rng: &mut StdRng) {
     let segments = partition_segments(&input.free_slots, &input.fixed, &input.origin);
     let mut carried = input.origin.clone();
     let mut night_idx = 0;
@@ -266,10 +264,10 @@ pub fn repair(genome: &mut Genome, input: &SolverInput, matrix: &DriveMatrix, rn
         };
         let end_loc = if seg.night_end { overnight_loc.clone() } else { seg.end_loc.clone() };
         if let Some(genes) = genome.segments.get_mut(i) {
-            repair_segment(genes, seg, &start_loc, end_loc.as_ref(), matrix, rng);
+            repair_segment(genes, seg, &start_loc, end_loc.as_ref(), rng);
             // Recompute the carry from the repaired (clean) walk; a night boundary carries the
             // overnight spot regardless of where the last activity sat.
-            let walked = walk_segment(genes, seg, &start_loc, end_loc.as_ref(), matrix).end_loc;
+            let walked = walk_segment(genes, seg, &start_loc, end_loc.as_ref()).end_loc;
             carried = if seg.night_end { overnight_loc.unwrap_or(walked) } else { walked };
         } else if seg.night_end {
             carried = overnight_loc.unwrap_or(carried);
@@ -301,11 +299,8 @@ pub fn dedup_single_use(genome: &mut Genome) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::solvers::placement::build_matrix;
-    use crate::domain::{
-        activities::{ActivityKind, Score, TimeWindow},
-        ports::{MockRoutingProvider, RoutingProvider},
-    };
+    use crate::application::solvers::placement::crow_flies_drive;
+    use crate::domain::activities::{ActivityKind, Score, TimeWindow};
     use chrono::TimeZone;
     use rand::SeedableRng;
 
@@ -315,25 +310,13 @@ mod tests {
     fn site(name: &str, lat: f64) -> Location {
         Location::new(lat, 13.0, name.into(), "DE".into())
     }
+    /// A site at the home coordinates → `crow_flies_drive` is zero, for tests that pin exact
+    /// windows and assume no drive.
+    fn here(name: &str) -> Location {
+        site(name, 50.7)
+    }
     fn ts(h: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 6, 13, h, 0, 0).unwrap()
-    }
-    fn matrix_routing(
-        f: impl Fn(&Location, &Location) -> Duration + Send + Sync + 'static,
-    ) -> Arc<dyn RoutingProvider> {
-        let f = Arc::new(f);
-        let mut r = MockRoutingProvider::new();
-        r.expect_travel_time_matrix().returning(move |locs| {
-            let f = f.clone();
-            Ok(locs
-                .iter()
-                .map(|a| locs.iter().map(|b| f(a, b)).collect())
-                .collect())
-        });
-        Arc::new(r)
-    }
-    fn constant_routing(minutes: i64) -> Arc<dyn RoutingProvider> {
-        matrix_routing(move |_, _| Duration::minutes(minutes))
     }
 
     /// Flexible suggestion; `hourly` is per-clock-hour fun over `[start_h, end_h)`.
@@ -365,10 +348,6 @@ mod tests {
         Gene { action: GeneAction::Wait, duration }
     }
 
-    async fn matrix_for(input: &SolverInput, routing: &Arc<dyn RoutingProvider>) -> DriveMatrix {
-        build_matrix(routing.as_ref(), input).await.unwrap()
-    }
-
     fn input(candidates: Vec<Arc<ActivitySuggestion>>, fixed: Vec<ScheduledActivity>) -> SolverInput {
         SolverInput {
             candidates: candidates.iter().map(|a| (**a).clone()).collect(),
@@ -379,103 +358,93 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn decode_is_deterministic() {
-        let routing = constant_routing(15);
+    #[test]
+    fn decode_is_deterministic() {
         let a = flex(site("A", 50.75), 8, 18, vec![1.0; 10], 2);
         let inp = input(vec![a.clone()], vec![]);
-        let matrix = matrix_for(&inp, &routing).await;
         let genome = gseg(vec![vec![do_gene(&a, 0.5)]]);
-        let p1 = decode(&genome, &inp, &matrix);
-        let p2 = decode(&genome, &inp, &matrix);
+        let p1 = decode(&genome, &inp);
+        let p2 = decode(&genome, &inp);
         assert_eq!(p1.items.len(), 1);
         assert_eq!(p1.items[0].start, p2.items[0].start);
         assert_eq!(p1.items[0].end, p2.items[0].end);
         assert_eq!(p1.total_fun, p2.total_fun);
     }
 
-    #[tokio::test]
-    async fn duration_maps_between_min_and_feasible_max() {
-        let routing = constant_routing(0); // no drive → feasible_max = full window
-        let a = flex(site("A", 50.75), 8, 18, vec![1.0; 10], 2);
+    #[test]
+    fn duration_maps_between_min_and_feasible_max() {
+        // Site at home coords → zero crow-flies drive → feasible_max = full window.
+        let a = flex(here("A"), 8, 18, vec![1.0; 10], 2);
         let inp = input(vec![a.clone()], vec![]);
-        let matrix = matrix_for(&inp, &routing).await;
 
         // norm 0 → min_duration (2h)
-        let p_min = decode(&gseg(vec![vec![do_gene(&a, 0.0)]]), &inp, &matrix);
+        let p_min = decode(&gseg(vec![vec![do_gene(&a, 0.0)]]), &inp);
         assert_eq!(p_min.items[0].end - p_min.items[0].start, Duration::hours(2));
 
         // norm 1 → feasible_max: window is 8..18 (10h), start clamps to 8, so full 10h.
-        let p_max = decode(&gseg(vec![vec![do_gene(&a, 1.0)]]), &inp, &matrix);
+        let p_max = decode(&gseg(vec![vec![do_gene(&a, 1.0)]]), &inp);
         assert_eq!(p_max.items[0].end - p_max.items[0].start, Duration::hours(10));
     }
 
-    #[tokio::test]
-    async fn repair_shrinks_then_removes_when_overpacked() {
-        let routing = constant_routing(0);
-        // Three activities each min 2h into a 10h segment with three max-duration genes → 30h
+    #[test]
+    fn repair_shrinks_then_removes_when_overpacked() {
+        // Three activities each min 4h into a 10h segment with three max-duration genes → 30h
         // requested, must shrink; with all durations forced past the floor, one gets removed.
         let a = flex(site("A", 50.75), 8, 18, vec![1.0; 10], 4);
         let b = flex(site("B", 50.8), 8, 18, vec![1.0; 10], 4);
         let c = flex(site("C", 50.85), 8, 18, vec![1.0; 10], 4);
         let inp = input(vec![a.clone(), b.clone(), c.clone()], vec![]);
-        let matrix = matrix_for(&inp, &routing).await;
 
         // 3 × min 4h = 12h > 10h segment: even at duration 0 they can't all fit → a removal.
         let mut genome = gseg(vec![vec![do_gene(&a, 1.0), do_gene(&b, 1.0), do_gene(&c, 1.0)]]);
         let mut rng = StdRng::seed_from_u64(42);
-        repair(&mut genome, &inp, &matrix, &mut rng);
+        repair(&mut genome, &inp, &mut rng);
 
         assert!(genome.segments[0].len() < 3, "an over-full segment must drop a gene");
         // Post-repair walk is clean: every remaining gene places.
         let segs = partition_segments(&inp.free_slots, &inp.fixed, &inp.origin);
-        let out = walk_segment(&genome.segments[0], &segs[0], &home(), segs[0].end_loc.as_ref(), &matrix);
+        let out = walk_segment(&genome.segments[0], &segs[0], &home(), segs[0].end_loc.as_ref());
         assert!(out.unplaceable.is_none());
     }
 
-    #[tokio::test]
-    async fn post_repair_decode_places_every_remaining_gene() {
-        let routing = constant_routing(10);
+    #[test]
+    fn post_repair_decode_places_every_remaining_gene() {
         let a = flex(site("A", 50.75), 8, 18, vec![1.0; 10], 2);
         let b = flex(site("B", 50.8), 8, 18, vec![1.0; 10], 2);
         let inp = input(vec![a.clone(), b.clone()], vec![]);
-        let matrix = matrix_for(&inp, &routing).await;
 
         let mut genome = gseg(vec![vec![do_gene(&a, 1.0), do_gene(&b, 1.0)]]);
         let mut rng = StdRng::seed_from_u64(7);
-        repair(&mut genome, &inp, &matrix, &mut rng);
+        repair(&mut genome, &inp, &mut rng);
 
-        let placed = decode(&genome, &inp, &matrix).items.len();
+        let placed = decode(&genome, &inp).items.len();
         assert_eq!(placed, genome.segments[0].len(), "no drops after repair");
     }
 
-    #[tokio::test]
-    async fn wait_into_better_hours_increases_fun() {
-        let routing = constant_routing(0);
-        // Bad first two hours, great last hours. min 1h so a short placement is legal.
-        let a = flex(site("A", 50.75), 8, 18, vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 10.0, 10.0], 1);
+    #[test]
+    fn wait_into_better_hours_increases_fun() {
+        // Site at home coords → no drive shifting the start; the wait alone moves placement.
+        // Bad first hours, great last hours. min 1h so a short placement is legal.
+        let a = flex(here("A"), 8, 18, vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 10.0, 10.0], 1);
         let inp = input(vec![a.clone()], vec![]);
-        let matrix = matrix_for(&inp, &routing).await;
 
         // No wait, short duration → lands in the bad early hours.
-        let early = decode(&gseg(vec![vec![do_gene(&a, 0.0)]]), &inp, &matrix);
+        let early = decode(&gseg(vec![vec![do_gene(&a, 0.0)]]), &inp);
         // Wait most of the segment first → pushed into the good hours.
-        let late = decode(&gseg(vec![vec![wait_gene(0.9), do_gene(&a, 0.0)]]), &inp, &matrix);
+        let late = decode(&gseg(vec![vec![wait_gene(0.9), do_gene(&a, 0.0)]]), &inp);
         assert!(late.total_fun > early.total_fun, "late {} > early {}", late.total_fun, early.total_fun);
     }
 
-    #[tokio::test]
-    async fn duplicate_gene_schedules_activity_twice_when_allow_multiple() {
-        let routing = constant_routing(0);
+    #[test]
+    fn duplicate_gene_schedules_activity_twice_when_allow_multiple() {
         // allow_multiple: true — same Arc may appear more than once in a plan.
         let a = Arc::new(ActivitySuggestion {
             allow_multiple: true,
-            ..(*flex(site("A", 50.75), 8, 18, vec![1.0; 10], 2)).clone()
+            ..(*flex(here("A"), 8, 18, vec![1.0; 10], 2)).clone()
         });
         let inp = input(vec![a.clone()], vec![]);
-        let matrix = matrix_for(&inp, &routing).await;
         let genome = gseg(vec![vec![do_gene(&a, 0.0), do_gene(&a, 0.0)]]);
-        let plan = decode(&genome, &inp, &matrix);
+        let plan = decode(&genome, &inp);
         assert_eq!(plan.items.len(), 2);
         assert!(plan.items.iter().all(|i| i.location.as_ref().unwrap().name == "A"));
     }
@@ -520,17 +489,9 @@ mod tests {
         assert_eq!(kept, 1, "same-id single-use activity must be scheduled at most once");
     }
 
-    #[tokio::test]
-    async fn online_commitment_adds_zero_drive() {
+    #[test]
+    fn online_commitment_adds_zero_drive() {
         // Home→site drive is nonzero; the online commitment splits the day but pays no drive.
-        let home_key = home().to_key();
-        let routing = matrix_routing(move |from, to| {
-            if from.to_key() == home_key || to.to_key() == home_key {
-                Duration::minutes(30)
-            } else {
-                Duration::minutes(10)
-            }
-        });
         let commitment = ScheduledActivity {
             kind: ActivityKind::Commitment,
             location: None, // online
@@ -540,15 +501,15 @@ mod tests {
             description: String::new(),
             fun: 0.0,
         };
-        let a = flex(site("A", 50.75), 8, 18, vec![1.0; 10], 2);
+        let site_a = site("A", 50.75);
+        let a = flex(site_a.clone(), 8, 18, vec![1.0; 10], 2);
         let inp = input(vec![a.clone()], vec![commitment]);
-        let matrix = matrix_for(&inp, &routing).await;
 
         // Place one activity in the first (8..12) segment.
         let genome = gseg(vec![vec![do_gene(&a, 0.0)], vec![]]);
-        let plan = decode(&genome, &inp, &matrix);
+        let plan = decode(&genome, &inp);
         assert_eq!(plan.items.len(), 1);
-        // Drive is only home→A→home (2 × 30 min); the online commitment contributes nothing.
-        assert_eq!(plan.total_drive, Duration::minutes(60));
+        // Drive is only home→A→home; the online commitment contributes nothing.
+        assert_eq!(plan.total_drive, crow_flies_drive(&home(), &site_a) * 2);
     }
 }

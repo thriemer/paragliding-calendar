@@ -1,67 +1,26 @@
-//! Shared placement primitives used by every `WeekSolver`: the drive-time matrix,
-//! its up-front fetch, the itinerary drive total, and availability/commitment
-//! partitioning into segments (§3.2, §7 of docs/genetic-planner-design.md).
+//! Shared placement primitives used by every `WeekSolver`: the crow-flies drive estimate,
+//! the itinerary drive total, and availability/commitment partitioning into segments
+//! (§3.2, §7 of docs/genetic-planner-design.md).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
-use anyhow::Result;
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 
 use crate::domain::{
-    activities::ScheduledActivity,
-    location::Location,
-    ports::{RoutingProvider, SolverInput},
-    weather::overnight_deadline,
+    activities::ScheduledActivity, location::Location, weather::overnight_deadline,
 };
 
-/// Pairwise drive times over the deduped set of every location a solver can query
-/// (origin ∪ candidate locations ∪ located commitments), fetched once per solve so
-/// placement is pure lookups.
-pub struct DriveMatrix {
-    index: HashMap<String, usize>,
-    times: Vec<Vec<Duration>>,
-}
+// ponytail: GA only needs an over-estimate. 70 km/h × 1.5 circuity, straight-line, no cache —
+// it's cheaper to recompute than to store an N×N matrix. Real times come from GraphHopper for
+// the final plan only.
+const SPEED_KMH: f64 = 70.0;
+const DETOUR_FACTOR: f64 = 1.5;
 
-impl DriveMatrix {
-    pub fn get(&self, from: &Location, to: &Location) -> Duration {
-        let (fk, tk) = (from.to_key(), to.to_key());
-        if fk == tk {
-            return Duration::zero();
-        }
-        match (self.index.get(&fk), self.index.get(&tk)) {
-            (Some(&i), Some(&j)) => self.times[i][j],
-            // Every location the solver queries is in the set by construction.
-            _ => Duration::zero(),
-        }
-    }
-}
-
-/// Dedup origin + candidate locations + located commitments by `to_key()` and fetch the
-/// full matrix once. Commitments must be included — otherwise `DriveMatrix::get` silently
-/// returns zero drive to a meeting (§7).
-pub async fn build_matrix(
-    routing: &dyn RoutingProvider,
-    input: &SolverInput,
-) -> Result<DriveMatrix> {
-    let mut index: HashMap<String, usize> = HashMap::new();
-    let mut locs: Vec<Location> = Vec::new();
-    let commitment_locs = input.fixed.iter().filter_map(|f| f.location.as_ref());
-    for loc in std::iter::once(&input.origin)
-        .chain(input.candidates.iter().map(|c| &c.location))
-        .chain(commitment_locs)
-    {
-        index.entry(loc.to_key()).or_insert_with(|| {
-            locs.push(loc.clone());
-            locs.len() - 1
-        });
-    }
-
-    let times = if locs.len() > 1 {
-        routing.travel_time_matrix(&locs).await?
-    } else {
-        vec![vec![Duration::zero(); locs.len()]; locs.len()]
-    };
-    Ok(DriveMatrix { index, times })
+/// Estimated drive time between two points from their straight-line ("crow flies") distance.
+/// Deliberately over-estimates so the GA never schedules a leg that's tighter than reality.
+pub fn crow_flies_drive(from: &Location, to: &Location) -> Duration {
+    let km = from.distance_to(to);
+    Duration::seconds(((km * DETOUR_FACTOR / SPEED_KMH) * 3600.0) as i64)
 }
 
 /// Total drive summed as one `home → items → home` round trip **per calendar day** — you sleep at
@@ -71,11 +30,7 @@ pub async fn build_matrix(
 ///
 /// ponytail: overnight location is home today. When campable spots land, this must take the
 /// per-night overnight locations and use them as each day's return/depart point instead of `home`.
-pub fn compute_total_drive(
-    matrix: &DriveMatrix,
-    items: &[ScheduledActivity],
-    home: &Location,
-) -> Duration {
+pub fn compute_total_drive(items: &[ScheduledActivity], home: &Location) -> Duration {
     let mut by_day: BTreeMap<NaiveDate, Vec<&Location>> = BTreeMap::new();
     for a in items {
         if let Some(loc) = &a.location {
@@ -86,10 +41,10 @@ pub fn compute_total_drive(
     for (_day, locs) in by_day {
         let mut prev: &Location = home;
         for loc in locs {
-            total += matrix.get(prev, loc);
+            total += crow_flies_drive(prev, loc);
             prev = loc;
         }
-        total += matrix.get(prev, home);
+        total += crow_flies_drive(prev, home);
     }
     total
 }
@@ -195,6 +150,17 @@ mod tests {
     }
     fn loc(name: &str) -> Location {
         Location::new(50.7, 13.0, name.into(), "DE".into())
+    }
+
+    #[test]
+    fn crow_flies_over_estimates_from_distance() {
+        // ~111 km due north (1° latitude) × 1.5 ÷ 70 km/h ≈ 2.38 h ≈ 8570 s.
+        let from = Location::new(50.0, 13.0, "A".into(), "DE".into());
+        let to = Location::new(51.0, 13.0, "B".into(), "DE".into());
+        let secs = crow_flies_drive(&from, &to).num_seconds();
+        assert!((8400..8800).contains(&secs), "got {secs}s");
+        // Identical coords → zero drive.
+        assert_eq!(crow_flies_drive(&from, &from), Duration::zero());
     }
     fn commitment(start: u32, end: u32, location: Option<Location>) -> ScheduledActivity {
         ScheduledActivity {
