@@ -15,6 +15,7 @@ CREATE TABLE outdoor_tours (
     experience       SMALLINT NOT NULL DEFAULT 0,
     is_loop          BOOLEAN NOT NULL DEFAULT false,
     season_bitmask   SMALLINT NOT NULL DEFAULT 0,
+    source_url       TEXT NOT NULL DEFAULT '',
     raw_json         JSONB NOT NULL
 );
 CREATE INDEX idx_outdoor_tours_location ON outdoor_tours USING GIST (location);
@@ -34,6 +35,7 @@ CREATE TABLE outdooractive_events (
     organizer         TEXT,
     schedule_rules    JSONB,
     data              JSONB NOT NULL,
+    source_url        TEXT NOT NULL DEFAULT '',
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );

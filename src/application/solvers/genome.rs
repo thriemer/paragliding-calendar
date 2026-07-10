@@ -12,8 +12,9 @@ use crate::application::solvers::placement::{
     compute_total_drive, crow_flies_drive, partition_segments, Segment,
 };
 use crate::domain::{
-    activities::{ActivitySuggestion, OvernightKind, OvernightSpot, Plan, ScheduledActivity, Timing},
+    activities::{ActivitySuggestion, Timing},
     location::Location,
+    plan::{OvernightKind, OvernightSpot, Plan, ScheduledActivity},
     ports::SolverInput,
 };
 
@@ -286,10 +287,10 @@ pub fn dedup_single_use(genome: &mut Genome) {
     let mut seen: HashSet<String> = HashSet::new();
     for seg in &mut genome.segments {
         seg.retain(|g| {
-            if let GeneAction::Do(act) = &g.action {
-                if !act.allow_multiple {
-                    return seen.insert(act.id.clone());
-                }
+            if let GeneAction::Do(act) = &g.action
+                && !act.allow_multiple
+            {
+                return seen.insert(act.id.clone());
             }
             true
         });

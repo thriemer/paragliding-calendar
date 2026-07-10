@@ -18,7 +18,8 @@ use crate::application::solvers::genome::{
 };
 use crate::application::solvers::placement::{crow_flies_drive, partition_segments, Segment};
 use crate::domain::{
-    activities::{ActivitySuggestion, OvernightSpot, Plan, TimeWindow},
+    activities::{ActivitySuggestion, TimeWindow},
+    plan::{OvernightSpot, Plan},
     ports::{SolverInput, WeekSolver},
 };
 
@@ -603,8 +604,9 @@ mod tests {
     use super::*;
     use chrono::{DateTime, Duration, TimeZone, Utc};
     use crate::domain::{
-        activities::{ActivityKind, Score, ScheduledActivity, TimeWindow, Timing},
+        activities::{ActivityKind, Score, TimeWindow, Timing},
         location::Location,
+        plan::ScheduledActivity,
     };
 
     fn home() -> Location {

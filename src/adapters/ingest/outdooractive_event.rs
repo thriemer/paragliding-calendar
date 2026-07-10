@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
-use crate::domain::{location::Location, outdooractive::{EventDate, OutdoorEvent}};
+use super::detail_url;
+use crate::domain::{location::Location, happening::{HappeningDate, Happening}};
 
-/// Parse one outdoor-active event JSON document into an `OutdoorEvent`. Mirrors `hiking::parse_tour`:
+/// Parse one outdoor-active event JSON document into an `Happening`. Mirrors `tour::parse_tour`:
 /// the adapter owns the wire format, the domain type is what leaves here.
-pub fn parse_event(json: &str) -> Result<OutdoorEvent> {
+pub fn parse_event(json: &str) -> Result<Happening> {
     let root: serde_json::Value = serde_json::from_str(json).context("invalid JSON")?;
     let event = root
         .pointer("/answer/contents/0")
@@ -48,13 +49,14 @@ pub fn parse_event(json: &str) -> Result<OutdoorEvent> {
                     let time_from = d.get("timeFrom")?.as_str()?.parse::<DateTime<Utc>>().ok()?;
                     let time_to = d.get("timeTo")?.as_str()?.parse::<DateTime<Utc>>().ok()?;
                     let date_text = d.get("text").and_then(|v| v.as_str().map(String::from));
-                    Some(EventDate { time_from, time_to, date_text })
+                    Some(HappeningDate { time_from, time_to, date_text })
                 })
                 .collect()
         })
         .unwrap_or_default();
 
-    Ok(OutdoorEvent {
+    Ok(Happening {
+        source_url: detail_url(&id),
         id,
         title,
         location,

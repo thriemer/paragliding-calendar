@@ -1,9 +1,11 @@
 pub mod activities;
 pub mod calendar;
-pub mod hiking;
+pub mod happening;
 pub mod location;
-pub mod outdooractive;
 pub mod paragliding;
+pub mod plan;
 pub mod ports;
 pub mod scoring;
+pub mod settings;
+pub mod tour;
 pub mod weather;

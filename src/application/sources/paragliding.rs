@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use chrono::Duration;
 
 use crate::domain::{
-    activities::{ActivityKind, ActivitySuggestion, PlanningContext, Score, TimeWindow, Timing},
+    activities::{ActivityKind, ActivitySuggestion, Score, TimeWindow, Timing},
+    plan::PlanningContext,
     ports::{ActivitySource, SettingsRepository, SiteRepository, WeatherProvider},
     scoring::paragliding as site_evaluator,
 };
@@ -121,8 +122,9 @@ mod tests {
     use super::*;
     use crate::domain::{
         location::Location,
-        paragliding::{ParaglidingLaunch, ParaglidingSite, SiteType, UserSettings},
+        paragliding::{ParaglidingLaunch, ParaglidingSite, SiteType},
         ports::{MockSettingsRepository, MockSiteRepository, MockWeatherProvider},
+        settings::UserSettings,
         weather::{WeatherData, WeatherForecast},
     };
     use anyhow::anyhow;

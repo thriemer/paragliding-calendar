@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 
 use crate::domain::{
-    activities::ScheduledActivity, location::Location, weather::overnight_deadline,
+    location::Location, plan::ScheduledActivity, weather::overnight_deadline,
 };
 
 // ponytail: GA only needs an over-estimate. 70 km/h × 1.5 circuity, straight-line, no cache —

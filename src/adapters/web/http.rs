@@ -16,7 +16,8 @@ use crate::{
     application::{calendar_job, flight_analytics},
     domain::{
         location::Location,
-        paragliding::{ParaglidingSite, UserSettings, flight::Track},
+        paragliding::{ParaglidingSite, flight::Track},
+        settings::UserSettings,
         weather::WeatherModel,
     },
 };

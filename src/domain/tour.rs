@@ -3,7 +3,7 @@ use serde::Serialize;
 use crate::domain::location::Location;
 
 #[derive(Debug, Clone, Serialize)]
-pub struct OutdoorTour {
+pub struct Tour {
     pub id: String,
     pub title: String,
     pub category: String,
@@ -19,11 +19,12 @@ pub struct OutdoorTour {
     pub experience: u8,
     pub is_loop: bool,
     pub season_bitmask: u16,
+    pub source_url: String,
     #[serde(skip)]
     pub raw_json: String,
 }
 
-impl OutdoorTour {
+impl Tour {
     pub fn in_season(&self, month: u32) -> bool {
         self.season_bitmask & (1 << (month - 1)) != 0
     }
@@ -33,8 +34,8 @@ impl OutdoorTour {
 mod tests {
     use super::*;
 
-    fn tour(bitmask: u16) -> OutdoorTour {
-        OutdoorTour {
+    fn tour(bitmask: u16) -> Tour {
+        Tour {
             id: "1".into(),
             title: "T".into(),
             category: "Wanderung".into(),
@@ -50,6 +51,7 @@ mod tests {
             experience: 0,
             is_loop: false,
             season_bitmask: bitmask,
+            source_url: String::new(),
             raw_json: String::new(),
         }
     }

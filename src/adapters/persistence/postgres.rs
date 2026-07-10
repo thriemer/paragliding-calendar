@@ -4,11 +4,12 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use crate::domain::{
-    hiking::OutdoorTour,
+    tour::Tour,
     location::Location,
-    outdooractive::{EventDate, OutdoorEvent},
-    paragliding::{ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, SiteType, UserSettings},
-    ports::{EventRepository, OutdoorTourRepository, SettingsRepository, SiteRepository},
+    happening::{HappeningDate, Happening},
+    paragliding::{ParaglidingLanding, ParaglidingLaunch, ParaglidingSite, SiteType},
+    ports::{HappeningRepository, TourRepository, SettingsRepository, SiteRepository},
+    settings::UserSettings,
 };
 
 pub struct PostgresRepository {
@@ -218,7 +219,7 @@ impl SettingsRepository for PostgresRepository {
 }
 
 #[async_trait]
-impl OutdoorTourRepository for PostgresRepository {
+impl TourRepository for PostgresRepository {
     async fn count(&self) -> Result<i64> {
         let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM outdoor_tours")
             .fetch_one(&self.pool)
@@ -226,16 +227,16 @@ impl OutdoorTourRepository for PostgresRepository {
         Ok(n)
     }
 
-    async fn save_batch(&self, tours: Vec<OutdoorTour>) -> Result<usize> {
+    async fn save_batch(&self, tours: Vec<Tour>) -> Result<usize> {
         let mut tx = self.pool.begin().await?;
         let mut saved = 0usize;
         for tour in &tours {
             sqlx::query(
                 "INSERT INTO outdoor_tours (id, title, category, location, location_name, description,
                     duration_minutes, length_meters, ascent_meters, descent_meters,
-                    difficulty, stamina, landscape, experience, is_loop, season_bitmask, raw_json)
+                    difficulty, stamina, landscape, experience, is_loop, season_bitmask, raw_json, source_url)
                  VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326), $6, $7,
-                    $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb)
+                    $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19)
                  ON CONFLICT (id) DO UPDATE SET
                     title = EXCLUDED.title, category = EXCLUDED.category,
                     location = EXCLUDED.location, location_name = EXCLUDED.location_name,
@@ -245,7 +246,7 @@ impl OutdoorTourRepository for PostgresRepository {
                     difficulty = EXCLUDED.difficulty, stamina = EXCLUDED.stamina,
                     landscape = EXCLUDED.landscape, experience = EXCLUDED.experience,
                     is_loop = EXCLUDED.is_loop, season_bitmask = EXCLUDED.season_bitmask,
-                    raw_json = EXCLUDED.raw_json",
+                    raw_json = EXCLUDED.raw_json, source_url = EXCLUDED.source_url",
             )
             .bind(&tour.id)
             .bind(&tour.title)
@@ -265,6 +266,7 @@ impl OutdoorTourRepository for PostgresRepository {
             .bind(tour.is_loop)
             .bind(tour.season_bitmask as i16)
             .bind(&tour.raw_json)
+            .bind(&tour.source_url)
             .execute(&mut *tx)
             .await?;
             saved += 1;
@@ -277,12 +279,12 @@ impl OutdoorTourRepository for PostgresRepository {
         &self,
         center: &Location,
         radius_km: f64,
-    ) -> Result<Vec<(OutdoorTour, f64)>> {
+    ) -> Result<Vec<(Tour, f64)>> {
         let rows: Vec<TourWithDistRow> = sqlx::query_as(
             "SELECT id, title, category, ST_X(location) AS lon, ST_Y(location) AS lat,
                     location_name, description, duration_minutes, length_meters,
                     ascent_meters, descent_meters, difficulty, stamina, landscape, experience,
-                    is_loop, season_bitmask, raw_json::text AS raw_json,
+                    is_loop, season_bitmask, raw_json::text AS raw_json, source_url,
                     ST_Distance(location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) / 1000.0 AS distance_km
              FROM outdoor_tours
              WHERE ST_DWithin(location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
@@ -318,13 +320,14 @@ struct TourWithDistRow {
     is_loop: bool,
     season_bitmask: i16,
     raw_json: String,
+    source_url: String,
     distance_km: f64,
 }
 
 impl TourWithDistRow {
-    fn into_tour(self) -> (OutdoorTour, f64) {
+    fn into_tour(self) -> (Tour, f64) {
         (
-            OutdoorTour {
+            Tour {
                 id: self.id,
                 title: self.title,
                 category: self.category,
@@ -340,6 +343,7 @@ impl TourWithDistRow {
                 experience: self.experience as u8,
                 is_loop: self.is_loop,
                 season_bitmask: self.season_bitmask as u16,
+                source_url: self.source_url,
                 raw_json: self.raw_json,
             },
             self.distance_km,
@@ -348,7 +352,7 @@ impl TourWithDistRow {
 }
 
 #[async_trait]
-impl EventRepository for PostgresRepository {
+impl HappeningRepository for PostgresRepository {
     async fn count(&self) -> Result<i64> {
         let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM outdooractive_events")
             .fetch_one(&self.pool)
@@ -356,7 +360,7 @@ impl EventRepository for PostgresRepository {
         Ok(n)
     }
 
-    async fn save_batch(&self, events: Vec<OutdoorEvent>) -> Result<usize> {
+    async fn save_batch(&self, events: Vec<Happening>) -> Result<usize> {
         let mut saved = 0usize;
         // Chunked transactions: the event set can be large, so avoid one giant transaction.
         for chunk in events.chunks(500) {
@@ -370,12 +374,12 @@ impl EventRepository for PostgresRepository {
                     r#"INSERT INTO outdooractive_events
                        (id, title, location, category_id, category_title, category_keys,
                         description_short, description_long, homepage, address, organizer,
-                        schedule_rules, data)
+                        schedule_rules, data, source_url)
                        VALUES ($1, $2,
                            CASE WHEN $3::double precision IS NOT NULL
                            THEN ST_SetSRID(ST_MakePoint($3, $4), 4326) END,
                            $5, $6, $7, $8, $9, $10, $11::jsonb, $12,
-                           $13::jsonb, $14::jsonb)
+                           $13::jsonb, $14::jsonb, $15)
                        ON CONFLICT (id) DO UPDATE SET
                            title = EXCLUDED.title,
                            location = EXCLUDED.location,
@@ -389,6 +393,7 @@ impl EventRepository for PostgresRepository {
                            organizer = EXCLUDED.organizer,
                            schedule_rules = EXCLUDED.schedule_rules,
                            data = EXCLUDED.data,
+                           source_url = EXCLUDED.source_url,
                            updated_at = now()"#,
                 )
                 .bind(&event.id)
@@ -405,6 +410,7 @@ impl EventRepository for PostgresRepository {
                 .bind(&event.organizer)
                 .bind(event.schedule_rules.as_ref())
                 .bind(&event.data)
+                .bind(&event.source_url)
                 .execute(&mut *tx)
                 .await?;
 
@@ -438,14 +444,14 @@ impl EventRepository for PostgresRepository {
         radius_km: f64,
         time_from: DateTime<Utc>,
         time_to: DateTime<Utc>,
-    ) -> Result<Vec<(OutdoorEvent, f64)>> {
+    ) -> Result<Vec<(Happening, f64)>> {
         let rows: Vec<EventWithDistRow> = sqlx::query_as(
             r#"SELECT
                 e.id, e.title,
                 ST_X(e.location) AS lon, ST_Y(e.location) AS lat,
                 e.category_id, e.category_title, e.category_keys,
                 e.description_short, e.description_long, e.homepage,
-                e.address, e.organizer, e.schedule_rules, e.data,
+                e.address, e.organizer, e.schedule_rules, e.data, e.source_url,
                 jsonb_agg(
                     jsonb_build_object(
                         'time_from', d.time_from,
@@ -491,12 +497,13 @@ struct EventWithDistRow {
     organizer: Option<String>,
     schedule_rules: Option<serde_json::Value>,
     data: serde_json::Value,
+    source_url: String,
     dates: serde_json::Value,
     distance_km: f64,
 }
 
 impl EventWithDistRow {
-    fn try_into_event(self) -> Result<(OutdoorEvent, f64)> {
+    fn try_into_event(self) -> Result<(Happening, f64)> {
         let location = match (self.lon, self.lat) {
             (Some(lon), Some(lat)) => Some(Location::new(lat, lon, String::new(), String::new())),
             _ => None,
@@ -521,13 +528,13 @@ impl EventWithDistRow {
                         let date_text = v
                             .get("date_text")
                             .and_then(|v| v.as_str().map(String::from));
-                        Some(EventDate { time_from, time_to, date_text })
+                        Some(HappeningDate { time_from, time_to, date_text })
                     })
                     .collect()
             })
             .unwrap_or_default();
 
-        let event = OutdoorEvent {
+        let event = Happening {
             id: self.id,
             title: self.title,
             location,
@@ -541,6 +548,7 @@ impl EventWithDistRow {
             organizer: self.organizer,
             schedule_rules: self.schedule_rules,
             dates,
+            source_url: self.source_url,
             data: self.data,
         };
 
@@ -794,7 +802,7 @@ mod tests {
         .bind(title)
         .bind(lon)
         .bind(lat)
-        .bind(&Vec::<String>::new())
+        .bind(Vec::<String>::new())
         .execute(pool)
         .await
         .unwrap();

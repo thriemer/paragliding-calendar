@@ -3,10 +3,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 
 use crate::domain::{
-    activities::{ActivitySuggestion, Plan, PlanningContext, ScheduledActivity, TimeWindow},
+    activities::{ActivitySuggestion, TimeWindow},
     calendar::CalendarEvent,
     location::Location,
     paragliding::ParaglidingSite,
+    plan::{Plan, PlanningContext, ScheduledActivity},
     weather::{WeatherForecast, WeatherModel},
 };
 
@@ -80,18 +81,18 @@ pub trait GeoProvider: Send + Sync {
     async fn fetch_elevation(&self, latitude: f64, longitude: f64) -> Result<f64>;
 }
 
-use crate::domain::{hiking::OutdoorTour, outdooractive::OutdoorEvent, paragliding::UserSettings};
+use crate::domain::{tour::Tour, happening::Happening, settings::UserSettings};
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub trait OutdoorTourRepository: Send + Sync {
+pub trait TourRepository: Send + Sync {
     async fn count(&self) -> Result<i64>;
-    async fn save_batch(&self, tours: Vec<OutdoorTour>) -> Result<usize>;
+    async fn save_batch(&self, tours: Vec<Tour>) -> Result<usize>;
     async fn find_within_radius(
         &self,
         center: &Location,
         radius_km: f64,
-    ) -> Result<Vec<(OutdoorTour, f64)>>;
+    ) -> Result<Vec<(Tour, f64)>>;
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -109,16 +110,16 @@ pub trait SiteRepository: Send + Sync {
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub trait EventRepository: Send + Sync {
+pub trait HappeningRepository: Send + Sync {
     async fn count(&self) -> Result<i64>;
-    async fn save_batch(&self, events: Vec<OutdoorEvent>) -> Result<usize>;
+    async fn save_batch(&self, events: Vec<Happening>) -> Result<usize>;
     async fn find_within_radius_and_time(
         &self,
         center: &Location,
         radius_km: f64,
         time_from: DateTime<Utc>,
         time_to: DateTime<Utc>,
-    ) -> Result<Vec<(OutdoorEvent, f64)>>;
+    ) -> Result<Vec<(Happening, f64)>>;
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -132,7 +133,7 @@ pub trait SettingsRepository: Send + Sync {
 /// same external source, one adapter. Returns parsed domain data — no persistence side effects.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub trait OutdoorFeed: Send + Sync {
-    async fn fetch_tours(&self) -> Result<Vec<OutdoorTour>>;
-    async fn fetch_events(&self) -> Result<Vec<OutdoorEvent>>;
+pub trait CatalogFeed: Send + Sync {
+    async fn fetch_tours(&self) -> Result<Vec<Tour>>;
+    async fn fetch_happenings(&self) -> Result<Vec<Happening>>;
 }

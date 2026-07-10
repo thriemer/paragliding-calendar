@@ -7,11 +7,9 @@ use futures::future;
 use tracing::{Span, instrument};
 
 use crate::domain::{
-    activities::{
-        ActivityKind, ActivitySuggestion, Plan, PlanningContext, ScheduledActivity, TimeWindow,
-        Timing,
-    },
+    activities::{ActivityKind, ActivitySuggestion, TimeWindow, Timing},
     calendar::CalendarEvent,
+    plan::{Plan, PlanningContext, ScheduledActivity},
     ports::{ActivitySource, CalendarProvider, GeoProvider, SolverInput, WeekSolver},
 };
 

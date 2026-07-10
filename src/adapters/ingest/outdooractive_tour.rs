@@ -1,9 +1,10 @@
 use anyhow::Result;
 use serde::Deserialize;
 
-use crate::domain::{hiking::OutdoorTour, location::Location};
+use super::detail_url;
+use crate::domain::{tour::Tour, location::Location};
 
-pub fn parse_tour(json: &str) -> Result<OutdoorTour> {
+pub fn parse_tour(json: &str) -> Result<Tour> {
     let resp: OAResponse = serde_json::from_str(json)?;
     let tour = resp
         .answer
@@ -34,7 +35,7 @@ pub fn parse_tour(json: &str) -> Result<OutdoorTour> {
     let length_meters = tour.metrics.length.unwrap_or(0.0) as u32;
 
     let (ascent, descent) = match &tour.metrics.elevation {
-        Some(e) => (e.ascent.unwrap_or(0) as u32, e.descent.unwrap_or(0) as u32),
+        Some(e) => (e.ascent.unwrap_or(0), e.descent.unwrap_or(0)),
         None => (0, 0),
     };
 
@@ -45,7 +46,8 @@ pub fn parse_tour(json: &str) -> Result<OutdoorTour> {
 
     let season_bitmask = season_to_bitmask(&tour.season);
 
-    Ok(OutdoorTour {
+    Ok(Tour {
+        source_url: detail_url(&tour.id),
         id: tour.id,
         title: tour.title,
         category: tour.category.title,

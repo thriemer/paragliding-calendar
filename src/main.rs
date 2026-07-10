@@ -12,7 +12,6 @@ mod domain;
 mod telemetry;
 #[cfg(test)]
 mod test_support;
-mod web;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 
@@ -39,7 +38,7 @@ async fn main() -> Result<()> {
     let event_sync_repo = state.event_repo.clone();
     let event_sync_feed = state.outdoor_feed.clone();
     tokio::join!(
-        async { web::run(state).await },
+        async { adapters::web::server::run(state).await },
         async move {
             let mut interval = time::interval(time::Duration::from_hours(8));
             loop {

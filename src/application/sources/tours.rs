@@ -5,12 +5,11 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{Datelike, Duration, NaiveDate};
 
+use super::with_source_url;
 use crate::domain::{
-    activities::{
-        ActivitySuggestion, PlanningContext, Score, TimeWindow, Timing, kind_from_category,
-    },
-    outdooractive::outdooractive_link,
-    ports::{ActivitySource, OutdoorTourRepository, SettingsRepository, WeatherProvider},
+    activities::{ActivitySuggestion, Score, TimeWindow, Timing, kind_from_category},
+    plan::PlanningContext,
+    ports::{ActivitySource, TourRepository, SettingsRepository, WeatherProvider},
     scoring::tours::{intrinsic_quality, weather_suitability},
     weather::{self, WeatherData},
 };
@@ -25,14 +24,14 @@ const WEATHER_GRID_DEG: f64 = 0.1;
 /// the kind is derived per tour from its category. Only loop tours are used for now (start == end
 /// keeps routing simple).
 pub struct TourActivitySource {
-    tour_repo: Arc<dyn OutdoorTourRepository>,
+    tour_repo: Arc<dyn TourRepository>,
     settings_repo: Arc<dyn SettingsRepository>,
     weather: Arc<dyn WeatherProvider>,
 }
 
 impl TourActivitySource {
     pub fn new(
-        tour_repo: Arc<dyn OutdoorTourRepository>,
+        tour_repo: Arc<dyn TourRepository>,
         settings_repo: Arc<dyn SettingsRepository>,
         weather: Arc<dyn WeatherProvider>,
     ) -> Self {
@@ -115,7 +114,7 @@ impl ActivitySource for TourActivitySource {
                         duration: Duration::minutes(tour.duration_minutes as i64),
                     },
                     title: tour.title.clone(),
-                    description: outdooractive_link(&tour.description, &tour.id),
+                    description: with_source_url(&tour.description, &tour.source_url),
                     score: Some(score),
                     allow_multiple: false,
                 });
@@ -131,10 +130,10 @@ mod tests {
     use super::*;
     use crate::domain::{
         activities::ActivityKind,
-        hiking::OutdoorTour,
+        tour::Tour,
         location::Location,
-        paragliding::UserSettings,
-        ports::{MockOutdoorTourRepository, MockSettingsRepository, MockWeatherProvider},
+        ports::{MockTourRepository, MockSettingsRepository, MockWeatherProvider},
+        settings::UserSettings,
         weather::WeatherForecast,
     };
     use chrono::{TimeZone, Utc};
@@ -143,8 +142,8 @@ mod tests {
         Location::new(50.7, 13.0, "Home".into(), "DE".into())
     }
 
-    fn tour(category: &str, is_loop: bool, season: u16) -> OutdoorTour {
-        OutdoorTour {
+    fn tour(category: &str, is_loop: bool, season: u16) -> Tour {
+        Tour {
             id: "1".into(),
             title: "T".into(),
             category: category.into(),
@@ -160,6 +159,7 @@ mod tests {
             experience: 6,
             is_loop,
             season_bitmask: season,
+            source_url: String::new(),
             raw_json: String::new(),
         }
     }
@@ -237,8 +237,8 @@ mod tests {
         }
     }
 
-    async fn run(tours: Vec<OutdoorTour>, forecast: WeatherForecast) -> Vec<ActivitySuggestion> {
-        let mut repo = MockOutdoorTourRepository::new();
+    async fn run(tours: Vec<Tour>, forecast: WeatherForecast) -> Vec<ActivitySuggestion> {
+        let mut repo = MockTourRepository::new();
         repo.expect_find_within_radius()
             .returning(move |_, _| Ok(tours.iter().cloned().map(|t| (t, 5.0)).collect()));
         let mut weather = MockWeatherProvider::new();

@@ -3,23 +3,24 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
+use super::with_source_url;
 use crate::domain::{
-    activities::{ActivityKind, ActivitySuggestion, PlanningContext, Score, Timing},
-    outdooractive::outdooractive_link,
-    ports::{ActivitySource, EventRepository, SettingsRepository},
+    activities::{ActivityKind, ActivitySuggestion, Score, Timing},
+    plan::PlanningContext,
+    ports::{ActivitySource, HappeningRepository, SettingsRepository},
     scoring::events::{BASE_FUN_PER_HOUR, MAX_ATTEND},
 };
 
 /// Surfaces generic dated events (festivals, theatre, kids' activities, …) as fixed-time planner
 /// candidates. Events are not outdoor/weather-bound, so scoring is a flat per-hour fun.
 pub struct EventActivitySource {
-    event_repo: Arc<dyn EventRepository>,
+    event_repo: Arc<dyn HappeningRepository>,
     settings_repo: Arc<dyn SettingsRepository>,
 }
 
 impl EventActivitySource {
     pub fn new(
-        event_repo: Arc<dyn EventRepository>,
+        event_repo: Arc<dyn HappeningRepository>,
         settings_repo: Arc<dyn SettingsRepository>,
     ) -> Self {
         Self { event_repo, settings_repo }
@@ -75,7 +76,7 @@ impl ActivitySource for EventActivitySource {
                     location: location.clone(),
                     timing: Timing::Fixed { start, end },
                     title: event.title.clone(),
-                    description: outdooractive_link(&reason, &event.id),
+                    description: with_source_url(&reason, &event.source_url),
                     score: Some(score),
                     allow_multiple: false,
                 });
@@ -91,9 +92,9 @@ mod tests {
     use super::*;
     use crate::domain::{
         location::Location,
-        outdooractive::{EventDate, OutdoorEvent},
-        paragliding::UserSettings,
-        ports::{MockEventRepository, MockSettingsRepository},
+        happening::{HappeningDate, Happening},
+        ports::{MockHappeningRepository, MockSettingsRepository},
+        settings::UserSettings,
     };
     use chrono::{Duration, TimeZone, Utc};
 
@@ -130,9 +131,9 @@ mod tests {
         }
     }
 
-    fn event(location: Option<Location>) -> OutdoorEvent {
+    fn event(location: Option<Location>) -> Happening {
         let day = Utc.with_ymd_and_hms(2026, 6, 14, 0, 0, 0).unwrap();
-        OutdoorEvent {
+        Happening {
             id: "e1".into(),
             title: "Festival".into(),
             location,
@@ -145,17 +146,18 @@ mod tests {
             address: None,
             organizer: None,
             schedule_rules: None,
-            dates: vec![EventDate {
+            dates: vec![HappeningDate {
                 time_from: day + Duration::hours(19),
                 time_to: day + Duration::hours(23),
                 date_text: Some("Sat evening".into()),
             }],
+            source_url: String::new(),
             data: serde_json::Value::Null,
         }
     }
 
-    async fn run(events: Vec<OutdoorEvent>) -> Vec<ActivitySuggestion> {
-        let mut repo = MockEventRepository::new();
+    async fn run(events: Vec<Happening>) -> Vec<ActivitySuggestion> {
+        let mut repo = MockHappeningRepository::new();
         repo.expect_find_within_radius_and_time()
             .returning(move |_, _, _, _| Ok(events.iter().cloned().map(|e| (e, 5.0)).collect()));
         let source = EventActivitySource::new(Arc::new(repo), Arc::new(mock_settings()));

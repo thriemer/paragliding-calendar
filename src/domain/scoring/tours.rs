@@ -1,10 +1,10 @@
 //! Weather-suitability scoring for outdoor tours. Pure policy — no I/O, no ports.
 
-use crate::domain::{activities::ActivityKind, hiking::OutdoorTour, weather::WeatherData};
+use crate::domain::{activities::ActivityKind, tour::Tour, weather::WeatherData};
 
 /// Base per-hour fun from the editorial ratings (the dataset carries no user rating). `landscape`
 /// (scenery) and `experience` are 0–6; a floor keeps unrated tours from scoring flat zero.
-pub fn intrinsic_quality(tour: &OutdoorTour) -> f32 {
+pub fn intrinsic_quality(tour: &Tour) -> f32 {
     let rated = (tour.landscape as f32 + tour.experience as f32) / 12.0; // 0..1
     0.2 + 0.8 * rated
 }

@@ -4,11 +4,12 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 use crate::{
     app_state::AppState,
     domain::{
-        activities::{ActivityKind, PlanningContext, ScheduledActivity, TimeWindow},
+        activities::{ActivityKind, TimeWindow},
         calendar::CalendarEvent,
         location::Location,
-        paragliding::UserSettings,
+        plan::{PlanningContext, ScheduledActivity},
         ports::CalendarProvider,
+        settings::UserSettings,
     },
 };
 

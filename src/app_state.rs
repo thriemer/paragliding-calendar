@@ -22,8 +22,8 @@ use crate::{
     },
     config::AppConfig,
     domain::ports::{
-        ActivitySource, CalendarProvider, EventRepository, GeoProvider, OutdoorFeed,
-        OutdoorTourRepository, RoutingProvider, SettingsRepository, SiteRepository, WeatherProvider,
+        ActivitySource, CalendarProvider, HappeningRepository, GeoProvider, CatalogFeed,
+        TourRepository, RoutingProvider, SettingsRepository, SiteRepository, WeatherProvider,
         WeekSolver,
     },
 };
@@ -32,9 +32,9 @@ use crate::{
 pub struct AppState {
     pub site_repo: Arc<dyn SiteRepository>,
     pub settings_repo: Arc<dyn SettingsRepository>,
-    pub outdoor_repo: Arc<dyn OutdoorTourRepository>,
-    pub event_repo: Arc<dyn EventRepository>,
-    pub outdoor_feed: Arc<dyn OutdoorFeed>,
+    pub outdoor_repo: Arc<dyn TourRepository>,
+    pub event_repo: Arc<dyn HappeningRepository>,
+    pub outdoor_feed: Arc<dyn CatalogFeed>,
     pub auth: Arc<WebFlowAuthenticator>,
     pub microsoft_auth: Option<Arc<O365Authenticator>>,
     pub routing: Arc<dyn RoutingProvider>,
@@ -51,9 +51,9 @@ impl AppState {
         let repo = Arc::new(PostgresRepository::new(pool.clone()));
         let site_repo: Arc<dyn SiteRepository> = repo.clone();
         let settings_repo: Arc<dyn SettingsRepository> = repo.clone();
-        let outdoor_repo: Arc<dyn OutdoorTourRepository> = repo.clone();
-        let event_repo: Arc<dyn EventRepository> = repo;
-        let outdoor_feed: Arc<dyn OutdoorFeed> = Arc::new(OutdoorActiveFeed::new());
+        let outdoor_repo: Arc<dyn TourRepository> = repo.clone();
+        let event_repo: Arc<dyn HappeningRepository> = repo;
+        let outdoor_feed: Arc<dyn CatalogFeed> = Arc::new(OutdoorActiveFeed::new());
 
         let auth = Arc::new(WebFlowAuthenticator::new(
             cfg.google.client_id.clone(),

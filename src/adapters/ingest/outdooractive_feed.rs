@@ -10,7 +10,7 @@ use reqwest::StatusCode;
 use tokio::io::AsyncWriteExt;
 
 use crate::adapters::ingest::{outdooractive_event, outdooractive_tour};
-use crate::domain::{hiking::OutdoorTour, outdooractive::OutdoorEvent, ports::OutdoorFeed};
+use crate::domain::{tour::Tour, happening::Happening, ports::CatalogFeed};
 
 const TOUR_ZIP_URL: &str = "https://www.opentourism.net/zip/outdooractive_opentourism_tour.zip";
 const EVENT_ZIP_URL: &str = "https://www.opentourism.net/zip/outdooractive_opentourism_event.zip";
@@ -25,8 +25,8 @@ impl OutdoorActiveFeed {
 }
 
 #[async_trait]
-impl OutdoorFeed for OutdoorActiveFeed {
-    async fn fetch_tours(&self) -> Result<Vec<OutdoorTour>> {
+impl CatalogFeed for OutdoorActiveFeed {
+    async fn fetch_tours(&self) -> Result<Vec<Tour>> {
         let path = temp_path("travelai_outdoor_tours.zip");
         tracing::info!("Downloading outdoor tour data");
         download_to_file(TOUR_ZIP_URL, &path).await?;
@@ -41,7 +41,7 @@ impl OutdoorFeed for OutdoorActiveFeed {
         Ok(tours)
     }
 
-    async fn fetch_events(&self) -> Result<Vec<OutdoorEvent>> {
+    async fn fetch_happenings(&self) -> Result<Vec<Happening>> {
         let path = temp_path("travelai_outdoor_events.zip");
         tracing::info!("Downloading outdoor event data");
         download_to_file(EVENT_ZIP_URL, &path).await?;
@@ -122,10 +122,10 @@ async fn try_download(client: &reqwest::Client, url: &str, path: &Path) -> Resul
     while let Some(chunk) = response.chunk().await? {
         file.write_all(&chunk).await?;
         downloaded += chunk.len() as u64;
-        if let Some(total) = total {
-            if downloaded % (50 * 1024 * 1024) < chunk.len() as u64 {
-                tracing::info!(mb_downloaded = downloaded / (1024 * 1024), mb_total = total / (1024 * 1024), "download progress");
-            }
+        if let Some(total) = total
+            && downloaded % (50 * 1024 * 1024) < chunk.len() as u64
+        {
+            tracing::info!(mb_downloaded = downloaded / (1024 * 1024), mb_total = total / (1024 * 1024), "download progress");
         }
     }
 
