@@ -143,3 +143,12 @@ pub trait SettingsRepository: Send + Sync {
     async fn get(&self) -> Result<Option<UserSettings>>;
     async fn save(&self, settings: &UserSettings) -> Result<()>;
 }
+
+/// Bulk pull of outdoor-active tour/event data from the upstream feed. One trait, both methods:
+/// same external source, one adapter. Returns parsed domain data — no persistence side effects.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait OutdoorFeed: Send + Sync {
+    async fn fetch_tours(&self) -> Result<Vec<OutdoorTour>>;
+    async fn fetch_events(&self) -> Result<Vec<OutdoorEvent>>;
+}

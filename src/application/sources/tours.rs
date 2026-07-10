@@ -5,11 +5,13 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{Datelike, Duration, NaiveDate};
 
-use crate::adapters::activities::outdooractive_link;
 use crate::domain::{
-    activities::{ActivityKind, ActivitySuggestion, PlanningContext, Score, TimeWindow, Timing},
-    hiking::OutdoorTour,
+    activities::{
+        ActivitySuggestion, PlanningContext, Score, TimeWindow, Timing, kind_from_category,
+    },
+    outdooractive::outdooractive_link,
     ports::{ActivitySource, OutdoorTourRepository, SettingsRepository, WeatherProvider},
+    scoring::tours::{intrinsic_quality, weather_suitability},
     weather::{self, WeatherData},
 };
 
@@ -124,104 +126,12 @@ impl ActivitySource for TourActivitySource {
     }
 }
 
-/// Maps the outdoor-active German category title to an `ActivityKind`. Unmapped / out-of-scope
-/// categories (winter sports, motorised, equestrian, skating) return `None` and are skipped.
-/// Substring match on the lowercased title so minor title variants still land.
-pub fn kind_from_category(category: &str) -> Option<ActivityKind> {
-    let c = category.to_lowercase();
-    let has = |needle: &str| c.contains(needle);
-
-    // Order matters: check biking/running before generic "wander" fallthrough isn't needed since
-    // categories are disjoint, but keep the more specific keywords first regardless.
-    if has("mountainbike") || has("radtour") || has("radweg") || has("rennrad") || has("gravel") {
-        Some(ActivityKind::Biking)
-    } else if has("trailrunning") || has("jogging") {
-        Some(ActivityKind::Running)
-    } else if has("bergtour") || has("klettersteig") || has("hochtour") || has("alpinklettern") {
-        Some(ActivityKind::MountainClimbing)
-    } else if has("kanu") || has("kajak") || has("paddel") {
-        Some(ActivityKind::Kayaking)
-    } else if has("wander")        // Wanderung, Winterwandern, Fernwanderweg
-        || has("themenweg")
-        || has("pilgerweg")
-        || has("stadtrundgang")
-        || has("schneeschuh")
-        || has("nordic walking")
-    {
-        Some(ActivityKind::Hiking)
-    } else {
-        None
-    }
-}
-
-/// Base per-hour fun from the editorial ratings (the dataset carries no user rating). `landscape`
-/// (scenery) and `experience` are 0–6; a floor keeps unrated tours from scoring flat zero.
-fn intrinsic_quality(tour: &OutdoorTour) -> f32 {
-    let rated = (tour.landscape as f32 + tour.experience as f32) / 12.0; // 0..1
-    0.2 + 0.8 * rated
-}
-
-/// Per-hour weather sensitivity params, tuned per activity.
-struct Sensitivity {
-    /// Precipitation (mm/h) at which fun hits zero.
-    rain_kill: f32,
-    /// Wind (m/s) tolerated with no penalty, and where fun hits zero.
-    wind_ok: f32,
-    wind_kill: f32,
-    /// Comfort temperature and the half-width (°C) of the tolerable band.
-    ideal_temp: f32,
-    temp_span: f32,
-}
-
-// ponytail: hand-tuned starting values, one knob-set per kind. Adjust from real forecasts/feedback
-// rather than adding config until there's a reason to.
-fn sensitivity(kind: ActivityKind) -> Sensitivity {
-    match kind {
-        // Wet rock / exposed ridges — rain and wind matter most.
-        ActivityKind::MountainClimbing => {
-            Sensitivity { rain_kill: 2.0, wind_ok: 8.0, wind_kill: 15.0, ideal_temp: 15.0, temp_span: 18.0 }
-        }
-        // Wind on open water is the killer.
-        ActivityKind::Kayaking => {
-            Sensitivity { rain_kill: 6.0, wind_ok: 5.0, wind_kill: 12.0, ideal_temp: 20.0, temp_span: 18.0 }
-        }
-        // Dislikes rain; heat-sensitive (narrow, cool comfort band).
-        ActivityKind::Running => {
-            Sensitivity { rain_kill: 6.0, wind_ok: 10.0, wind_kill: 20.0, ideal_temp: 12.0, temp_span: 14.0 }
-        }
-        ActivityKind::Biking => {
-            Sensitivity { rain_kill: 4.0, wind_ok: 8.0, wind_kill: 18.0, ideal_temp: 18.0, temp_span: 18.0 }
-        }
-        // Hiking (and the default) — most weather-tolerant.
-        _ => Sensitivity { rain_kill: 8.0, wind_ok: 12.0, wind_kill: 25.0, ideal_temp: 15.0, temp_span: 20.0 },
-    }
-}
-
-/// A 0..1 fun multiplier for the hour plus a human-readable reason (rides into the calendar body).
-/// Rain and wind gate hard (multiply toward zero); temperature softens.
-fn weather_suitability(kind: ActivityKind, wd: &WeatherData) -> (f32, String) {
-    let s = sensitivity(kind);
-
-    let rain = (1.0 - wd.precipitation / s.rain_kill).clamp(0.0, 1.0);
-    let wind = if wd.wind_speed_ms <= s.wind_ok {
-        1.0
-    } else {
-        (1.0 - (wd.wind_speed_ms - s.wind_ok) / (s.wind_kill - s.wind_ok)).clamp(0.0, 1.0)
-    };
-    let temp = (1.0 - (wd.temperature - s.ideal_temp).abs() / s.temp_span).clamp(0.0, 1.0);
-
-    let factor = rain * wind * (0.5 + 0.5 * temp);
-    let reason = format!(
-        "{:.0} °C, {:.1} mm rain, {:.0} m/s wind",
-        wd.temperature, wd.precipitation, wd.wind_speed_ms
-    );
-    (factor, reason)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::{
+        activities::ActivityKind,
+        hiking::OutdoorTour,
         location::Location,
         paragliding::UserSettings,
         ports::{MockOutdoorTourRepository, MockSettingsRepository, MockWeatherProvider},
@@ -325,21 +235,6 @@ mod tests {
             },
             conflict_calendars: vec![],
         }
-    }
-
-    #[test]
-    fn category_mapping_covers_the_five_kinds() {
-        assert_eq!(kind_from_category("Wanderung"), Some(ActivityKind::Hiking));
-        assert_eq!(kind_from_category("Winterwandern"), Some(ActivityKind::Hiking));
-        assert_eq!(kind_from_category("Mountainbike"), Some(ActivityKind::Biking));
-        assert_eq!(kind_from_category("Radtour"), Some(ActivityKind::Biking));
-        assert_eq!(kind_from_category("Trailrunning"), Some(ActivityKind::Running));
-        assert_eq!(kind_from_category("Bergtour"), Some(ActivityKind::MountainClimbing));
-        assert_eq!(kind_from_category("Kanu"), Some(ActivityKind::Kayaking));
-        // Out of scope → skipped.
-        assert_eq!(kind_from_category("Skitour"), None);
-        assert_eq!(kind_from_category("Motorrad"), None);
-        assert_eq!(kind_from_category("Reiten"), None);
     }
 
     async fn run(tours: Vec<OutdoorTour>, forecast: WeatherForecast) -> Vec<ActivitySuggestion> {

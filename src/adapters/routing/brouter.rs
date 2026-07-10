@@ -11,7 +11,7 @@ use serde::Deserialize;
 use tracing::instrument;
 
 use crate::{
-    adapters::cache::PersistentCache,
+    adapters::persistence::cache::PersistentCache,
     domain::{location::Location, ports::RoutingProvider},
 };
 

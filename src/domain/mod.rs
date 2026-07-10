@@ -5,4 +5,5 @@ pub mod location;
 pub mod outdooractive;
 pub mod paragliding;
 pub mod ports;
+pub mod scoring;
 pub mod weather;

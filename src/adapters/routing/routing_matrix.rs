@@ -1,18 +1,22 @@
-#![allow(dead_code)] // ponytail: routing stack not wired into AppState yet (CrowFlies stands in); kept per owner's call.
+#![allow(dead_code)]
+// ponytail: routing stack not wired into AppState yet (CrowFlies stands in); kept per owner's call.
 
 //! Shared helpers for provider matrix endpoints: per-pair cache key/TTL, cache-first
 //! assembly, and incremental fetch planning so only the new pairs hit the provider.
 
 use std::collections::HashMap;
-use std::time::Duration as StdDuration;
+use std::time::{Duration as StdDuration, Instant};
 
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Duration;
+use futures::stream::{FuturesUnordered, StreamExt};
 use rand::RngExt;
+use tokio::sync::Semaphore;
+use tracing;
 
 use crate::{
-    adapters::cache::PersistentCache,
+    adapters::persistence::cache::PersistentCache,
     domain::{location::Location, ports::RoutingProvider},
 };
 
@@ -31,25 +35,144 @@ pub trait MatrixBlock {
 
 /// Split a `sources × targets` matrix into `≤max_points`-per-side blocks, fetch each via the
 /// provider's `matrix_block`, and stitch them back into the full grid — keeping every request
-/// within the provider's per-request location cap.
+/// within the provider's per-request location cap. Up to `concurrency` blocks are fetched in
+/// parallel.
 pub async fn tile_matrix(
     provider: &(impl MatrixBlock + ?Sized),
     sources: &[Location],
     targets: &[Location],
     max_points: usize,
+    concurrency: usize,
 ) -> Result<Vec<Vec<Option<u64>>>> {
     let mut out = vec![vec![None; targets.len()]; sources.len()];
+
+    let s_chunks = sources.len().div_ceil(max_points);
+    let t_chunks = targets.len().div_ceil(max_points);
+    let total_blocks = s_chunks * t_chunks;
+
+    if total_blocks == 0 {
+        return Ok(out);
+    }
+
+    // Collect work items as owned chunks for the concurrent futures.
+    struct Block {
+        s_off: usize,
+        t_off: usize,
+        s_locs: Vec<Location>,
+        t_locs: Vec<Location>,
+    }
+
+    let mut blocks: Vec<Block> = Vec::with_capacity(total_blocks);
     for (sb, s_chunk) in sources.chunks(max_points).enumerate() {
         for (tb, t_chunk) in targets.chunks(max_points).enumerate() {
-            let block = provider.matrix_block(s_chunk, t_chunk).await?;
-            let (s_off, t_off) = (sb * max_points, tb * max_points);
-            for (r, row) in block.into_iter().enumerate() {
-                for (c, cell) in row.into_iter().enumerate() {
-                    out[s_off + r][t_off + c] = cell;
+            blocks.push(Block {
+                s_off: sb * max_points,
+                t_off: tb * max_points,
+                s_locs: s_chunk.to_vec(),
+                t_locs: t_chunk.to_vec(),
+            });
+        }
+    }
+
+    let sem = Semaphore::new(concurrency);
+    let sem_ref = &sem;
+    let mut stream: FuturesUnordered<_> = FuturesUnordered::new();
+
+    for b in blocks {
+        let s_off = b.s_off;
+        let t_off = b.t_off;
+        let s_locs = b.s_locs;
+        let t_locs = b.t_locs;
+        stream.push(async move {
+            let _permit = sem_ref.acquire().await.expect("semaphore closed");
+            let mut result = vec![vec![None; t_locs.len()]; s_locs.len()];
+
+            match provider.matrix_block(&s_locs, &t_locs).await {
+                Ok(block) => {
+                    for (r, row) in block.into_iter().enumerate() {
+                        for (c, cell) in row.into_iter().enumerate() {
+                            result[r][c] = cell;
+                        }
+                    }
                 }
+                Err(e) => {
+                    tracing::warn!(
+                        s_off,
+                        t_off,
+                        s_len = s_locs.len(),
+                        t_len = t_locs.len(),
+                        error = %e,
+                        "matrix block request failed; falling back to per-source requests"
+                    );
+                    for (sr, s_loc) in s_locs.iter().enumerate() {
+                        let single = [s_loc.clone()];
+                        match provider.matrix_block(&single, &t_locs).await {
+                            Ok(row_block) => {
+                                for (c, cell) in row_block[0].iter().enumerate() {
+                                    result[sr][c] = *cell;
+                                }
+                            }
+                            Err(inner) => {
+                                tracing::warn!(
+                                    location = %s_loc.name,
+                                    lat = s_loc.latitude,
+                                    lon = s_loc.longitude,
+                                    error = %inner,
+                                    "location cannot be mapped to road network; all pairs from this source marked unroutable"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            (s_off, t_off, result)
+        });
+    }
+
+    let log_pct_step = 5u32;
+    let mut next_log_pct = log_pct_step;
+    let start = Instant::now();
+    let mut blocks_done = 0u32;
+
+    while let Some((s_off, t_off, block)) = stream.next().await {
+        for (r, row) in block.into_iter().enumerate() {
+            for (c, cell) in row.into_iter().enumerate() {
+                out[s_off + r][t_off + c] = cell;
+            }
+        }
+
+        blocks_done += 1;
+        let pct = blocks_done * 100 / total_blocks as u32;
+        if pct >= next_log_pct {
+            let elapsed = start.elapsed();
+            let avg = elapsed / blocks_done;
+            let eta = avg * (total_blocks as u32 - blocks_done);
+            let eta_secs = eta.as_secs();
+            tracing::info!(
+                progress = pct,
+                blocks = blocks_done,
+                total = total_blocks,
+                elapsed_ms = elapsed.as_millis() as u64,
+                eta_secs,
+                "matrix progress: {pct}% ({blocks_done}/{total_blocks} blocks, \
+                 {elapsed:.1?} elapsed, ~{eta_secs}s remaining)",
+                elapsed = elapsed,
+            );
+            while next_log_pct <= pct {
+                next_log_pct += log_pct_step;
             }
         }
     }
+
+    let total = start.elapsed();
+    tracing::info!(
+        blocks = total_blocks,
+        elapsed_ms = total.as_millis() as u64,
+        "matrix complete: {total_blocks} blocks in {total:.1?}",
+        total = total,
+    );
+
     Ok(out)
 }
 
@@ -67,12 +190,17 @@ pub fn week_ttl() -> StdDuration {
 pub fn finalize(seconds: &[Vec<Option<u64>>]) -> Vec<Vec<Duration>> {
     seconds
         .iter()
-        .map(|row| row.iter().map(|c| Duration::seconds(c.unwrap_or(0) as i64)).collect())
+        .map(|row| {
+            row.iter()
+                .map(|c| Duration::seconds(c.unwrap_or(0) as i64))
+                .collect()
+        })
         .collect()
 }
 
 /// Read whatever is already cached into a partial matrix (diagonal = 0, cached cells filled,
-/// the rest `None`) and collect the off-diagonal pairs that are still missing.
+/// the rest `None`) and collect the off-diagonal pairs that are still missing. Uses a single
+/// batch query rather than N² individual round-trips.
 pub async fn assemble_from_cache(
     cache: &PersistentCache,
     locations: &[Location],
@@ -80,18 +208,44 @@ pub async fn assemble_from_cache(
     let n = locations.len();
     let mut secs = vec![vec![None; n]; n];
     let mut missing = Vec::new();
+
+    // First pass: collect every pair key so we can fetch them all at once.
+    // Store (i, j, key) tuples so we don't recompute keys in the second pass.
+    struct Pair {
+        i: usize,
+        j: usize,
+        key: String,
+    }
+    let mut pairs: Vec<Pair> = Vec::with_capacity(n * n);
     for i in 0..n {
         for j in 0..n {
             if i == j {
                 secs[i][j] = Some(0);
                 continue;
             }
-            match cache.get::<u64>(&pair_key(&locations[i], &locations[j])).await? {
-                Some(s) => secs[i][j] = Some(s),
-                None => missing.push((i, j)),
-            }
+            pairs.push(Pair {
+                i,
+                j,
+                key: pair_key(&locations[i], &locations[j]),
+            });
         }
     }
+
+    // Single batch query: PostgreSQL returns every cached entry in one round-trip.
+    let all_keys: Vec<String> = pairs.iter().map(|p| p.key.clone()).collect();
+    let cached = cache.get_batch(&all_keys).await?;
+
+    // Second pass: look up each pair in the in-memory map.
+    for p in pairs {
+        match cached
+            .get(&p.key)
+            .and_then(|json| serde_json::from_str::<u64>(json).ok())
+        {
+            Some(s) => secs[p.i][p.j] = Some(s),
+            None => missing.push((p.i, p.j)),
+        }
+    }
+
     Ok((secs, missing))
 }
 
@@ -168,13 +322,19 @@ pub async fn fill_unroutable(
 ) -> Result<()> {
     for &(i, j) in missing {
         if secs[i][j].is_none() {
-            secs[i][j] = Some(
-                provider
-                    .get_travel_time(&locations[i], &locations[j])
-                    .await?
-                    .num_seconds()
-                    .max(0) as u64,
-            );
+            match provider.get_travel_time(&locations[i], &locations[j]).await {
+                Ok(d) => {
+                    secs[i][j] = Some(d.num_seconds().max(0) as u64);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        from = %locations[i].name,
+                        to = %locations[j].name,
+                        error = %e,
+                        "individual route lookup failed; marking pair as unroutable"
+                    );
+                }
+            }
         }
     }
     Ok(())
@@ -189,7 +349,9 @@ pub async fn cache_pairs(
 ) -> Result<()> {
     for &(i, j) in pairs {
         if let Some(s) = seconds[i][j] {
-            cache.put(&pair_key(&locations[i], &locations[j]), s, week_ttl()).await?;
+            cache
+                .put(&pair_key(&locations[i], &locations[j]), s, week_ttl())
+                .await?;
         }
     }
     Ok(())
@@ -225,14 +387,21 @@ mod tests {
     #[tokio::test]
     async fn tile_matrix_stitches_blocks_by_offset() {
         // 5 locations, chunk size 2 → 3×3 blocks of uneven size (2,2,1); indices survive stitching.
-        let locs: Vec<Location> =
-            (0..5).map(|i| Location::new(i as f64, 0.0, format!("l{i}"), "DE".into())).collect();
-        let out = tile_matrix(&IndexEncodingProvider, &locs, &locs, 2).await.unwrap();
+        let locs: Vec<Location> = (0..5)
+            .map(|i| Location::new(i as f64, 0.0, format!("l{i}"), "DE".into()))
+            .collect();
+        let out = tile_matrix(&IndexEncodingProvider, &locs, &locs, 2, 3)
+            .await
+            .unwrap();
         assert_eq!(out.len(), 5);
         for i in 0..5 {
             assert_eq!(out[i].len(), 5);
             for j in 0..5 {
-                assert_eq!(out[i][j], Some(i as u64 * 100 + j as u64), "cell [{i}][{j}]");
+                assert_eq!(
+                    out[i][j],
+                    Some(i as u64 * 100 + j as u64),
+                    "cell [{i}][{j}]"
+                );
             }
         }
     }
@@ -268,12 +437,22 @@ mod tests {
     #[test]
     fn fill_uses_row_then_column_block() {
         // n=3, cover={2}. Missing (0,2) comes from all→cover; (2,1) from cover→all.
-        let mut secs = vec![vec![Some(0), Some(10), None], vec![Some(20), Some(0), Some(30)], vec![None, None, Some(0)]];
+        let mut secs = vec![
+            vec![Some(0), Some(10), None],
+            vec![Some(20), Some(0), Some(30)],
+            vec![None, None, Some(0)],
+        ];
         let missing = vec![(0, 2), (2, 0), (2, 1)];
         let cover = vec![2usize];
         let block_cover_all = vec![vec![Some(70), Some(80), Some(0)]]; // cover[0]=2 → j
         let block_all_cover = vec![vec![Some(60)], vec![Some(50)], vec![Some(0)]]; // i → cover[0]=2
-        fill_from_blocks(&mut secs, &missing, &cover, &block_cover_all, &block_all_cover);
+        fill_from_blocks(
+            &mut secs,
+            &missing,
+            &cover,
+            &block_cover_all,
+            &block_all_cover,
+        );
         assert_eq!(secs[0][2], Some(60)); // all→cover
         assert_eq!(secs[2][0], Some(70)); // cover→all
         assert_eq!(secs[2][1], Some(80)); // cover→all

@@ -4,12 +4,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Duration;
 
-use crate::{
-    adapters::activities::paragliding::site_evaluator,
-    domain::{
-        activities::{ActivityKind, ActivitySuggestion, PlanningContext, Score, TimeWindow, Timing},
-        ports::{ActivitySource, SettingsRepository, SiteRepository, WeatherProvider},
-    },
+use crate::domain::{
+    activities::{ActivityKind, ActivitySuggestion, PlanningContext, Score, TimeWindow, Timing},
+    ports::{ActivitySource, SettingsRepository, SiteRepository, WeatherProvider},
+    scoring::paragliding as site_evaluator,
 };
 
 pub struct ParaglidingActivitySource {

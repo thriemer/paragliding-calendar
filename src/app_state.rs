@@ -8,22 +8,26 @@ use sqlx::PgPool;
 
 use crate::{
     adapters::{
-        activities::events::source::EventActivitySource,
-        activities::paragliding::source::ParaglidingActivitySource,
-        activities::tours::source::TourActivitySource,
-        cache::PersistentCache,
-        combined_calendar::CombinedCalendar,
-        google_calendar::{GoogleCalendar, WebFlowAuthenticator},
-        microsoft_calendar::{MicrosoftCalendar, O365Authenticator},
+        calendar::{
+            combined_calendar::CombinedCalendar,
+            google_calendar::{GoogleCalendar, WebFlowAuthenticator},
+            microsoft_calendar::{MicrosoftCalendar, O365Authenticator},
+        },
+        ingest::outdooractive_feed::OutdoorActiveFeed,
         open_meteo::OpenMeteoClient,
-        postgres::PostgresRepository,
-        valhalla::Valhalla,
+        persistence::{cache::PersistentCache, postgres::PostgresRepository},
+        routing::valhalla::Valhalla,
     },
-    application::{Planner, solvers::Nsga2Solver},
+    application::{
+        Planner,
+        solvers::Nsga2Solver,
+        sources::{EventActivitySource, ParaglidingActivitySource, TourActivitySource},
+    },
     config::AppConfig,
     domain::ports::{
-        ActivitySource, CalendarProvider, EventRepository, GeoProvider, OutdoorTourRepository,
-        RoutingProvider, SettingsRepository, SiteRepository, WeatherProvider, WeekSolver,
+        ActivitySource, CalendarProvider, EventRepository, GeoProvider, OutdoorFeed,
+        OutdoorTourRepository, RoutingProvider, SettingsRepository, SiteRepository, WeatherProvider,
+        WeekSolver,
     },
 };
 
@@ -33,6 +37,7 @@ pub struct AppState {
     pub settings_repo: Arc<dyn SettingsRepository>,
     pub outdoor_repo: Arc<dyn OutdoorTourRepository>,
     pub event_repo: Arc<dyn EventRepository>,
+    pub outdoor_feed: Arc<dyn OutdoorFeed>,
     pub auth: Arc<WebFlowAuthenticator>,
     pub microsoft_auth: Option<Arc<O365Authenticator>>,
     pub routing: Arc<dyn RoutingProvider>,
@@ -51,6 +56,7 @@ impl AppState {
         let settings_repo: Arc<dyn SettingsRepository> = repo.clone();
         let outdoor_repo: Arc<dyn OutdoorTourRepository> = repo.clone();
         let event_repo: Arc<dyn EventRepository> = repo;
+        let outdoor_feed: Arc<dyn OutdoorFeed> = Arc::new(OutdoorActiveFeed::new());
 
         let auth = Arc::new(WebFlowAuthenticator::new(
             cfg.google.client_id.clone(),
@@ -111,6 +117,7 @@ impl AppState {
             settings_repo,
             outdoor_repo,
             event_repo,
+            outdoor_feed,
             auth,
             microsoft_auth,
             routing,

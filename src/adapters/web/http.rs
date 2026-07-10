@@ -11,7 +11,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tracing::instrument;
 
 use crate::{
-    adapters::activities::paragliding::dhv,
+    adapters::ingest::dhv,
     app_state::AppState,
     application::{calendar_job, flight_analytics},
     domain::{

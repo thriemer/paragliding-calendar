@@ -17,6 +17,36 @@ pub enum ActivityKind {
     Commitment,
 }
 
+/// Maps the outdoor-active German category title to an `ActivityKind`. Unmapped / out-of-scope
+/// categories (winter sports, motorised, equestrian, skating) return `None` and are skipped.
+/// Substring match on the lowercased title so minor title variants still land.
+pub fn kind_from_category(category: &str) -> Option<ActivityKind> {
+    let c = category.to_lowercase();
+    let has = |needle: &str| c.contains(needle);
+
+    // Order matters: check biking/running before generic "wander" fallthrough isn't needed since
+    // categories are disjoint, but keep the more specific keywords first regardless.
+    if has("mountainbike") || has("radtour") || has("radweg") || has("rennrad") || has("gravel") {
+        Some(ActivityKind::Biking)
+    } else if has("trailrunning") || has("jogging") {
+        Some(ActivityKind::Running)
+    } else if has("bergtour") || has("klettersteig") || has("hochtour") || has("alpinklettern") {
+        Some(ActivityKind::MountainClimbing)
+    } else if has("kanu") || has("kajak") || has("paddel") {
+        Some(ActivityKind::Kayaking)
+    } else if has("wander")        // Wanderung, Winterwandern, Fernwanderweg
+        || has("themenweg")
+        || has("pilgerweg")
+        || has("stadtrundgang")
+        || has("schneeschuh")
+        || has("nordic walking")
+    {
+        Some(ActivityKind::Hiking)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TimeWindow {
     pub start: DateTime<Utc>,
@@ -218,6 +248,21 @@ mod tests {
         let split = s.fun_between(ws, ws + Duration::hours(2))
             + s.fun_between(ws + Duration::hours(2), ws + Duration::hours(4));
         assert!((whole - split).abs() < 1e-6, "whole {whole} != split {split}");
+    }
+
+    #[test]
+    fn category_mapping_covers_the_five_kinds() {
+        assert_eq!(kind_from_category("Wanderung"), Some(ActivityKind::Hiking));
+        assert_eq!(kind_from_category("Winterwandern"), Some(ActivityKind::Hiking));
+        assert_eq!(kind_from_category("Mountainbike"), Some(ActivityKind::Biking));
+        assert_eq!(kind_from_category("Radtour"), Some(ActivityKind::Biking));
+        assert_eq!(kind_from_category("Trailrunning"), Some(ActivityKind::Running));
+        assert_eq!(kind_from_category("Bergtour"), Some(ActivityKind::MountainClimbing));
+        assert_eq!(kind_from_category("Kanu"), Some(ActivityKind::Kayaking));
+        // Out of scope → skipped.
+        assert_eq!(kind_from_category("Skitour"), None);
+        assert_eq!(kind_from_category("Motorrad"), None);
+        assert_eq!(kind_from_category("Reiten"), None);
     }
 
     #[test]

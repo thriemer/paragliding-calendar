@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
     let job_state = state.clone();
     let tour_sync_state = state.clone();
     let event_sync_repo = state.event_repo.clone();
+    let event_sync_feed = state.outdoor_feed.clone();
     tokio::join!(
         async { web::run(state).await },
         async move {
@@ -52,7 +53,7 @@ async fn main() -> Result<()> {
             match tour_sync_state.outdoor_repo.count().await {
                 Ok(0) => {
                     tracing::info!("No outdoor tours found, starting initial sync");
-                    if let Err(e) = application::outdoor_sync::sync_tours(tour_sync_state.outdoor_repo.as_ref()).await {
+                    if let Err(e) = application::outdoor_sync::sync_tours(tour_sync_state.outdoor_feed.as_ref(), tour_sync_state.outdoor_repo.as_ref()).await {
                         tracing::error!(error = ?e, "outdoor tour sync failed");
                     }
                 }
@@ -66,7 +67,7 @@ async fn main() -> Result<()> {
             loop {
                 interval.tick().await;
                 if let Err(e) =
-                    application::outdoor_sync::sync_events(event_sync_repo.as_ref()).await
+                    application::outdoor_sync::sync_events(event_sync_feed.as_ref(), event_sync_repo.as_ref()).await
                 {
                     tracing::error!(error = ?e, "outdoor event sync failed");
                 } else {

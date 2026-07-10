@@ -17,7 +17,7 @@ use oauth2::{
 use tracing::instrument;
 
 use crate::{
-    adapters::{cache::PersistentCache, email},
+    adapters::{email, persistence::cache::PersistentCache},
     domain::{calendar::CalendarEvent, ports::CalendarProvider},
 };
 

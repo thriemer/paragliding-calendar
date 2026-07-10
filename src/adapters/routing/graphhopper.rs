@@ -12,8 +12,8 @@ use serde_json::json;
 use tracing::instrument;
 
 use crate::{
-    adapters::{
-        cache::PersistentCache,
+    adapters::persistence::cache::PersistentCache,
+    adapters::routing::{
         routing_error::RoutingError,
         routing_matrix::{
             FetchPlan, MatrixBlock, assemble_from_cache, cache_pairs, fill_from_blocks,
@@ -27,6 +27,7 @@ const MAX_RETRIES: u32 = 3;
 /// GraphHopper's matrix add-on caps points per request (free tier: 5). Larger matrices are
 /// tiled into ≤5-per-side blocks so we stay under the limit instead of getting a 400.
 const MAX_MATRIX_POINTS: usize = 5;
+const MATRIX_CONCURRENCY: usize = 3;
 
 pub struct Routing {
     cache: Arc<PersistentCache>,
@@ -193,15 +194,15 @@ impl RoutingProvider for Routing {
         match plan_fetch(&missing, locations.len()) {
             FetchPlan::None => {}
             FetchPlan::Full => {
-                let block = tile_matrix(self, locations, locations, MAX_MATRIX_POINTS).await?;
+                let block = tile_matrix(self, locations, locations, MAX_MATRIX_POINTS, MATRIX_CONCURRENCY).await?;
                 for &(i, j) in &missing {
                     secs[i][j] = block[i][j];
                 }
             }
             FetchPlan::Incremental { cover } => {
                 let cover_locs: Vec<Location> = cover.iter().map(|&i| locations[i].clone()).collect();
-                let block_cover_all = tile_matrix(self, &cover_locs, locations, MAX_MATRIX_POINTS).await?;
-                let block_all_cover = tile_matrix(self, locations, &cover_locs, MAX_MATRIX_POINTS).await?;
+                let block_cover_all = tile_matrix(self, &cover_locs, locations, MAX_MATRIX_POINTS, MATRIX_CONCURRENCY).await?;
+                let block_all_cover = tile_matrix(self, locations, &cover_locs, MAX_MATRIX_POINTS, MATRIX_CONCURRENCY).await?;
                 fill_from_blocks(&mut secs, &missing, &cover, &block_cover_all, &block_all_cover);
             }
         }

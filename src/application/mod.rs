@@ -3,5 +3,6 @@ pub mod flight_analytics;
 pub mod outdoor_sync;
 pub mod planner;
 pub mod solvers;
+pub mod sources;
 
 pub use planner::Planner;

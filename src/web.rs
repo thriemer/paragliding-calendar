@@ -8,7 +8,7 @@ use tower_http::services::ServeDir;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::{adapters::http, app_state::AppState, config};
+use crate::{adapters::web::http, app_state::AppState, config};
 
 async fn oauth_callback(
     State(state): State<AppState>,

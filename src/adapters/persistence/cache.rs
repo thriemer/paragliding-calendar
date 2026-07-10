@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::Debug,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -63,6 +64,29 @@ impl PersistentCache {
             }
             None => Ok(None),
         }
+    }
+
+    /// Look up multiple keys in a single round-trip. Returns a map of key → raw JSON
+    /// for every non-expired entry found. Use `serde_json::from_str` on each value to
+    /// deserialize into the expected type.
+    pub async fn get_batch(&self, keys: &[String]) -> Result<HashMap<String, String>> {
+        if keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let rows: Vec<(String, String, i64)> =
+            sqlx::query_as("SELECT key, value, expires_at FROM cache WHERE key = ANY($1)")
+                .bind(keys)
+                .fetch_all(&self.pool)
+                .await?;
+
+        let mut result = HashMap::with_capacity(rows.len());
+        for (key, json, expires_at) in rows {
+            if now < expires_at {
+                result.insert(key, json);
+            }
+        }
+        Ok(result)
     }
 
     pub async fn remove(&self, key: &str) -> Result<()> {

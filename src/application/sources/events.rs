@@ -2,22 +2,13 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::Duration;
 
-use crate::adapters::activities::outdooractive_link;
 use crate::domain::{
     activities::{ActivityKind, ActivitySuggestion, PlanningContext, Score, Timing},
+    outdooractive::outdooractive_link,
     ports::{ActivitySource, EventRepository, SettingsRepository},
+    scoring::events::{BASE_FUN_PER_HOUR, MAX_ATTEND},
 };
-
-/// Longest slice of an event we schedule. Events are `Fixed`-timed, so without a cap a multi-day
-/// festival would occupy the whole schedule as one block. ponytail: attend the first few hours;
-/// widen or make configurable if real events need it.
-const MAX_ATTEND: Duration = Duration::hours(4);
-
-/// Flat per-hour fun for a generic event. ponytail: weight by user category preference once
-/// `UserSettings` carries any.
-const BASE_FUN_PER_HOUR: f32 = 1.0;
 
 /// Surfaces generic dated events (festivals, theatre, kids' activities, …) as fixed-time planner
 /// candidates. Events are not outdoor/weather-bound, so scoring is a flat per-hour fun.
@@ -104,7 +95,7 @@ mod tests {
         paragliding::UserSettings,
         ports::{MockEventRepository, MockSettingsRepository},
     };
-    use chrono::{TimeZone, Utc};
+    use chrono::{Duration, TimeZone, Utc};
 
     fn home() -> Location {
         Location::new(50.7, 13.0, "Home".into(), "DE".into())

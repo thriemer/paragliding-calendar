@@ -11,7 +11,7 @@ use chrono::Utc;
 use tracing::instrument;
 
 use crate::{
-    adapters::routing_error::RoutingError,
+    adapters::routing::routing_error::RoutingError,
     domain::{location::Location, ports::RoutingProvider},
 };
 
