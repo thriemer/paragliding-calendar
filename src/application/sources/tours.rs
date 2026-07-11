@@ -6,11 +6,12 @@ use async_trait::async_trait;
 use chrono::{Datelike, Duration, NaiveDate};
 
 use super::with_source_url;
+use crate::application::preference_scorer::PreferenceScorer;
 use crate::domain::{
     activities::{ActivitySuggestion, Score, TimeWindow, Timing, kind_from_category},
     plan::PlanningContext,
     ports::{ActivitySource, SettingsRepository, TourRepository, WeatherProvider},
-    scoring::tours::{intrinsic_quality, weather_suitability},
+    scoring::tours::weather_suitability,
     weather::{self, WeatherData},
 };
 
@@ -27,6 +28,7 @@ pub struct TourActivitySource {
     tour_repo: Arc<dyn TourRepository>,
     settings_repo: Arc<dyn SettingsRepository>,
     weather: Arc<dyn WeatherProvider>,
+    scorer: Arc<PreferenceScorer>,
 }
 
 impl TourActivitySource {
@@ -34,11 +36,13 @@ impl TourActivitySource {
         tour_repo: Arc<dyn TourRepository>,
         settings_repo: Arc<dyn SettingsRepository>,
         weather: Arc<dyn WeatherProvider>,
+        scorer: Arc<PreferenceScorer>,
     ) -> Self {
         Self {
             tour_repo,
             settings_repo,
             weather,
+            scorer,
         }
     }
 }
@@ -55,6 +59,10 @@ impl ActivitySource for TourActivitySource {
             .find_within_radius(&ctx.home, settings.search_radius_km)
             .await?;
 
+        // Learned preference multiplier per activity (base_pref + feature
+        // weights, squashed to (0,1)); replaces the old editorial intrinsic
+        // quality (PLAN.md Phase 4). One snapshot for the whole pass.
+        let scorer = self.scorer.snapshot();
         let mut out = Vec::new();
         for (tour, _distance) in tours {
             if !tour.is_loop {
@@ -100,7 +108,7 @@ impl ActivitySource for TourActivitySource {
                     continue;
                 }
 
-                let quality = intrinsic_quality(&tour);
+                let quality = scorer.quality(kind, &tour.id);
                 let mut hourly = Vec::with_capacity(daylight.len());
                 let mut reasons = Vec::with_capacity(daylight.len());
                 for wd in &daylight {
@@ -175,6 +183,7 @@ mod tests {
             is_loop,
             season_bitmask: season,
             source_url: String::new(),
+            image_urls: vec![],
             raw_json: String::new(),
         }
     }
@@ -260,8 +269,12 @@ mod tests {
         weather
             .expect_get_forecast()
             .returning(move |_, _| Ok(forecast.clone()));
-        let source =
-            TourActivitySource::new(Arc::new(repo), Arc::new(mock_settings()), Arc::new(weather));
+        let source = TourActivitySource::new(
+            Arc::new(repo),
+            Arc::new(mock_settings()),
+            Arc::new(weather),
+            Arc::new(PreferenceScorer::new()),
+        );
         source.suggest(&ctx()).await.unwrap()
     }
 

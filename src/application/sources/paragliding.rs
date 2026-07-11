@@ -4,6 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Duration;
 
+use crate::application::preference_scorer::PreferenceScorer;
 use crate::domain::{
     activities::{ActivityKind, ActivitySuggestion, Score, TimeWindow, Timing},
     plan::PlanningContext,
@@ -15,6 +16,7 @@ pub struct ParaglidingActivitySource {
     site_repo: Arc<dyn SiteRepository>,
     settings_repo: Arc<dyn SettingsRepository>,
     weather: Arc<dyn WeatherProvider>,
+    scorer: Arc<PreferenceScorer>,
 }
 
 impl ParaglidingActivitySource {
@@ -22,11 +24,13 @@ impl ParaglidingActivitySource {
         site_repo: Arc<dyn SiteRepository>,
         settings_repo: Arc<dyn SettingsRepository>,
         weather: Arc<dyn WeatherProvider>,
+        scorer: Arc<PreferenceScorer>,
     ) -> Self {
         Self {
             site_repo,
             settings_repo,
             weather,
+            scorer,
         }
     }
 }
@@ -42,6 +46,10 @@ impl ActivitySource for ParaglidingActivitySource {
             .find_within_radius(&ctx.home, settings.search_radius_km)
             .await?;
 
+        // Learned base preference for paragliding, folded into the weather
+        // score (PLAN.md Phase 4). Site-specific features (elevation, rating)
+        // are captured by the model's feature weights.
+        let scorer = self.scorer.snapshot();
         let mut out = Vec::new();
         for (site, _distance) in sites {
             if site.mute_alerts == Some(true) {
@@ -73,6 +81,7 @@ impl ActivitySource for ParaglidingActivitySource {
                 }
             };
 
+            let base = scorer.quality(ActivityKind::Paragliding, &site.name);
             let eval = site_evaluator::evaluate_site(&site, &forecast).await;
             for day in eval.daily_summaries {
                 for range in day.ranges {
@@ -82,7 +91,7 @@ impl ActivitySource for ParaglidingActivitySource {
                         .filter(|h| h.timestamp >= range.start && h.timestamp <= range.end)
                         .collect();
 
-                    let hourly: Vec<f32> = range_scores.iter().map(|h| h.score).collect();
+                    let hourly: Vec<f32> = range_scores.iter().map(|h| base * h.score).collect();
                     let reasons: Vec<String> =
                         range_scores.iter().map(|h| h.reason.clone()).collect();
                     let score = Score {
@@ -250,6 +259,7 @@ mod tests {
             Arc::new(site_repo),
             Arc::new(mock_settings()),
             Arc::new(weather),
+            Arc::new(PreferenceScorer::new()),
         );
         let out = source.suggest(&ctx()).await.unwrap();
         assert!(out.is_empty(), "expected no suggestions, got {:?}", out);
@@ -271,6 +281,7 @@ mod tests {
             Arc::new(site_repo),
             Arc::new(mock_settings()),
             Arc::new(weather),
+            Arc::new(PreferenceScorer::new()),
         );
         let out = source.suggest(&ctx()).await.unwrap();
         assert_eq!(out.len(), 1);
@@ -282,9 +293,11 @@ mod tests {
         assert_eq!(window.end, day + chrono::Duration::hours(15));
         assert_eq!(out[0].title, "S");
         let score = out[0].score.as_ref().expect("expected a score");
+        // Weather total ~4.91, scaled by the neutral preference multiplier
+        // σ(0) = 0.5 from the empty scorer → ~2.46.
         assert!(
-            (score.total() - 4.91).abs() < 0.1,
-            "expected score ~4.91, got {}",
+            (score.total() - 2.46).abs() < 0.1,
+            "expected score ~2.46 (4.91 × 0.5), got {}",
             score.total()
         );
         assert_eq!(score.hourly.len(), 5, "expected one hourly bucket per hour");
@@ -305,6 +318,7 @@ mod tests {
             Arc::new(site_repo),
             Arc::new(mock_settings()),
             Arc::new(weather),
+            Arc::new(PreferenceScorer::new()),
         );
         let out = source.suggest(&ctx()).await.unwrap();
         assert!(out.is_empty());
@@ -324,6 +338,7 @@ mod tests {
             Arc::new(site_repo),
             Arc::new(mock_settings()),
             Arc::new(weather),
+            Arc::new(PreferenceScorer::new()),
         );
         let out = source.suggest(&ctx()).await.unwrap();
         assert!(out.is_empty());
@@ -345,6 +360,7 @@ mod tests {
             Arc::new(site_repo),
             Arc::new(mock_settings()),
             Arc::new(weather),
+            Arc::new(PreferenceScorer::new()),
         );
         let out = source.suggest(&ctx()).await.unwrap();
         assert!(out.is_empty());

@@ -19,6 +19,9 @@ pub struct Happening {
     pub schedule_rules: Option<serde_json::Value>,
     pub dates: Vec<HappeningDate>,
     pub source_url: String,
+    /// Ordered gallery image URLs (index 0 = primary), resolved from the source
+    /// feed. Downloaded and embedded by the image pipeline.
+    pub image_urls: Vec<String>,
     pub data: serde_json::Value,
 }
 

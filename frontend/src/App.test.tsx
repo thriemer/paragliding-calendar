@@ -58,6 +58,16 @@ function setupFetch(overrides: { sitesPut?: "ok" | "fail"; siteDelete?: "ok" | "
     if (url.includes("/api/weather-models")) {
       return Promise.resolve({ ok: true, json: async () => ({ models: [] }) });
     }
+    if (url.includes("/api/preferences/compare")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          pair_id: "p1",
+          a: { id: "t1", kind: "hiking", title: "Tour A", description: "d", stats: {}, current_score: 1 },
+          b: { id: "t2", kind: "event", title: "Event B", description: "d", stats: {}, current_score: 2 },
+        }),
+      });
+    }
     return Promise.resolve({ ok: true, json: async () => ({}) });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -145,6 +155,16 @@ describe("App", () => {
     await waitFor(() => expect(screen.queryByText(/Loading sites/)).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "Flight Analytics" }));
     expect(screen.getByText(/Drop KML flight file/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back to Main" }));
+    expect(screen.getByRole("button", { name: "Create New Site" })).toBeTruthy();
+  });
+
+  test("Preferences navigates to the preferences screen and Back returns to main", async () => {
+    renderApp();
+    await waitFor(() => expect(screen.queryByText(/Loading sites/)).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Preferences" }));
+    expect(screen.getByRole("heading", { name: "Preferences" })).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Tour A")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Back to Main" }));
     expect(screen.getByRole("button", { name: "Create New Site" })).toBeTruthy();
   });

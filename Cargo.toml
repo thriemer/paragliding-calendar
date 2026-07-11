@@ -79,6 +79,29 @@ tower-http = { version = "0.6", features = ["fs", "cors", "limit", "timeout", "t
 # email - using rustls instead of native-tls to avoid openssl dependency
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "rustls-tls", "builder"] }
 graph-rs-sdk = { version = "3", default-features = false, features = ["rustls-tls"] }
+linfa = "0.8.1"
+linfa-reduction = "0.8.1"
+ndarray = "0.16"
+candle-core = "0.9"
+candle-nn = "0.9"
+candle-transformers = "0.9"
+
+# Burn deep learning framework (cubecl-cpu = JIT-compiled CPU backend)
+burn = { version = "0.21", default-features = false, features = ["flex", "store"] }
+burn-store = "0.21"
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+
+# model2vec static-embedding backend: mmap the safetensors matrix and read rows
+# on demand, so the ~512 MB potion-multilingual weights never fully resident.
+safetensors = "0.7"
+memmap2 = "0.9"
+image = "0.25"
+sha2 = "0.10"
+argmin = { version = "0.11", default-features = false }
+argmin-math = { version = "0.5", features = ["vec"] }
+
+[build-dependencies]
+burn-onnx = "0.21"
 
 [dev-dependencies]
 rstest = "0.26"

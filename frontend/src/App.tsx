@@ -11,8 +11,9 @@ import { SiteEditor } from "./components/SiteEditor";
 import { FileUploader } from "./components/FileUploader";
 import { FlightUploader } from "./components/FlightUploader";
 import { SettingsModal } from "./components/SettingsModal";
+import { PreferenceScreen } from "./components/PreferenceScreen";
 
-type Screen = "main" | "flights";
+type Screen = "main" | "flights" | "preferences";
 
 function App() {
   const [screen, setScreen] = useState<Screen>("main");
@@ -78,6 +79,10 @@ function App() {
     }
   };
 
+  if (screen === "preferences") {
+    return <PreferenceScreen onBack={() => setScreen("main")} />;
+  }
+
   if (screen === "flights") {
     return (
       <div className={styles.app}>
@@ -106,6 +111,9 @@ function App() {
           </button>
           <button className="btn" onClick={() => setScreen("flights")}>
             Flight Analytics
+          </button>
+          <button className="btn" onClick={() => setScreen("preferences")}>
+            Preferences
           </button>
           <button className="btn" onClick={() => setShowSettings(true)}>
             Settings

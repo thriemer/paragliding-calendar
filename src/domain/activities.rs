@@ -2,7 +2,7 @@ use chrono::{DateTime, Duration, Utc};
 
 use crate::domain::location::Location;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActivityKind {
     Paragliding,
     Hiking,
@@ -15,6 +15,40 @@ pub enum ActivityKind {
     Event,
     /// A fixed calendar commitment (meeting, appointment) the planner schedules around.
     Commitment,
+}
+
+impl ActivityKind {
+    /// Canonical, stable string encoding — used as the `kind` TEXT key in the
+    /// preference-learning tables. Must round-trip with [`ActivityKind::parse`].
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ActivityKind::Paragliding => "paragliding",
+            ActivityKind::Hiking => "hiking",
+            ActivityKind::Biking => "biking",
+            ActivityKind::Running => "running",
+            ActivityKind::MountainClimbing => "mountain_climbing",
+            ActivityKind::Kayaking => "kayaking",
+            ActivityKind::Event => "event",
+            ActivityKind::Commitment => "commitment",
+        }
+    }
+
+    /// Inverse of [`ActivityKind::as_str`]. Returns `None` for unknown strings.
+    /// Read path for the embedding store (Phase 4); exercised by tests.
+    #[allow(dead_code)]
+    pub fn parse(s: &str) -> Option<ActivityKind> {
+        Some(match s {
+            "paragliding" => ActivityKind::Paragliding,
+            "hiking" => ActivityKind::Hiking,
+            "biking" => ActivityKind::Biking,
+            "running" => ActivityKind::Running,
+            "mountain_climbing" => ActivityKind::MountainClimbing,
+            "kayaking" => ActivityKind::Kayaking,
+            "event" => ActivityKind::Event,
+            "commitment" => ActivityKind::Commitment,
+            _ => return None,
+        })
+    }
 }
 
 /// Maps the outdoor-active German category title to an `ActivityKind`. Unmapped / out-of-scope
@@ -201,6 +235,24 @@ mod tests {
             (whole - split).abs() < 1e-6,
             "whole {whole} != split {split}"
         );
+    }
+
+    #[test]
+    fn activity_kind_string_round_trips() {
+        let all = [
+            ActivityKind::Paragliding,
+            ActivityKind::Hiking,
+            ActivityKind::Biking,
+            ActivityKind::Running,
+            ActivityKind::MountainClimbing,
+            ActivityKind::Kayaking,
+            ActivityKind::Event,
+            ActivityKind::Commitment,
+        ];
+        for k in all {
+            assert_eq!(ActivityKind::parse(k.as_str()), Some(k), "round-trip {k:?}");
+        }
+        assert_eq!(ActivityKind::parse("nonsense"), None);
     }
 
     #[test]

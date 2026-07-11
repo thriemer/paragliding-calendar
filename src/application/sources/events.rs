@@ -4,28 +4,33 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use super::with_source_url;
+use crate::application::preference_scorer::PreferenceScorer;
 use crate::domain::{
     activities::{ActivityKind, ActivitySuggestion, Score, Timing},
     plan::PlanningContext,
     ports::{ActivitySource, HappeningRepository, SettingsRepository},
-    scoring::events::{BASE_FUN_PER_HOUR, MAX_ATTEND},
+    scoring::events::MAX_ATTEND,
 };
 
 /// Surfaces generic dated events (festivals, theatre, kids' activities, …) as fixed-time planner
-/// candidates. Events are not outdoor/weather-bound, so scoring is a flat per-hour fun.
+/// candidates. Events are weather-independent, so the per-hour fun is the learned preference score
+/// alone (PLAN.md Phase 4) — no weather factor.
 pub struct EventActivitySource {
     event_repo: Arc<dyn HappeningRepository>,
     settings_repo: Arc<dyn SettingsRepository>,
+    scorer: Arc<PreferenceScorer>,
 }
 
 impl EventActivitySource {
     pub fn new(
         event_repo: Arc<dyn HappeningRepository>,
         settings_repo: Arc<dyn SettingsRepository>,
+        scorer: Arc<PreferenceScorer>,
     ) -> Self {
         Self {
             event_repo,
             settings_repo,
+            scorer,
         }
     }
 }
@@ -45,6 +50,7 @@ impl ActivitySource for EventActivitySource {
             )
             .await?;
 
+        let scorer = self.scorer.snapshot();
         let mut out = Vec::new();
         for (event, _distance) in events {
             let Some(location) = event.location.clone() else {
@@ -52,6 +58,8 @@ impl ActivitySource for EventActivitySource {
                 continue;
             };
 
+            // Learned per-hour preference for this event (weather-independent).
+            let base = scorer.quality(ActivityKind::Event, &event.id);
             for date in &event.dates {
                 // The repo filters by event, not per-date; keep only dates that overlap the horizon.
                 if date.time_to <= ctx.horizon.start || date.time_from >= ctx.horizon.end {
@@ -69,7 +77,7 @@ impl ActivitySource for EventActivitySource {
                     .unwrap_or_default();
                 let score = Score {
                     window_start: start,
-                    hourly: vec![BASE_FUN_PER_HOUR; hours],
+                    hourly: vec![base; hours],
                     reasons: vec![reason.clone()],
                 };
 
@@ -155,6 +163,7 @@ mod tests {
                 date_text: Some("Sat evening".into()),
             }],
             source_url: String::new(),
+            image_urls: vec![],
             data: serde_json::Value::Null,
         }
     }
@@ -163,7 +172,11 @@ mod tests {
         let mut repo = MockHappeningRepository::new();
         repo.expect_find_within_radius_and_time()
             .returning(move |_, _, _, _| Ok(events.iter().cloned().map(|e| (e, 5.0)).collect()));
-        let source = EventActivitySource::new(Arc::new(repo), Arc::new(mock_settings()));
+        let source = EventActivitySource::new(
+            Arc::new(repo),
+            Arc::new(mock_settings()),
+            Arc::new(PreferenceScorer::new()),
+        );
         source.suggest(&ctx()).await.unwrap()
     }
 

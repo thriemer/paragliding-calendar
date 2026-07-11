@@ -1,13 +1,15 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use std::collections::HashMap;
 
 use crate::domain::{
-    activities::{ActivitySuggestion, TimeWindow},
+    activities::{ActivityKind, ActivitySuggestion, TimeWindow},
     calendar::CalendarEvent,
     location::Location,
-    paragliding::ParaglidingSite,
     plan::{Plan, PlanningContext, ScheduledActivity},
+    preferences::KindModel,
+    paragliding::ParaglidingSite,
     weather::{WeatherForecast, WeatherModel},
 };
 
@@ -84,6 +86,8 @@ use crate::domain::{happening::Happening, settings::UserSettings, tour::Tour};
 pub trait TourRepository: Send + Sync {
     async fn count(&self) -> Result<i64>;
     async fn save_batch(&self, tours: Vec<Tour>) -> Result<usize>;
+    /// Every tour — used by the batch feature-embedding pipeline.
+    async fn find_all(&self) -> Result<Vec<Tour>>;
     async fn find_within_radius(
         &self,
         center: &Location,
@@ -96,6 +100,7 @@ pub trait TourRepository: Send + Sync {
 pub trait SiteRepository: Send + Sync {
     async fn save(&self, site: ParaglidingSite) -> Result<()>;
     async fn delete(&self, name: &str) -> Result<()>;
+    async fn count(&self) -> Result<i64>;
     async fn find_all(&self) -> Result<Vec<ParaglidingSite>>;
     async fn find_within_radius(
         &self,
@@ -109,6 +114,8 @@ pub trait SiteRepository: Send + Sync {
 pub trait HappeningRepository: Send + Sync {
     async fn count(&self) -> Result<i64>;
     async fn save_batch(&self, events: Vec<Happening>) -> Result<usize>;
+    /// Every happening — used by the batch feature-embedding pipeline.
+    async fn find_all(&self) -> Result<Vec<Happening>>;
     async fn find_within_radius_and_time(
         &self,
         center: &Location,
@@ -132,4 +139,123 @@ pub trait SettingsRepository: Send + Sync {
 pub trait CatalogFeed: Send + Sync {
     async fn fetch_tours(&self) -> Result<Vec<Tour>>;
     async fn fetch_happenings(&self) -> Result<Vec<Happening>>;
+}
+
+/// Local sentence-embedding model. `f64` at the boundary — the adapter upcasts
+/// the model's native `f32` (see [`crate::domain::features`] for why the
+/// pipeline is `f64`).
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait Embedder: Send + Sync {
+    /// Batch-embed descriptions into one vector each, order-preserving.
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f64>>>;
+
+    /// Batch-embed images (raw encoded bytes: JPEG/PNG/WebP) into one vector each,
+    /// order-preserving, in the **same** space as [`Embedder::embed_batch`] so the
+    /// two can be fused. Default: unsupported — only the CLIP backend overrides it;
+    /// text-only backends return an error, and callers fall back to text-only.
+    async fn embed_image_batch(&self, _images: &[Vec<u8>]) -> Result<Vec<Vec<f64>>> {
+        anyhow::bail!("image embedding not supported by this embedder")
+    }
+}
+
+/// One fully-processed activity: the raw embedding kept for re-fit reuse, the
+/// per-kind PCA-reduced dims, and the normalized feature vector. Mirrors a row
+/// of `activity_embeddings`.
+#[derive(Debug, Clone)]
+pub struct ActivityEmbeddingRow {
+    pub activity_id: String,
+    pub kind: ActivityKind,
+    pub embedding: Vec<f64>,
+    pub pca_dims: Vec<f64>,
+    pub features: Vec<f64>,
+}
+
+/// Persistence for the preference subsystem: the raw feedback (`preference_comparisons`,
+/// `preference_ratings`) and the learned model (`preference_model`). One cohesive
+/// port — all three tables are the preference domain's storage, written/read by
+/// the same adapter. The Phase 3 solver consumes the feedback and writes the model.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait PreferenceRepository: Send + Sync {
+    /// Record one pairwise outcome (`winner` preferred over `loser`).
+    async fn record_comparison(&self, winner_id: &str, loser_id: &str) -> Result<()>;
+    /// Record one post-activity 1-5 rating.
+    async fn record_rating(&self, activity_id: &str, rating: i16) -> Result<()>;
+    async fn count_comparisons(&self) -> Result<i64>;
+    async fn count_ratings(&self) -> Result<i64>;
+    /// Appearances per `activity_id` across winner+loser columns — powers the
+    /// "prefer under-compared activities" anchor weighting in pair selection.
+    async fn comparison_counts(&self) -> Result<HashMap<String, i64>>;
+    /// Every `(winner_id, loser_id)` outcome — the Phase 3 solver's training set.
+    async fn list_comparisons(&self) -> Result<Vec<(String, String)>>;
+    /// Every `(activity_id, rating)` (rating 1..=5) — the solver's rating term.
+    async fn list_ratings(&self) -> Result<Vec<(String, i16)>>;
+    /// The learned model, one entry per kind. Empty until the Phase 3 solver runs.
+    async fn load_model(&self) -> Result<Vec<KindModel>>;
+    /// Upsert the model, one row per kind (base preference + feature weights with
+    /// their normalizers). Written by the batch job (feature scaffold, weights 0)
+    /// and by the solver (learned weights).
+    async fn save_model(&self, models: &[KindModel]) -> Result<()>;
+}
+
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait EmbeddingRepository: Send + Sync {
+    /// Upsert processed rows, replacing any existing `(activity_id, kind)`.
+    async fn upsert_batch(&self, rows: Vec<ActivityEmbeddingRow>) -> Result<usize>;
+    async fn count(&self) -> Result<i64>;
+    /// All stored feature rows — exercised by the persistence round-trip test.
+    #[allow(dead_code)]
+    async fn find_all(&self) -> Result<Vec<ActivityEmbeddingRow>>;
+    /// `(activity_id, kind, normalized features)` for every row, without the
+    /// heavy 384-dim raw embedding. The planner's read path (Phase 4) and the
+    /// solver's feature source.
+    async fn feature_vectors(&self) -> Result<Vec<(String, ActivityKind, Vec<f64>)>>;
+}
+
+use crate::domain::image::{ActivityImageLink, DownloadedImage, ImageEmbedding};
+
+/// Content-addressed blob storage for downloaded activity images. Bytes are keyed
+/// by the hex digest of their content, so `put` is idempotent and identical images
+/// across activities dedupe to one blob. Filesystem-backed today; the port keeps
+/// object storage a drop-in later.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait ImageStore: Send + Sync {
+    /// Store bytes, returning their content hash (hex). Idempotent.
+    async fn put(&self, bytes: &[u8]) -> Result<String>;
+    /// Fetch bytes by content hash.
+    async fn get(&self, hash: &str) -> Result<Vec<u8>>;
+    /// Whether a blob with this hash is present.
+    async fn has(&self, hash: &str) -> Result<bool>;
+}
+
+/// Persistence for `activity_images`: the per-image lifecycle (link → downloaded →
+/// embedded). Links come from the source feed; the download job fills in the
+/// content hash; the embedding pass (re)writes the CLIP vectors.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait ImageRepository: Send + Sync {
+    /// Upsert link rows (`source_url` per position), preserving any already
+    /// downloaded/embedded state on conflict. Returns rows written.
+    async fn upsert_links(&self, links: &[ActivityImageLink]) -> Result<usize>;
+    /// Links whose bytes are not yet downloaded (`content_hash IS NULL`).
+    async fn pending_downloads(&self) -> Result<Vec<ActivityImageLink>>;
+    /// Record a successful download for one image.
+    async fn mark_downloaded(
+        &self,
+        link: &ActivityImageLink,
+        content_hash: &str,
+        content_type: Option<String>,
+        width: Option<i32>,
+        height: Option<i32>,
+    ) -> Result<()>;
+    /// Every downloaded image (`content_hash` present) — the embed pass's input.
+    async fn all_downloaded(&self) -> Result<Vec<DownloadedImage>>;
+    /// (Re)write the CLIP vectors for downloaded images and stamp `embedded_at`.
+    async fn store_embeddings(&self, embeddings: &[ImageEmbedding]) -> Result<()>;
+    /// `activity_id` → ordered content hashes of its downloaded images, for the
+    /// comparison UI's served image URLs.
+    async fn downloaded_hashes_by_activity(&self) -> Result<HashMap<String, Vec<String>>>;
 }

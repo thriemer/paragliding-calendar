@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::AtomicBool,
+    Arc,
+};
 
 use anyhow::Result;
 use sqlx::PgPool;
@@ -10,6 +13,7 @@ use crate::{
             google_calendar::{GoogleCalendar, WebFlowAuthenticator},
             microsoft_calendar::{MicrosoftCalendar, O365Authenticator},
         },
+        blob::FsImageStore,
         ingest::outdooractive_feed::OutdoorActiveFeed,
         open_meteo::OpenMeteoClient,
         persistence::{cache::PersistentCache, postgres::PostgresRepository},
@@ -17,14 +21,16 @@ use crate::{
     },
     application::{
         Planner,
+        preference_scorer::PreferenceScorer,
+        preferences::PreferenceService,
         solvers::Nsga2Solver,
         sources::{EventActivitySource, ParaglidingActivitySource, TourActivitySource},
     },
     config::AppConfig,
     domain::ports::{
-        ActivitySource, CalendarProvider, CatalogFeed, GeoProvider, HappeningRepository,
-        RoutingProvider, SettingsRepository, SiteRepository, TourRepository, WeatherProvider,
-        WeekSolver,
+        ActivitySource, CalendarProvider, CatalogFeed, EmbeddingRepository, GeoProvider,
+        HappeningRepository, ImageRepository, ImageStore, PreferenceRepository, RoutingProvider,
+        SettingsRepository, SiteRepository, TourRepository, WeatherProvider, WeekSolver,
     },
 };
 
@@ -34,7 +40,24 @@ pub struct AppState {
     pub settings_repo: Arc<dyn SettingsRepository>,
     pub outdoor_repo: Arc<dyn TourRepository>,
     pub event_repo: Arc<dyn HappeningRepository>,
+    pub embedding_repo: Arc<dyn EmbeddingRepository>,
+    pub preference_repo: Arc<dyn PreferenceRepository>,
+    pub image_repo: Arc<dyn ImageRepository>,
+    /// Content-addressed store for downloaded activity images.
+    pub image_store: Arc<dyn ImageStore>,
+    /// Outdooractive `{variant}` size token + download concurrency for the image job.
+    pub image_variant: String,
+    pub image_download_concurrency: usize,
+    /// Plan-time preference scorer; reloaded at startup, after the batch
+    /// embedding job, and after every vote/rating.
+    pub preference_scorer: Arc<PreferenceScorer>,
     pub outdoor_feed: Arc<dyn CatalogFeed>,
+    /// Where the embedding model is stored, and inference batch size — the
+    /// (lazy) `CandleEmbedder` is built from these inside the feature job.
+    pub embedding_cache_dir: String,
+    pub embedding_batch_size: usize,
+    /// `swap(true)` to claim the re-embed job; the spawned task stores `false` when done.
+    pub embedding_running: Arc<AtomicBool>,
     pub auth: Arc<WebFlowAuthenticator>,
     pub microsoft_auth: Option<Arc<O365Authenticator>>,
     pub routing: Arc<dyn RoutingProvider>,
@@ -42,6 +65,7 @@ pub struct AppState {
     pub geo: Arc<dyn GeoProvider>,
     pub calendar: Arc<dyn CalendarProvider>,
     pub planner: Arc<Planner>,
+    pub preferences: Arc<PreferenceService>,
 }
 
 impl AppState {
@@ -52,7 +76,11 @@ impl AppState {
         let site_repo: Arc<dyn SiteRepository> = repo.clone();
         let settings_repo: Arc<dyn SettingsRepository> = repo.clone();
         let outdoor_repo: Arc<dyn TourRepository> = repo.clone();
-        let event_repo: Arc<dyn HappeningRepository> = repo;
+        let event_repo: Arc<dyn HappeningRepository> = repo.clone();
+        let preference_repo: Arc<dyn PreferenceRepository> = repo.clone();
+        let image_repo: Arc<dyn ImageRepository> = repo.clone();
+        let embedding_repo: Arc<dyn EmbeddingRepository> = repo;
+        let image_store: Arc<dyn ImageStore> = Arc::new(FsImageStore::new(cfg.image_store_dir.clone()));
         let outdoor_feed: Arc<dyn CatalogFeed> = Arc::new(OutdoorActiveFeed::new());
 
         let auth = Arc::new(WebFlowAuthenticator::new(
@@ -80,25 +108,41 @@ impl AppState {
         let weather: Arc<dyn WeatherProvider> = open_meteo.clone();
         let geo: Arc<dyn GeoProvider> = open_meteo;
 
+        let preference_scorer = Arc::new(PreferenceScorer::new());
+
         let paragliding_source: Arc<dyn ActivitySource> = Arc::new(ParaglidingActivitySource::new(
             site_repo.clone(),
             settings_repo.clone(),
             weather.clone(),
+            preference_scorer.clone(),
         ));
         let tour_source: Arc<dyn ActivitySource> = Arc::new(TourActivitySource::new(
             outdoor_repo.clone(),
             settings_repo.clone(),
             weather.clone(),
+            preference_scorer.clone(),
         ));
         let event_source: Arc<dyn ActivitySource> = Arc::new(EventActivitySource::new(
             event_repo.clone(),
             settings_repo.clone(),
+            preference_scorer.clone(),
         ));
         let solver: Arc<dyn WeekSolver> = Arc::new(Nsga2Solver::new());
         let planner = Arc::new(Planner::new(
             vec![paragliding_source, tour_source, event_source],
             solver.clone(),
             geo.clone(),
+        ));
+
+        let preferences = Arc::new(PreferenceService::new(
+            outdoor_repo.clone(),
+            event_repo.clone(),
+            site_repo.clone(),
+            preference_repo.clone(),
+            embedding_repo.clone(),
+            image_repo.clone(),
+            image_store.clone(),
+            preference_scorer.clone(),
         ));
 
         let google_cal = GoogleCalendar::new(auth.clone(), cache.clone())?;
@@ -113,7 +157,17 @@ impl AppState {
             settings_repo,
             outdoor_repo,
             event_repo,
+            embedding_repo,
+            preference_repo,
+            image_repo,
+            image_store,
+            image_variant: cfg.image_variant.clone(),
+            image_download_concurrency: cfg.image_download_concurrency,
+            preference_scorer,
             outdoor_feed,
+            embedding_cache_dir: cfg.embedding_cache_dir.clone(),
+            embedding_batch_size: cfg.embedding_batch_size,
+            embedding_running: Arc::new(AtomicBool::new(false)),
             auth,
             microsoft_auth,
             routing,
@@ -121,6 +175,7 @@ impl AppState {
             geo,
             calendar,
             planner,
+            preferences,
         })
     }
 }

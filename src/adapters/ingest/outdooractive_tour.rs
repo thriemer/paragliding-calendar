@@ -43,6 +43,14 @@ pub fn parse_tour(json: &str) -> Result<Tour> {
 
     let season_bitmask = season_to_bitmask(&tour.season);
 
+    // Ordered gallery (index 0 = primary; `primaryImage` mirrors `images[0]`).
+    // The `{variant}` placeholder is resolved to a concrete size at download time.
+    let image_urls = tour
+        .images
+        .iter()
+        .filter_map(|im| im.url_template.clone())
+        .collect();
+
     Ok(Tour {
         source_url: detail_url(&tour.id),
         id: tour.id,
@@ -60,6 +68,7 @@ pub fn parse_tour(json: &str) -> Result<Tour> {
         experience: tour.rating_info.experience as u8,
         is_loop,
         season_bitmask,
+        image_urls,
         raw_json: json.to_string(),
     })
 }
@@ -114,6 +123,17 @@ struct OATour {
     season: OASeason,
     #[serde(rename = "ratingInfo", default)]
     rating_info: OARatingInfo,
+    #[serde(default)]
+    images: Vec<OAImage>,
+}
+
+/// One gallery image. Only the `urlTemplate` (with a `{variant}` size
+/// placeholder) is needed; the rest of the object (id, title, source logos) is
+/// ignored.
+#[derive(Deserialize)]
+struct OAImage {
+    #[serde(rename = "urlTemplate")]
+    url_template: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -263,6 +283,35 @@ mod tests {
             "metrics":{},"ratingInfo":{},"season":{}
         }]}}"#;
         assert!(parse_tour(json).is_err());
+    }
+
+    #[test]
+    fn extracts_ordered_gallery_image_templates() {
+        // `primaryImage` mirrors `images[0]`; we take the ordered `images[]`.
+        let json = r#"{"header":{"status":"ok"},"answer":{"type":"oois","contents":[{
+            "type":"tour","id":"5","title":"Gallery Tour",
+            "category":{"type":"category","id":"1","ooiType":"tour","title":"Wanderung"},
+            "point":[13.0,50.0,500.0],"metrics":{},"ratingInfo":{},"season":{},
+            "primaryImage":{"type":"image","id":"100","urlTemplate":"https://img.oastatic.com/img2/100/{variant}/variant.jpg"},
+            "images":[
+                {"type":"image","id":"100","urlTemplate":"https://img.oastatic.com/img2/100/{variant}/variant.jpg"},
+                {"type":"image","id":"200","urlTemplate":"https://img.oastatic.com/img2/200/{variant}/variant.jpg"}
+            ]
+        }]}}"#;
+        let tour = parse_tour(json).unwrap();
+        assert_eq!(
+            tour.image_urls,
+            vec![
+                "https://img.oastatic.com/img2/100/{variant}/variant.jpg".to_string(),
+                "https://img.oastatic.com/img2/200/{variant}/variant.jpg".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_images_yields_empty_gallery() {
+        let json = minimal_json("7", "Wanderung", "yes");
+        assert!(parse_tour(&json).unwrap().image_urls.is_empty());
     }
 
     #[test]

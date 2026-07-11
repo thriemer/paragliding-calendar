@@ -15,4 +15,12 @@ export const API = {
   elevation: (lat: number, lng: number) => api(`/api/elevation?latitude=${lat}&longitude=${lng}`),
   flightAnalyze: api("/api/flights/analyze"),
   calendarRefresh: api("/api/calendar/refresh"),
+  preferences: api("/api/preferences"),
+  preferencesCompare: api("/api/preferences/compare"),
+  preferencesVote: api("/api/preferences/vote"),
+  preferencesRate: api("/api/preferences/rate"),
+  preferencesMatrix: api("/api/preferences/matrix"),
+  preferencesReEmbed: api("/api/preferences/re-embed"),
+  /** Resolve a content hash to its served image URL (base-path aware). */
+  image: (hash: string) => api(`/api/images/${hash}`),
 } as const;

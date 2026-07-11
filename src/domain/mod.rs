@@ -1,10 +1,15 @@
 pub mod activities;
 pub mod calendar;
+pub mod embedding;
+pub mod features;
 pub mod happening;
+pub mod image;
 pub mod location;
 pub mod paragliding;
 pub mod plan;
 pub mod ports;
+pub mod preference_fit;
+pub mod preferences;
 pub mod scoring;
 pub mod settings;
 pub mod tour;

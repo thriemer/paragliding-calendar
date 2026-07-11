@@ -40,6 +40,20 @@ pub struct AppConfig {
     pub database_url: String,
     pub google: GoogleOAuthConfig,
     pub microsoft: Option<MicrosoftOAuthConfig>,
+    /// Writable directory the embedding model files are downloaded into and
+    /// loaded from. On NixOS the store is read-only, so `module.nix` points
+    /// this at a `StateDirectory`.
+    pub embedding_cache_dir: String,
+    /// Batch size for embedding inference.
+    pub embedding_batch_size: usize,
+    /// Writable directory downloaded activity images are stored in (content-
+    /// addressed). Like `embedding_cache_dir`, NixOS points this at a StateDirectory.
+    pub image_store_dir: String,
+    /// Outdooractive image `{variant}` size token (e.g. `300x300`). A small square
+    /// bucket is plenty since CLIP center-crops to 224².
+    pub image_variant: String,
+    /// Max concurrent image downloads (politeness / rate-limit guard).
+    pub image_download_concurrency: usize,
 }
 
 impl AppConfig {
@@ -74,10 +88,40 @@ impl AppConfig {
             }
         });
 
+        // Default to the XDG cache dir (falls back to ~/.cache, then a local
+        // dir); NixOS overrides this via EMBEDDING_CACHE_DIR → StateDirectory.
+        let embedding_cache_dir = env::var("EMBEDDING_CACHE_DIR").unwrap_or_else(|_| {
+            let base = env::var("XDG_CACHE_HOME")
+                .or_else(|_| env::var("HOME").map(|h| format!("{h}/.cache")))
+                .unwrap_or_else(|_| ".cache".to_string());
+            format!("{base}/travelai/models/clip-multilingual")
+        });
+        let embedding_batch_size = env::var("EMBEDDING_BATCH_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(32);
+
+        let image_store_dir = env::var("IMAGE_STORE_DIR").unwrap_or_else(|_| {
+            let base = env::var("XDG_CACHE_HOME")
+                .or_else(|_| env::var("HOME").map(|h| format!("{h}/.cache")))
+                .unwrap_or_else(|_| ".cache".to_string());
+            format!("{base}/travelai/images")
+        });
+        let image_variant = env::var("IMAGE_VARIANT").unwrap_or_else(|_| "300x300".to_string());
+        let image_download_concurrency = env::var("IMAGE_DOWNLOAD_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(6);
+
         Ok(Self {
             database_url,
             google,
             microsoft,
+            embedding_cache_dir,
+            embedding_batch_size,
+            image_store_dir,
+            image_variant,
+            image_download_concurrency,
         })
     }
 }

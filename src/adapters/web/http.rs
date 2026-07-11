@@ -2,21 +2,29 @@ use axum::{
     Router,
     body::Body,
     extract::{Path, Query, State},
-    http::StatusCode,
-    response::Json,
+    http::{StatusCode, header},
+    response::{IntoResponse, Json, Response},
     routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::sync::atomic::Ordering;
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::instrument;
 
+use std::collections::BTreeMap;
+
 use crate::{
-    adapters::ingest::dhv,
+    adapters::{embedding::clip::ClipEmbedder, ingest::dhv},
     app_state::AppState,
-    application::{calendar_job, flight_analytics},
+    application::{
+        calendar_job, flight_analytics,
+        preferences::{CandidatePair, ComparisonMatrix, VoteOutcome},
+    },
     domain::{
         location::Location,
         paragliding::{ParaglidingSite, flight::Track},
+        preferences::{PreferenceCandidate, display_score},
         settings::UserSettings,
         weather::WeatherModel,
     },
@@ -151,6 +159,36 @@ pub fn router() -> Router<AppState> {
         .route("/settings", put(save_settings))
         .route("/weather-models", get(get_weather_models))
         .route("/calendar/refresh", post(trigger_calendar_job))
+        .route("/preferences", get(get_preferences_summary))
+        .route("/preferences/compare", get(get_preferences_compare))
+        .route("/preferences/vote", post(post_preferences_vote))
+        .route("/preferences/rate", post(post_preferences_rate))
+        .route("/preferences/matrix", get(get_preferences_matrix))
+        .route("/preferences/re-embed", post(post_preferences_reembed))
+        .route("/images/{hash}", get(get_image))
+}
+
+/// Serve a downloaded activity image by its content hash. Content-addressed, so
+/// the bytes never change — cache aggressively. The `ImageStore` validates the
+/// hash (rejecting path traversal). The MIME type is sniffed from the bytes.
+#[instrument(skip(state))]
+async fn get_image(State(state): State<AppState>, Path(hash): Path<String>) -> Response {
+    match state.image_store.get(&hash).await {
+        Ok(bytes) => {
+            let mime = image::guess_format(&bytes)
+                .map(|f| f.to_mime_type())
+                .unwrap_or("application/octet-stream");
+            (
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 #[instrument(skip(state))]
@@ -295,4 +333,258 @@ async fn get_weather_models(State(state): State<AppState>) -> Json<WeatherModels
     Json(WeatherModelsResponse {
         models: state.weather.available_models(),
     })
+}
+
+// ---- Preference learning (PLAN.md Phase 2b) --------------------------------
+
+#[derive(Serialize)]
+struct ActivityCardDto {
+    id: String,
+    kind: String,
+    title: String,
+    description: String,
+    stats: BTreeMap<String, String>,
+    /// Content hashes of the activity's images; the UI resolves each to
+    /// `/api/images/{hash}` (position order, 0 = primary).
+    image_hashes: Vec<String>,
+    current_score: f64,
+}
+
+impl From<&PreferenceCandidate> for ActivityCardDto {
+    fn from(c: &PreferenceCandidate) -> Self {
+        ActivityCardDto {
+            id: c.id.clone(),
+            kind: c.kind.as_str().to_string(),
+            title: c.title.clone(),
+            description: c.description.clone(),
+            stats: c.stats.iter().cloned().collect(),
+            image_hashes: c.image_hashes.clone(),
+            // Raw score is log-odds; the UI shows the 0–100 display mapping.
+            current_score: display_score(c.score),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct PairDto {
+    pair_id: String,
+    a: ActivityCardDto,
+    b: ActivityCardDto,
+}
+
+impl From<&CandidatePair> for PairDto {
+    fn from((a, b): &CandidatePair) -> Self {
+        PairDto {
+            pair_id: encode_pair(&a.id, &b.id),
+            a: a.as_ref().into(),
+            b: b.as_ref().into(),
+        }
+    }
+}
+
+/// `pair_id` is a stateless JSON encoding of the two activity ids — restart-safe
+/// and free of server-side session state (resolves PLAN.md's PairID open
+/// decision toward "encode the pair" rather than a stored UUID).
+fn encode_pair(a: &str, b: &str) -> String {
+    serde_json::to_string(&(a, b)).unwrap_or_default()
+}
+
+fn decode_pair(s: &str) -> Option<(String, String)> {
+    serde_json::from_str(s).ok()
+}
+
+#[instrument(skip(state))]
+async fn get_preferences_compare(
+    State(state): State<AppState>,
+) -> Result<Json<PairDto>, StatusCode> {
+    match state.preferences.compare().await {
+        Ok(Some(pair)) => Ok(Json((&pair).into())),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            tracing::error!(error = ?e, "preferences compare failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct VoteRequest {
+    pair_id: String,
+    winner_id: String,
+}
+
+#[derive(Serialize)]
+struct ProgressDto {
+    comparisons_done: i64,
+}
+
+#[derive(Serialize)]
+struct VoteResponseDto {
+    next: Option<PairDto>,
+    progress: ProgressDto,
+}
+
+#[instrument(skip(state, req), fields(winner = %req.winner_id))]
+async fn post_preferences_vote(
+    State(state): State<AppState>,
+    Json(req): Json<VoteRequest>,
+) -> Result<Json<VoteResponseDto>, StatusCode> {
+    // The loser is whichever half of the encoded pair isn't the winner.
+    let (a, b) = decode_pair(&req.pair_id).ok_or(StatusCode::BAD_REQUEST)?;
+    let loser = if req.winner_id == a {
+        b
+    } else if req.winner_id == b {
+        a
+    } else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+
+    let VoteOutcome {
+        next,
+        comparisons_done,
+    } = state
+        .preferences
+        .vote(&req.winner_id, &loser)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = ?e, "preferences vote failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(VoteResponseDto {
+        next: next.as_ref().map(PairDto::from),
+        progress: ProgressDto { comparisons_done },
+    }))
+}
+
+#[derive(Deserialize)]
+struct RateRequest {
+    activity_id: String,
+    rating: i16,
+}
+
+#[derive(Serialize)]
+struct RateResponse {
+    ok: bool,
+}
+
+#[instrument(skip(state, req), fields(activity = %req.activity_id, rating = req.rating))]
+async fn post_preferences_rate(
+    State(state): State<AppState>,
+    Json(req): Json<RateRequest>,
+) -> Result<Json<RateResponse>, StatusCode> {
+    if !(1..=5).contains(&req.rating) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    state
+        .preferences
+        .rate(&req.activity_id, req.rating)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = ?e, "preferences rate failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Json(RateResponse { ok: true }))
+}
+
+#[derive(Serialize)]
+struct FeatureSummaryDto {
+    feature: String,
+    weight: f64,
+    direction: String,
+}
+
+#[derive(Serialize)]
+struct KindSummaryDto {
+    base_pref: f64,
+    activity_count: usize,
+    features: Vec<FeatureSummaryDto>,
+}
+
+#[derive(Serialize)]
+struct SummaryDto {
+    comparisons_done: i64,
+    ratings_done: i64,
+    kinds: BTreeMap<String, KindSummaryDto>,
+}
+
+#[instrument(skip(state))]
+async fn get_preferences_summary(
+    State(state): State<AppState>,
+) -> Result<Json<SummaryDto>, StatusCode> {
+    let summary = state.preferences.summary().await.map_err(|e| {
+        tracing::error!(error = ?e, "preferences summary failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let kinds = summary
+        .kinds
+        .into_iter()
+        .map(|k| {
+            let features = k
+                .features
+                .into_iter()
+                .map(|f| FeatureSummaryDto {
+                    feature: f.feature,
+                    weight: f.weight,
+                    direction: if f.higher_is_better {
+                        "higher is better".to_string()
+                    } else {
+                        "lower is better".to_string()
+                    },
+                })
+                .collect();
+            (
+                k.kind.as_str().to_string(),
+                KindSummaryDto {
+                    base_pref: k.base_pref,
+                    activity_count: k.activity_count,
+                    features,
+                },
+            )
+        })
+        .collect();
+
+    Ok(Json(SummaryDto {
+        comparisons_done: summary.comparisons_done,
+        ratings_done: summary.ratings_done,
+        kinds,
+    }))
+}
+
+#[instrument(skip(state))]
+async fn get_preferences_matrix(
+    State(state): State<AppState>,
+) -> Result<Json<ComparisonMatrix>, StatusCode> {
+    state.preferences.matrix().await.map(Json).map_err(|e| {
+        tracing::error!(error = ?e, "preferences matrix failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+#[instrument(skip(state))]
+async fn post_preferences_reembed(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    if state.embedding_running.swap(true, Ordering::AcqRel) {
+        return Json(json!({ "status": "already_running" }));
+    }
+
+    let state = state.clone();
+    tokio::spawn(async move {
+        let embedder = match ClipEmbedder::new(&state.embedding_cache_dir, state.embedding_batch_size).await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!(error = ?e, "failed to construct embedder for re-embed");
+                state.embedding_running.store(false, Ordering::Release);
+                return;
+            }
+        };
+        if let Err(e) = state.preferences.re_embed(&embedder, state.embedding_batch_size).await {
+            tracing::error!(error = ?e, "re-embed failed");
+        }
+        state.embedding_running.store(false, Ordering::Release);
+    });
+
+    Json(json!({ "status": "started" }))
 }

@@ -67,6 +67,18 @@ pub fn parse_event(json: &str) -> Result<Happening> {
         .and_then(|v| v.as_str().map(String::from));
     let schedule_rules = event.get("scheduleRules").filter(|v| !v.is_null()).cloned();
 
+    // Ordered gallery (index 0 = primary). The `{variant}` placeholder is resolved
+    // to a concrete size at download time.
+    let image_urls: Vec<String> = event
+        .get("images")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|im| im.get("urlTemplate").and_then(|u| u.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let dates = event
         .get("nextDates")
         .and_then(|v| v.as_array())
@@ -101,6 +113,7 @@ pub fn parse_event(json: &str) -> Result<Happening> {
         organizer,
         schedule_rules,
         dates,
+        image_urls,
         data: event.clone(),
     })
 }
@@ -131,6 +144,25 @@ mod tests {
         assert_eq!(e.organizer.as_deref(), Some("Org"));
         assert_eq!(e.dates.len(), 1); // the unparseable date is dropped
         assert_eq!(e.dates[0].date_text.as_deref(), Some("Sat"));
+    }
+
+    #[test]
+    fn extracts_ordered_gallery_image_templates() {
+        let json = r#"{"answer":{"contents":[{
+            "id":"e5","title":"Gallery Event",
+            "images":[
+                {"type":"image","id":"1","urlTemplate":"https://img.oastatic.com/img2/1/{variant}/variant.jpg"},
+                {"type":"image","id":"2","urlTemplate":"https://img.oastatic.com/img2/2/{variant}/variant.jpg"}
+            ]
+        }]}}"#;
+        let e = parse_event(json).unwrap();
+        assert_eq!(
+            e.image_urls,
+            vec![
+                "https://img.oastatic.com/img2/1/{variant}/variant.jpg".to_string(),
+                "https://img.oastatic.com/img2/2/{variant}/variant.jpg".to_string(),
+            ]
+        );
     }
 
     #[test]

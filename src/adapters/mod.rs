@@ -1,5 +1,7 @@
+pub mod blob;
 pub mod calendar;
 pub mod email;
+pub mod embedding;
 pub mod ingest;
 pub mod open_meteo;
 pub mod persistence;

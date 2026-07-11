@@ -20,6 +20,9 @@ pub struct Tour {
     pub is_loop: bool,
     pub season_bitmask: u16,
     pub source_url: String,
+    /// Ordered gallery image URLs (index 0 = primary), resolved from the source
+    /// feed. Downloaded and embedded by the image pipeline.
+    pub image_urls: Vec<String>,
     #[serde(skip)]
     pub raw_json: String,
 }
@@ -52,6 +55,7 @@ mod tests {
             is_loop: false,
             season_bitmask: bitmask,
             source_url: String::new(),
+            image_urls: vec![],
             raw_json: String::new(),
         }
     }

@@ -1,0 +1,165 @@
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.error {
+  padding: 12px;
+  background: #ffebee;
+  color: #c62828;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.empty {
+  font-size: 13px;
+  color: #888;
+  margin: 0;
+}
+
+.heading {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  color: #1a1a2e;
+}
+
+.kindList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kindRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: white;
+  border-radius: 5px;
+  padding: 8px 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
+  width: 100%;
+  cursor: pointer;
+  border: none;
+  font: inherit;
+  text-align: left;
+  transition: box-shadow 0.15s;
+}
+
+.kindRow:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+.kindRow:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.kindRow.expanded {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
+}
+
+.kindBadge {
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.kindScore {
+  font-weight: 700;
+  color: #1a1a2e;
+  font-variant-numeric: tabular-nums;
+}
+
+.kindCount {
+  margin-left: auto;
+  font-size: 12px;
+  color: #888;
+}
+
+.chevron {
+  font-size: 10px;
+  color: #999;
+  margin-left: 8px;
+}
+
+.kindFeatures {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0 6px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #fafafa;
+  border-bottom-left-radius: 5px;
+  border-bottom-right-radius: 5px;
+}
+
+.featureRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: white;
+  border-radius: 4px;
+  padding: 6px 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.featureName {
+  font-family: monospace;
+  font-size: 12px;
+  color: #333;
+}
+
+.featureWeight {
+  font-weight: 700;
+  color: #1a1a2e;
+  font-variant-numeric: tabular-nums;
+}
+
+.featureDirection {
+  margin-left: auto;
+  font-size: 12px;
+  color: #888;
+}
+
+/* Comparison matrix */
+.matrixWrap {
+  overflow-x: auto;
+}
+
+.matrix {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+  min-width: max-content;
+}
+
+.matrix th,
+.matrix td {
+  padding: 4px 8px;
+  text-align: center;
+  border: 1px solid #e0e0e0;
+}
+
+.matrixHeader {
+  font-weight: 600;
+  color: #333;
+  background: #fafafa;
+  white-space: nowrap;
+}
+
+.matrixCell {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  min-width: 28px;
+}
