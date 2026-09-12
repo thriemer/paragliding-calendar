@@ -19,7 +19,7 @@
         && !(lib.hasInfix "/dist/" path);
     };
 
-    npmDepsHash = "sha256-Mt6jTMwJWaYfxKRK0/bNMOk3g0ReNgQu0ooi2taSf4I=";
+    npmDepsHash = "sha256-yT0Ce2lVm8TPsDL+scffgF+Azol49rnQGk8gmX6RT9A=";
 
     npmFlags = ["--legacy-peer-deps"];
 
@@ -55,6 +55,10 @@ in
     };
 
     cargoLock.lockFile = ./Cargo.lock;
+
+    # Tests spin up Postgres via testcontainers/Docker, which the Nix build
+    # sandbox has no access to (no network, no Docker daemon).
+    doCheck = false;
 
     nativeBuildInputs = [pkg-config];
     buildInputs = [openssl];
