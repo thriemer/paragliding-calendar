@@ -2,10 +2,16 @@ import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useUpdateSite } from "./useUpdateSite";
 import { makeWrapper } from "../test/queryWrapper";
-import type { ApiSite } from "./useSites";
+import type { ApiActivity } from "./useSites";
 
-const sampleSite: ApiSite = {
-  name: "S1",
+const sampleSite: ApiActivity = {
+  id: "S1",
+  kind: "paragliding",
+  title: "S1",
+  latitude: 0,
+  longitude: 0,
+  description: "",
+  image_urls: [],
   country: "DE",
   launches: [],
   landings: [],

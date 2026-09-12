@@ -7,6 +7,8 @@ import styles from "./PreferencePair.module.css";
 interface Props {
   pair: PreferencePairData;
   onVote: (activityId: string) => void;
+  onLikeBoth: () => void;
+  onDislikeBoth: () => void;
   onSkip: () => void;
   disabled?: boolean;
 }
@@ -96,7 +98,14 @@ function ActivityCard({ activity, badge }: { activity: PreferenceActivity; badge
   );
 }
 
-export function PreferencePair({ pair, onVote, onSkip, disabled = false }: Props) {
+export function PreferencePair({
+  pair,
+  onVote,
+  onLikeBoth,
+  onDislikeBoth,
+  onSkip,
+  disabled = false,
+}: Props) {
   return (
     <div className={styles.pair}>
       <div className={styles.cards}>
@@ -112,18 +121,32 @@ export function PreferencePair({ pair, onVote, onSkip, disabled = false }: Props
           Prefer A
         </button>
         <button
-          className="btn btn-cancel"
-          onClick={onSkip}
-          disabled={disabled}
-        >
-          Skip
-        </button>
-        <button
           className="btn"
           onClick={() => onVote(pair.b.id)}
           disabled={disabled}
         >
           Prefer B
+        </button>
+        <button
+          className="btn"
+          onClick={onLikeBoth}
+          disabled={disabled}
+        >
+          Like Both
+        </button>
+        <button
+          className="btn btn-cancel"
+          onClick={onDislikeBoth}
+          disabled={disabled}
+        >
+          Dislike Both
+        </button>
+        <button
+          className={`${styles.skipBtn} btn ${styles.skipBtnStyle}`}
+          onClick={onSkip}
+          disabled={disabled}
+        >
+          Skip
         </button>
       </div>
     </div>

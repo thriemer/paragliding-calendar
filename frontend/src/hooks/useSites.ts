@@ -24,11 +24,17 @@ export interface ApiLanding {
   elevation: number;
 }
 
-export interface ApiSite {
-  name: string;
-  country: string | null;
+export interface ApiActivity {
+  id: string;
+  kind: string;
+  title: string;
+  latitude: number;
+  longitude: number;
+  description: string;
+  image_urls: string[];
   launches: ApiLaunch[];
   landings: ApiLanding[];
+  country: string | null;
   data_source: string;
   parking_location?: ApiLocation;
   mute_alerts?: boolean;
@@ -41,7 +47,7 @@ export const sitesQueryKey = ["sites"] as const;
 export function useSites() {
   const query = useQuery({
     queryKey: sitesQueryKey,
-    queryFn: () => fetchJson<ApiSite[]>(API.sites),
+    queryFn: () => fetchJson<ApiActivity[]>(API.sites),
   });
 
   return {

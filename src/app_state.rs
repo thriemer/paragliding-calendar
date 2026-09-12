@@ -24,7 +24,7 @@ use crate::{
         preference_scorer::PreferenceScorer,
         preferences::PreferenceService,
         solvers::Nsga2Solver,
-        sources::{EventActivitySource, ParaglidingActivitySource, TourActivitySource},
+        sources::ParaglidingActivitySource,
     },
     config::AppConfig,
     domain::ports::{
@@ -33,6 +33,8 @@ use crate::{
         SettingsRepository, SiteRepository, TourRepository, WeatherProvider, WeekSolver,
     },
 };
+#[cfg(feature = "new-activities")]
+use crate::application::sources::{EventActivitySource, TourActivitySource};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -116,23 +118,29 @@ impl AppState {
             weather.clone(),
             preference_scorer.clone(),
         ));
+        #[cfg(feature = "new-activities")]
         let tour_source: Arc<dyn ActivitySource> = Arc::new(TourActivitySource::new(
             outdoor_repo.clone(),
             settings_repo.clone(),
             weather.clone(),
             preference_scorer.clone(),
         ));
+        #[cfg(feature = "new-activities")]
         let event_source: Arc<dyn ActivitySource> = Arc::new(EventActivitySource::new(
             event_repo.clone(),
             settings_repo.clone(),
             preference_scorer.clone(),
         ));
         let solver: Arc<dyn WeekSolver> = Arc::new(Nsga2Solver::new());
-        let planner = Arc::new(Planner::new(
-            vec![paragliding_source, tour_source, event_source],
-            solver.clone(),
-            geo.clone(),
-        ));
+
+        #[cfg_attr(not(feature = "new-activities"), allow(unused_mut))]
+        let mut sources: Vec<Arc<dyn ActivitySource>> = vec![paragliding_source];
+        #[cfg(feature = "new-activities")]
+        {
+            sources.push(tour_source);
+            sources.push(event_source);
+        }
+        let planner = Arc::new(Planner::new(sources, solver.clone(), geo.clone()));
 
         let preferences = Arc::new(PreferenceService::new(
             outdoor_repo.clone(),

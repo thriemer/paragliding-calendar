@@ -883,6 +883,53 @@ impl PreferenceRepository for PostgresRepository {
 
 #[async_trait]
 impl EmbeddingRepository for PostgresRepository {
+    async fn upsert_text_embeddings(
+        &self,
+        rows: &[(String, ActivityKind, Vec<f64>)],
+    ) -> Result<usize> {
+        let mut saved = 0usize;
+        for chunk in rows.chunks(500) {
+            let mut tx = self.pool.begin().await?;
+            for (activity_id, kind, text_embedding) in chunk {
+                // Checkpoint only the text vector; the reduce-stage columns stay
+                // untouched so a re-run of the embed job never clobbers them.
+                sqlx::query(
+                    "INSERT INTO activity_embeddings (activity_id, kind, text_embedding)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT (activity_id, kind) DO UPDATE SET
+                        text_embedding = EXCLUDED.text_embedding",
+                )
+                .bind(activity_id)
+                .bind(kind.as_str())
+                .bind(text_embedding)
+                .execute(&mut *tx)
+                .await?;
+                saved += 1;
+            }
+            tx.commit().await?;
+        }
+        Ok(saved)
+    }
+
+    async fn raw_text_embeddings(&self) -> Result<Vec<(String, ActivityKind, Vec<f64>)>> {
+        let rows: Vec<(String, String, Vec<f64>)> = sqlx::query_as(
+            "SELECT activity_id, kind, text_embedding FROM activity_embeddings
+             WHERE text_embedding IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, kind, text)| match ActivityKind::parse(&kind) {
+                Some(k) => Some((id, k, text)),
+                None => {
+                    tracing::warn!(kind = %kind, "activity_embeddings: skipping unknown kind");
+                    None
+                }
+            })
+            .collect())
+    }
+
     async fn upsert_batch(&self, rows: Vec<ActivityEmbeddingRow>) -> Result<usize> {
         let mut saved = 0usize;
         // Chunked transactions: the corpus can be tens of thousands of rows.
@@ -919,8 +966,11 @@ impl EmbeddingRepository for PostgresRepository {
     }
 
     async fn find_all(&self) -> Result<Vec<ActivityEmbeddingRow>> {
+        // Only fully-reduced rows: text-only checkpoints have NULL embedding/
+        // pca_dims/features, which don't decode into the non-optional row struct.
         let rows: Vec<ActivityEmbeddingDbRow> = sqlx::query_as(
-            "SELECT activity_id, kind, embedding, pca_dims, features FROM activity_embeddings",
+            "SELECT activity_id, kind, embedding, pca_dims, features FROM activity_embeddings
+             WHERE features IS NOT NULL",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -942,10 +992,12 @@ impl EmbeddingRepository for PostgresRepository {
     async fn feature_vectors(&self) -> Result<Vec<(String, ActivityKind, Vec<f64>)>> {
         // Skip the 384-dim `embedding` column — the read paths only need the
         // normalized feature vector.
-        let rows: Vec<(String, String, Vec<f64>)> =
-            sqlx::query_as("SELECT activity_id, kind, features FROM activity_embeddings")
-                .fetch_all(&self.pool)
-                .await?;
+        let rows: Vec<(String, String, Vec<f64>)> = sqlx::query_as(
+            "SELECT activity_id, kind, features FROM activity_embeddings
+             WHERE features IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         Ok(rows
             .into_iter()
             .filter_map(|(id, kind, features)| match ActivityKind::parse(&kind) {
@@ -1062,6 +1114,27 @@ impl ImageRepository for PostgresRepository {
             .collect()
     }
 
+    async fn pending_image_embeddings(&self) -> Result<Vec<DownloadedImage>> {
+        let rows: Vec<(String, String, i16, String)> = sqlx::query_as(
+            "SELECT activity_id, kind, position, content_hash
+             FROM activity_images
+             WHERE content_hash IS NOT NULL AND embedding IS NULL
+             ORDER BY activity_id, position",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|(activity_id, kind, position, content_hash)| {
+                Ok(DownloadedImage {
+                    activity_id,
+                    kind: parse_kind(&kind)?,
+                    position,
+                    content_hash,
+                })
+            })
+            .collect()
+    }
+
     async fn store_embeddings(&self, embeddings: &[ImageEmbedding]) -> Result<()> {
         for chunk in embeddings.chunks(500) {
             let mut tx = self.pool.begin().await?;
@@ -1081,6 +1154,27 @@ impl ImageRepository for PostgresRepository {
             tx.commit().await?;
         }
         Ok(())
+    }
+
+    async fn all_image_embeddings(&self) -> Result<Vec<ImageEmbedding>> {
+        let rows: Vec<(String, String, i16, Vec<f64>)> = sqlx::query_as(
+            "SELECT activity_id, kind, position, embedding
+             FROM activity_images
+             WHERE embedding IS NOT NULL
+             ORDER BY activity_id, position",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|(activity_id, kind, position, embedding)| {
+                Ok(ImageEmbedding {
+                    activity_id,
+                    kind: parse_kind(&kind)?,
+                    position,
+                    embedding,
+                })
+            })
+            .collect()
     }
 
     async fn downloaded_hashes_by_activity(&self) -> Result<HashMap<String, Vec<String>>> {

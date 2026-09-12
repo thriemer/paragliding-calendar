@@ -1,40 +1,51 @@
-import { ApiSite } from "../hooks/useSites";
+import { ApiActivity } from "../hooks/useSites";
+import { kindLabel, kindColor } from "../utils/activityKind";
 import styles from "./FilterPanel.module.css";
 
 export interface Filters {
-  siteType: string;
+  activityTypes: string[];
 }
 
 interface FilterPanelProps {
   filters: Filters;
   onFilterChange: (filters: Filters) => void;
-  sites: ApiSite[];
+  activities: ApiActivity[];
 }
 
-export function FilterPanel({ filters, onFilterChange, sites }: FilterPanelProps) {
-  const siteTypes = Array.from(
-    new Set(
-      sites.flatMap((site) =>
-        site.launches.map((launch) => launch.site_type).filter(Boolean)
-      )
-    )
+const EXCLUDED_KINDS = new Set(["event", "commitment"]);
+
+export function FilterPanel({ filters, onFilterChange, activities }: FilterPanelProps) {
+  const activityTypes = Array.from(
+    new Set(activities.map((a) => a.kind).filter((k) => !EXCLUDED_KINDS.has(k)))
   ).sort();
+
+  const toggleKind = (kind: string) => {
+    const active = filters.activityTypes.includes(kind)
+      ? filters.activityTypes.filter((k) => k !== kind)
+      : [...filters.activityTypes, kind];
+    onFilterChange({ ...filters, activityTypes: active });
+  };
 
   return (
     <div className={styles.filterPanel}>
       <div className={styles.filterGroup}>
-        <label>Site Type:</label>
-        <select
-          value={filters.siteType}
-          onChange={(e) => onFilterChange({ ...filters, siteType: e.target.value })}
-        >
-          <option value="">All</option>
-          {siteTypes.map((type) => (
-            <option key={type} value={type}>
-              {type}
-            </option>
+        <label>Activity Type:</label>
+        <div className={styles.checkboxGroup}>
+          {activityTypes.map((kind) => (
+            <label key={kind} className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={filters.activityTypes.length === 0 || filters.activityTypes.includes(kind)}
+                onChange={() => toggleKind(kind)}
+              />
+              <span
+                className={styles.kindDot}
+                style={{ backgroundColor: kindColor(kind) }}
+              />
+              {kindLabel(kind)}
+            </label>
           ))}
-        </select>
+        </div>
       </div>
     </div>
   );

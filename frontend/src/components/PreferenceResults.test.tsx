@@ -6,6 +6,7 @@ import type { PreferenceSummary } from "../hooks/usePreferences";
 const summary: PreferenceSummary = {
   comparisons_done: 12,
   ratings_done: 3,
+  validation: { pairwise_accuracy: null, pairwise_count: 0, rating_mse: null, rating_count: 0, k: 0 },
   kinds: {
     hiking: { base_pref: 0.5, activity_count: 45, features: [] },
     paragliding: {

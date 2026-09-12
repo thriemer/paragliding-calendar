@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { MapContainer, TileLayer, Marker } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { ApiSite, ApiLaunch, ApiLanding, ApiLocation } from "../hooks/useSites";
+import { ApiActivity, ApiLaunch, ApiLanding, ApiLocation } from "../hooks/useSites";
 import { useWeatherModels } from "../hooks/useWeatherModels";
 import { MapClickHandler } from "../utils/leaflet";
 import { LaunchEditor } from "./LaunchEditor";
@@ -9,9 +9,9 @@ import { LandingEditor } from "./LandingEditor";
 import styles from "./SiteEditor.module.css";
 
 interface SiteEditorProps {
-  site: ApiSite;
+  site: ApiActivity;
   defaultCenter: [number, number];
-  onSave: (updatedSite: ApiSite) => void;
+  onSave: (updatedSite: ApiActivity) => void;
   onDelete?: (siteName: string) => void;
   onCancel: () => void;
   error?: string | null;
@@ -77,7 +77,7 @@ function ParkingLocationPicker({
 
 export function SiteEditor({ site, defaultCenter, onSave, onDelete, onCancel, error }: SiteEditorProps) {
   const { models } = useWeatherModels();
-  const [name, setName] = useState(site.name);
+  const [name, setName] = useState(site.title);
   const [country, setCountry] = useState(site.country || "");
   const [launches, setLaunches] = useState<ApiLaunch[]>(site.launches);
   const [landings, setLandings] = useState<ApiLanding[]>(site.landings);
@@ -135,10 +135,16 @@ export function SiteEditor({ site, defaultCenter, onSave, onDelete, onCancel, er
 
   const handleSave = () => {
     onSave({
-      name,
-      country: country || null,
+      id: name,
+      kind: "paragliding",
+      title: name,
+      latitude: launches[0]?.location.latitude || 0,
+      longitude: launches[0]?.location.longitude || 0,
+      description: "",
+      image_urls: [],
       launches,
       landings,
+      country: country || null,
       data_source: site.data_source || "API",
       parking_location: parkingLocation || undefined,
       mute_alerts: muteAlerts || undefined,
@@ -148,14 +154,14 @@ export function SiteEditor({ site, defaultCenter, onSave, onDelete, onCancel, er
   };
 
   const handleDelete = () => {
-    if (onDelete && confirm(`Are you sure you want to delete "${site.name}"?`)) {
-      onDelete(site.name);
+    if (onDelete && confirm(`Are you sure you want to delete "${site.title}"?`)) {
+      onDelete(site.id);
     }
   };
 
   return (
     <div className={styles.siteEditor}>
-      <h3>{site.name ? "Edit Site" : "Create Site"}</h3>
+      <h3>{site.title ? "Edit Site" : "Create Site"}</h3>
       
       <div className={styles.formGroup}>
         <label>Site Name:</label>

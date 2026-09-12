@@ -1,11 +1,16 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { FilterPanel } from "./FilterPanel";
-import type { ApiSite, SiteType } from "../hooks/useSites";
+import type { ApiActivity, SiteType } from "../hooks/useSites";
 
-const site = (name: string, types: SiteType[]): ApiSite => ({
-  name,
-  country: "DE",
+const activity = (id: string, kind: string, types: SiteType[]): ApiActivity => ({
+  id,
+  kind,
+  title: id,
+  latitude: 47,
+  longitude: 10,
+  description: "",
+  image_urls: [],
   launches: types.map((site_type) => ({
     location: { latitude: 47, longitude: 10, name: "", country: "DE" },
     direction_degrees_start: 0,
@@ -14,67 +19,73 @@ const site = (name: string, types: SiteType[]): ApiSite => ({
     site_type,
   })),
   landings: [],
+  country: "DE",
   data_source: "API",
 });
 
 describe("FilterPanel", () => {
-  test("renders 'All' option by default", () => {
+  test("renders all activity types as checked checkboxes when no filter active", () => {
+    const activities = [activity("a", "paragliding", ["Hang"])];
     render(
-      <FilterPanel filters={{ siteType: "" }} onFilterChange={() => {}} sites={[]} />,
+      <FilterPanel filters={{ activityTypes: [] }} onFilterChange={() => {}} activities={activities} />,
     );
-    expect(screen.getByRole("option", { name: "All" })).toBeTruthy();
+    expect(screen.getByText("Paragliding")).toBeTruthy();
   });
 
-  test("derives unique sorted site types from sites' launches", () => {
-    const sites = [
-      site("A", ["Hang", "Winch"]),
-      site("B", ["Hang"]),
-      site("C", ["Winch", "Winch"]),
+  test("derives unique activity kinds from activities", () => {
+    const activities = [
+      activity("a", "paragliding", ["Hang"]),
+      activity("b", "hiking", []),
+      activity("c", "paragliding", ["Winch"]),
+      activity("d", "biking", []),
     ];
     render(
-      <FilterPanel filters={{ siteType: "" }} onFilterChange={() => {}} sites={sites} />,
+      <FilterPanel filters={{ activityTypes: [] }} onFilterChange={() => {}} activities={activities} />,
     );
-    const options = screen
-      .getAllByRole("option")
-      .map((o) => (o as HTMLOptionElement).value);
-    expect(options).toEqual(["", "Hang", "Winch"]);
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes.length).toBe(3);
   });
 
-  test("filters out empty site types", () => {
-    // Deliberately malformed data: the panel must drop empty site types.
-    const sites = [site("A", ["Hang", "" as SiteType])];
+  test("excludes event and commitment kinds", () => {
+    const activities = [
+      activity("a", "paragliding", ["Hang"]),
+      activity("b", "event", []),
+      activity("c", "commitment", []),
+    ];
     render(
-      <FilterPanel filters={{ siteType: "" }} onFilterChange={() => {}} sites={sites} />,
+      <FilterPanel filters={{ activityTypes: [] }} onFilterChange={() => {}} activities={activities} />,
     );
-    const options = screen
-      .getAllByRole("option")
-      .map((o) => (o as HTMLOptionElement).value);
-    expect(options).toEqual(["", "Hang"]);
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes.length).toBe(1);
   });
 
-  test("calls onFilterChange when selection changes", () => {
+  test("calls onFilterChange when checkbox is toggled", () => {
     const onFilterChange = vi.fn();
+    const activities = [activity("a", "paragliding", ["Hang"])];
     render(
       <FilterPanel
-        filters={{ siteType: "" }}
+        filters={{ activityTypes: [] }}
         onFilterChange={onFilterChange}
-        sites={[site("A", ["Hang", "Winch"])]}
+        activities={activities}
       />,
     );
-    const select = screen.getByRole("combobox") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "Winch" } });
-    expect(onFilterChange).toHaveBeenCalledWith({ siteType: "Winch" });
+    const checkbox = screen.getByRole("checkbox");
+    fireEvent.click(checkbox);
+    expect(onFilterChange).toHaveBeenCalledWith({ activityTypes: ["paragliding"] });
   });
 
-  test("reflects current filter value", () => {
+  test("unchecking removes kind from activityTypes", () => {
+    const onFilterChange = vi.fn();
+    const activities = [activity("a", "paragliding", ["Hang"])];
     render(
       <FilterPanel
-        filters={{ siteType: "Hang" }}
-        onFilterChange={() => {}}
-        sites={[site("A", ["Hang", "Winch"])]}
+        filters={{ activityTypes: ["paragliding"] }}
+        onFilterChange={onFilterChange}
+        activities={activities}
       />,
     );
-    const select = screen.getByRole("combobox") as HTMLSelectElement;
-    expect(select.value).toBe("Hang");
+    const checkbox = screen.getByRole("checkbox");
+    fireEvent.click(checkbox);
+    expect(onFilterChange).toHaveBeenCalledWith({ activityTypes: [] });
   });
 });

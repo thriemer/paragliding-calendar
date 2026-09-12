@@ -42,10 +42,19 @@ export interface KindSummary {
   features: FeatureSummary[];
 }
 
+export interface ValidationMetrics {
+  pairwise_accuracy: number | null;
+  pairwise_count: number;
+  rating_mse: number | null;
+  rating_count: number;
+  k: number;
+}
+
 export interface PreferenceSummary {
   comparisons_done: number;
   ratings_done: number;
   kinds: Record<string, KindSummary>;
+  validation: ValidationMetrics;
 }
 
 export type ComparisonMatrix = Record<string, Record<string, number>>;
@@ -79,22 +88,24 @@ export function usePreferences() {
     refetchInterval: 5_000,
   });
 
+  const handleVoteResponse = (res: VoteResponse) => {
+    setComparisonsDone(res.progress.comparisons_done);
+    if (res.next) {
+      setPair(res.next);
+    } else {
+      setPair(null);
+    }
+    queryClient.invalidateQueries({ queryKey: ["preferences", "summary"] });
+    queryClient.invalidateQueries({ queryKey: ["preferences", "matrix"] });
+  };
+
   const voteMutation = useMutation({
     mutationFn: (winnerId: string) =>
       postJson<VoteResponse>(API.preferencesVote, {
         pair_id: currentPair?.pair_id,
         winner_id: winnerId,
       }),
-    onSuccess: (res) => {
-      setComparisonsDone(res.progress.comparisons_done);
-      if (res.next) {
-        setPair(res.next);
-      } else {
-        setPair(null);
-      }
-      queryClient.invalidateQueries({ queryKey: ["preferences", "summary"] });
-      queryClient.invalidateQueries({ queryKey: ["preferences", "matrix"] });
-    },
+    onSuccess: handleVoteResponse,
   });
 
   const skipMutation = useMutation({
@@ -108,6 +119,22 @@ export function usePreferences() {
         activity_id: input.activityId,
         rating: input.rating,
       }),
+  });
+
+  const likeBothMutation = useMutation({
+    mutationFn: () =>
+      postJson<VoteResponse>(API.preferencesLikeBoth, {
+        pair_id: currentPair?.pair_id,
+      }),
+    onSuccess: handleVoteResponse,
+  });
+
+  const dislikeBothMutation = useMutation({
+    mutationFn: () =>
+      postJson<VoteResponse>(API.preferencesDislikeBoth, {
+        pair_id: currentPair?.pair_id,
+      }),
+    onSuccess: handleVoteResponse,
   });
 
   const reEmbedMutation = useMutation({
@@ -132,6 +159,8 @@ export function usePreferences() {
       errorOf(voteMutation.error) ||
       errorOf(skipMutation.error),
     vote: (winnerId: string) => voteMutation.mutate(winnerId),
+    likeBoth: () => likeBothMutation.mutate(),
+    dislikeBoth: () => dislikeBothMutation.mutate(),
     skip: () => skipMutation.mutate(),
     rate: (activityId: string, rating: number) =>
       rateMutation.mutateAsync({ activityId, rating }),

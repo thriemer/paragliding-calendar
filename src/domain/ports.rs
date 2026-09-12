@@ -202,13 +202,25 @@ pub trait PreferenceRepository: Send + Sync {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait EmbeddingRepository: Send + Sync {
-    /// Upsert processed rows, replacing any existing `(activity_id, kind)`.
+    /// Checkpoint raw text embeddings for a batch: upsert the `text_embedding`
+    /// column per `(activity_id, kind)`, leaving the reduce-stage columns intact.
+    /// Called once per batch by the embed job so a crash resumes from here.
+    async fn upsert_text_embeddings(
+        &self,
+        rows: &[(String, ActivityKind, Vec<f64>)],
+    ) -> Result<usize>;
+    /// Every stored raw text embedding (`text_embedding IS NOT NULL`) — the embed
+    /// job's resume set (which activities are done) and the reduce job's text input.
+    async fn raw_text_embeddings(&self) -> Result<Vec<(String, ActivityKind, Vec<f64>)>>;
+    /// Upsert fully-reduced rows (fused embedding + pca_dims + features), replacing
+    /// any existing `(activity_id, kind)` while preserving the text checkpoint.
     async fn upsert_batch(&self, rows: Vec<ActivityEmbeddingRow>) -> Result<usize>;
+    #[allow(dead_code)]
     async fn count(&self) -> Result<i64>;
-    /// All stored feature rows — exercised by the persistence round-trip test.
+    /// All fully-reduced rows — exercised by the persistence round-trip test.
     #[allow(dead_code)]
     async fn find_all(&self) -> Result<Vec<ActivityEmbeddingRow>>;
-    /// `(activity_id, kind, normalized features)` for every row, without the
+    /// `(activity_id, kind, normalized features)` for every reduced row, without the
     /// heavy 384-dim raw embedding. The planner's read path (Phase 4) and the
     /// solver's feature source.
     async fn feature_vectors(&self) -> Result<Vec<(String, ActivityKind, Vec<f64>)>>;
@@ -252,9 +264,17 @@ pub trait ImageRepository: Send + Sync {
         height: Option<i32>,
     ) -> Result<()>;
     /// Every downloaded image (`content_hash` present) — the embed pass's input.
+    #[allow(dead_code)]
     async fn all_downloaded(&self) -> Result<Vec<DownloadedImage>>;
+    /// Downloaded images not yet embedded (`content_hash IS NOT NULL AND
+    /// embedding IS NULL`) — the embed job's resumable image work-list. Mirror of
+    /// [`ImageRepository::pending_downloads`].
+    async fn pending_image_embeddings(&self) -> Result<Vec<DownloadedImage>>;
     /// (Re)write the CLIP vectors for downloaded images and stamp `embedded_at`.
     async fn store_embeddings(&self, embeddings: &[ImageEmbedding]) -> Result<()>;
+    /// Every stored image CLIP vector (`embedding IS NOT NULL`) — the reduce
+    /// job's image input, grouped into a per-activity mean.
+    async fn all_image_embeddings(&self) -> Result<Vec<ImageEmbedding>>;
     /// `activity_id` → ordered content hashes of its downloaded images, for the
     /// comparison UI's served image URLs.
     async fn downloaded_hashes_by_activity(&self) -> Result<HashMap<String, Vec<String>>>;

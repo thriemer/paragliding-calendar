@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ComparisonMatrix, PreferenceSummary } from "../hooks/usePreferences";
+import { ComparisonMatrix, PreferenceSummary, ValidationMetrics } from "../hooks/usePreferences";
 import { kindColor, kindLabel } from "../utils/activityKind";
 import styles from "./PreferenceResults.module.css";
 
@@ -12,6 +12,32 @@ interface Props {
   matrixError: string | null;
   onReEmbed: () => void;
   reEmbedding: boolean;
+}
+
+function ModelAccuracy({ validation }: { validation: ValidationMetrics }) {
+  const pct =
+    validation.pairwise_accuracy != null
+      ? `${(validation.pairwise_accuracy * 100).toFixed(1)}%`
+      : "N/A";
+  const mse =
+    validation.rating_mse != null
+      ? validation.rating_mse.toFixed(3)
+      : "N/A";
+  return (
+    <div className={styles.accuracy}>
+      <p>
+        <strong>Pairwise accuracy:</strong> {pct}{" "}
+        <span className={styles.muted}>({validation.pairwise_count} comparisons)</span>
+      </p>
+      <p>
+        <strong>Rating MSE:</strong> {mse}{" "}
+        <span className={styles.muted}>({validation.rating_count} ratings)</span>
+      </p>
+      <p className={styles.muted}>
+        {validation.k}-fold cross-validation
+      </p>
+    </div>
+  );
 }
 
 function cellColor(count: number): string {
@@ -139,6 +165,13 @@ export function PreferenceResults({
           </ul>
         )}
       </section>
+
+      {summary?.validation && (
+        <section>
+          <h3 className={styles.heading}>Model accuracy</h3>
+          <ModelAccuracy validation={summary.validation} />
+        </section>
+      )}
 
       <section>
         <h3 className={styles.heading}>Comparison matrix</h3>

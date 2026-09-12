@@ -2,10 +2,16 @@ import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { SiteEditor } from "./SiteEditor";
 import { makeWrapper } from "../test/queryWrapper";
-import type { ApiSite } from "../hooks/useSites";
+import type { ApiActivity } from "../hooks/useSites";
 
-const sampleSite: ApiSite = {
-  name: "Greifenberg",
+const sampleSite: ApiActivity = {
+  id: "Greifenberg",
+  kind: "paragliding",
+  title: "Greifenberg",
+  latitude: 47.5,
+  longitude: 10.5,
+  description: "",
+  image_urls: [],
   country: "DE",
   launches: [
     {
@@ -27,16 +33,22 @@ const sampleSite: ApiSite = {
   mute_alerts: false,
 };
 
-const emptySite: ApiSite = {
-  name: "",
+const emptySite: ApiActivity = {
+  id: "",
+  kind: "paragliding",
+  title: "",
+  latitude: 0,
+  longitude: 0,
+  description: "",
+  image_urls: [],
   country: null,
   launches: [],
   landings: [],
   data_source: "API",
 };
 
-function renderEditor(site: ApiSite, opts: {
-  onSave?: (s: ApiSite) => void;
+function renderEditor(site: ApiActivity, opts: {
+  onSave?: (s: ApiActivity) => void;
   onDelete?: (n: string) => void;
   onCancel?: () => void;
 } = {}) {
@@ -87,8 +99,8 @@ describe("SiteEditor", () => {
     renderEditor(sampleSite, { onSave });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(onSave).toHaveBeenCalledTimes(1);
-    const saved = onSave.mock.calls[0]?.[0] as ApiSite;
-    expect(saved.name).toBe("Greifenberg");
+    const saved = onSave.mock.calls[0]?.[0] as ApiActivity;
+    expect(saved.title).toBe("Greifenberg");
     expect(saved.country).toBe("DE");
     expect(saved.launches.length).toBe(1);
     expect(saved.landings.length).toBe(1);
@@ -103,8 +115,8 @@ describe("SiteEditor", () => {
     // first input is Site Name
     fireEvent.change(inputs[0]!, { target: { value: "Other" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    const saved = onSave.mock.calls[0]?.[0] as ApiSite;
-    expect(saved.name).toBe("Other");
+    const saved = onSave.mock.calls[0]?.[0] as ApiActivity;
+    expect(saved.title).toBe("Other");
   });
 
   test("empty country saves as null", () => {
@@ -114,7 +126,7 @@ describe("SiteEditor", () => {
     // second input is Country
     fireEvent.change(inputs[1]!, { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    const saved = onSave.mock.calls[0]?.[0] as ApiSite;
+    const saved = onSave.mock.calls[0]?.[0] as ApiActivity;
     expect(saved.country).toBeNull();
   });
 
@@ -166,7 +178,7 @@ describe("SiteEditor", () => {
     const addButtons = screen.getAllByRole("button", { name: "+ Add" });
     fireEvent.click(addButtons[0]!); // first +Add is for Launches
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    const saved = onSave.mock.calls[0]?.[0] as ApiSite;
+    const saved = onSave.mock.calls[0]?.[0] as ApiActivity;
     expect(saved.launches.length).toBe(2);
     expect(saved.launches[1]?.site_type).toBe("Hang");
     expect(saved.launches[1]?.direction_degrees_start).toBe(0);
@@ -179,7 +191,7 @@ describe("SiteEditor", () => {
     const addButtons = screen.getAllByRole("button", { name: "+ Add" });
     fireEvent.click(addButtons[1]!); // second +Add is for Landings
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    const saved = onSave.mock.calls[0]?.[0] as ApiSite;
+    const saved = onSave.mock.calls[0]?.[0] as ApiActivity;
     expect(saved.landings.length).toBe(2);
     expect(saved.landings[1]?.elevation).toBe(0);
   });
@@ -189,7 +201,7 @@ describe("SiteEditor", () => {
     renderEditor(sampleSite, { onSave });
     fireEvent.click(screen.getByLabelText(/Mute Site Alerts/));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    const saved = onSave.mock.calls[0]?.[0] as ApiSite;
+    const saved = onSave.mock.calls[0]?.[0] as ApiActivity;
     expect(saved.mute_alerts).toBe(true);
   });
 
@@ -197,7 +209,7 @@ describe("SiteEditor", () => {
     const onSave = vi.fn();
     renderEditor({ ...sampleSite, rating: 0 }, { onSave });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    const saved = onSave.mock.calls[0]?.[0] as ApiSite;
+    const saved = onSave.mock.calls[0]?.[0] as ApiActivity;
     expect(saved.rating).toBeUndefined();
   });
 

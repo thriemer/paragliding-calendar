@@ -34,6 +34,7 @@ async fn main() -> Result<()> {
         .await?;
     MIGRATOR.run(&pool).await?;
     let state = AppState::new(&pool, &cfg)?;
+    let job_state = state.clone();
 
     let tour_sync_state = state.clone();
     let embed_state = state.clone();
@@ -45,15 +46,15 @@ async fn main() -> Result<()> {
         // Planner deactivated for now: the periodic calendar job (plan → calendar
         // writes, every 8h) is disabled. Re-enable by restoring `job_state` above
         // and uncommenting this arm.
-        // async move {
-        //     let mut interval = time::interval(time::Duration::from_hours(8));
-        //     loop {
-        //         interval.tick().await;
-        //         if let Err(e) = application::calendar_job::run(&job_state).await {
-        //             tracing::error!(error = ?e, "Failed to create calendar entries");
-        //         }
-        //     }
-        // },
+        async move {
+            let mut interval = time::interval(time::Duration::from_hours(8));
+            loop {
+                interval.tick().await;
+                if let Err(e) = application::calendar_job::run(&job_state).await {
+                    tracing::error!(error = ?e, "Failed to create calendar entries");
+                }
+            }
+        },
         async move {
             match tour_sync_state.outdoor_repo.count().await {
                 Ok(0) => {
@@ -118,13 +119,11 @@ async fn main() -> Result<()> {
                 tracing::error!(error = ?e, "preference_scorer: initial reload failed");
             }
 
-            // Embed activity features once on a fresh deploy — but only after the
-            // source tables have data, so we never embed an empty corpus. The
-            // embedder is constructed lazily here so the one-time model
-            // download/load fails this task, not app startup.
-            if !matches!(embed_state.embedding_repo.count().await, Ok(0)) {
-                return;
-            }
+            // Embed + reduce activity features — but only after the source tables
+            // have data, so we never embed an empty corpus. Both jobs are
+            // resumable and idempotent: embedding checkpoints each batch, so this
+            // arm picks up wherever a previous run left off after a restart
+            // instead of redoing (or skipping) the whole corpus.
             let sites = embed_state.site_repo.count().await.unwrap_or(0);
             let tours = embed_state.outdoor_repo.count().await.unwrap_or(0);
             let events = embed_state.event_repo.count().await.unwrap_or(0);
@@ -133,40 +132,98 @@ async fn main() -> Result<()> {
                     sites,
                     tours,
                     events,
-                    "activity_features: deferring initial embedding until all source tables have data"
+                    "activity_features: deferring embedding until all source tables have data"
                 );
                 return;
             }
-            tracing::info!("activity_features: table empty, running initial embedding");
-            // Images are fetched by the standalone image-download job, not here —
-            // this pass fuses in whatever is already downloaded and is text-only
-            // otherwise (a fresh deploy re-embeds once images land).
-            let embedder = match adapters::embedding::clip::ClipEmbedder::new(
-                &embed_state.embedding_cache_dir,
-                embed_state.embedding_batch_size,
-            )
-            .await
-            {
-                Ok(e) => e,
-                Err(e) => {
-                    tracing::error!(error = ?e, "failed to construct embedder");
-                    return;
-                }
-            };
-            if let Err(e) = application::feature_job::run(
+
+            // Cheap checks before the expensive model load: is there any activity
+            // without a text embedding, any downloaded image without one, or a
+            // reduce still owed (text embedded but features not yet written)?
+            let activities = match application::embed_job::collect(
                 embed_state.outdoor_repo.as_ref(),
                 embed_state.event_repo.as_ref(),
                 embed_state.site_repo.as_ref(),
-                &embedder,
-                embed_state.embedding_repo.as_ref(),
-                embed_state.preference_repo.as_ref(),
-                embed_state.image_repo.as_ref(),
-                embed_state.image_store.as_ref(),
-                embed_state.embedding_batch_size,
             )
             .await
             {
-                tracing::error!(error = ?e, "initial feature embedding failed");
+                Ok(a) => a.len(),
+                Err(e) => {
+                    tracing::error!(error = ?e, "activity_features: collect failed");
+                    return;
+                }
+            };
+            let text_done = embed_state
+                .embedding_repo
+                .raw_text_embeddings()
+                .await
+                .map(|v| v.len())
+                .unwrap_or(0);
+            let images_pending = embed_state
+                .image_repo
+                .pending_image_embeddings()
+                .await
+                .map(|v| v.len())
+                .unwrap_or(0);
+            let reduced = embed_state
+                .embedding_repo
+                .feature_vectors()
+                .await
+                .map(|v| v.len())
+                .unwrap_or(0);
+            let need_embed = activities > text_done || images_pending > 0;
+            let need_reduce = need_embed || reduced < text_done;
+            if !need_embed && !need_reduce {
+                tracing::info!("activity_features: embeddings up to date, nothing to do");
+                return;
+            }
+
+            // Images are fetched by the standalone image-download job, not here —
+            // this pass fuses in whatever is already downloaded and is text-only
+            // otherwise (a fresh deploy re-embeds once images land). The embedder
+            // is constructed lazily so the one-time model download/load fails this
+            // task, not app startup, and only when there is embedding to do.
+            if need_embed {
+                let embedder = match adapters::embedding::ort::OrtEmbedder::new(
+                    &embed_state.embedding_cache_dir,
+                    embed_state.embedding_batch_size,
+                )
+                .await
+                {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::error!(error = ?e, "failed to construct embedder");
+                        return;
+                    }
+                };
+                if let Err(e) = application::embed_job::run(
+                    embed_state.outdoor_repo.as_ref(),
+                    embed_state.event_repo.as_ref(),
+                    embed_state.site_repo.as_ref(),
+                    &embedder,
+                    embed_state.embedding_repo.as_ref(),
+                    embed_state.image_repo.as_ref(),
+                    embed_state.image_store.as_ref(),
+                    embed_state.embedding_batch_size,
+                )
+                .await
+                {
+                    tracing::error!(error = ?e, "activity embedding failed");
+                    return;
+                }
+            }
+            // Reduce reads the checkpointed embeddings — no embedder needed.
+            if let Err(e) = application::reduce_job::run(
+                embed_state.outdoor_repo.as_ref(),
+                embed_state.event_repo.as_ref(),
+                embed_state.site_repo.as_ref(),
+                embed_state.embedding_repo.as_ref(),
+                embed_state.image_repo.as_ref(),
+                embed_state.preference_repo.as_ref(),
+            )
+            .await
+            {
+                tracing::error!(error = ?e, "feature reduction failed");
                 return;
             }
             // Feature vectors + model scaffold changed → refresh the plan-time scorer.

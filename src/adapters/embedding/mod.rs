@@ -1,6 +1,6 @@
-// Disabled with build.rs: the Burn backend `include!`s the ONNX→Burnpack
-// codegen output, which OOMs at build time. Superseded by the model2vec backend.
-// pub mod burn;
 pub mod candle;
 pub mod clip;
 pub mod model2vec;
+// ONNX Runtime backend for the int8 UForm v3 multilingual model (the quantized
+// ONNX Burn can't import). Linked via `ort` load-dynamic; see ort.rs.
+pub mod ort;

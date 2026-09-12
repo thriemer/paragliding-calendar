@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import "./styles/App.css";
 import styles from "./styles/App.module.css";
-import { useSites, ApiSite } from "./hooks/useSites";
+import { useSites, ApiActivity } from "./hooks/useSites";
 import { useUpdateSite } from "./hooks/useUpdateSite";
 import { useSettings, UserSettings } from "./hooks/useSettings";
 import { useCalendarRefresh } from "./hooks/useCalendarRefresh";
@@ -17,27 +17,20 @@ type Screen = "main" | "flights" | "preferences";
 
 function App() {
   const [screen, setScreen] = useState<Screen>("main");
-  const [filters, setFilters] = useState<Filters>({ siteType: "" });
-  const [selectedSite, setSelectedSite] = useState<ApiSite | null>(null);
+  const [filters, setFilters] = useState<Filters>({ activityTypes: [] });
+  const [selectedSite, setSelectedSite] = useState<ApiActivity | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [mapView, setMapView] = useState<{ center: [number, number]; zoom: number } | null>(null);
-  const { sites, loading: sitesLoading, error: sitesError } = useSites();
+  const { sites: activities, loading: sitesLoading, error: sitesError } = useSites();
   const { updateSite, deleteSite, error: siteSaveError } = useUpdateSite();
   const { settings, updateSettings, error: settingsError } = useSettings();
   const { refresh: refreshCalendar, refreshing: calendarRefreshing, error: calendarRefreshError } =
     useCalendarRefresh();
 
-  const filteredSites = useMemo(() => {
-    return sites.filter((site) => {
-      if (filters.siteType) {
-        const hasMatchingLaunch = site.launches.some(
-          (launch) => launch.site_type === filters.siteType
-        );
-        if (!hasMatchingLaunch) return false;
-      }
-      return true;
-    });
-  }, [sites, filters]);
+  const filteredActivities = useMemo(() => {
+    if (filters.activityTypes.length === 0) return activities;
+    return activities.filter((a) => filters.activityTypes.includes(a.kind));
+  }, [activities, filters]);
 
   const defaultCenter = useMemo<[number, number]>(() => {
     if (mapView) return mapView.center;
@@ -47,22 +40,28 @@ function App() {
     return [47.0, 10.0];
   }, [mapView, settings]);
 
-  const handleSiteClick = (site: ApiSite) => {
-    setSelectedSite(site);
+  const handleSiteClick = (activity: ApiActivity) => {
+    setSelectedSite(activity);
   };
 
   const handleCreateSite = () => {
-    const emptySite: ApiSite = {
-      name: "",
-      country: null,
+    const emptySite: ApiActivity = {
+      id: "",
+      kind: "paragliding",
+      title: "",
+      latitude: 0,
+      longitude: 0,
+      description: "",
+      image_urls: [],
       launches: [],
       landings: [],
+      country: null,
       data_source: "API",
     };
     setSelectedSite(emptySite);
   };
 
-  const handleSaveSite = async (updatedSite: ApiSite) => {
+  const handleSaveSite = async (updatedSite: ApiActivity) => {
     const success = await updateSite(updatedSite);
     if (success) setSelectedSite(null);
   };
@@ -133,7 +132,7 @@ function App() {
               <FilterPanel
                 filters={filters}
                 onFilterChange={setFilters}
-                sites={sites}
+                activities={activities}
               />
               <FileUploader />
             </>
@@ -147,7 +146,7 @@ function App() {
           ) : (
             <div className={styles.mapContainer}>
               <SitesMap
-                sites={filteredSites}
+                activities={filteredActivities}
                 onSiteClick={handleSiteClick}
                 mapView={mapView}
                 onMapViewChange={setMapView}
@@ -157,14 +156,14 @@ function App() {
           )}
         </main>
       </div>
-      {selectedSite && (
+      {selectedSite && selectedSite.kind === "paragliding" && (
         <div className={styles.modalOverlay}>
           <SiteEditor
-            key={selectedSite.name || "new"}
+            key={selectedSite.id || "new"}
             site={selectedSite}
             defaultCenter={defaultCenter}
             onSave={handleSaveSite}
-            onDelete={selectedSite.name ? handleDeleteSite : undefined}
+            onDelete={selectedSite.id ? handleDeleteSite : undefined}
             onCancel={() => setSelectedSite(null)}
             error={siteSaveError}
           />

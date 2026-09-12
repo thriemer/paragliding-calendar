@@ -1,16 +1,20 @@
 -- Personalized preference learning (PLAN.md Phase 0b).
 -- Data model only; batch pipeline and solver land in later phases.
 
--- One row per activity: fully processed feature vector + raw embedding kept for
--- reuse (avoids re-embedding on re-fit). `kind` is the canonical ActivityKind
--- string. `pca_dims` is variable-length (k = 1..7 per kind). No incremental
--- bookkeeping — re-embed is a full batch pass.
+-- One row per activity, filled across two resumable jobs. The embed job writes
+-- `text_embedding` (the raw text vector) per batch as it runs, so a crash resumes
+-- from whatever is already stored. The reduce job then fits per-kind PCA + z-score
+-- over the whole corpus and fills `embedding` (fused text+image), `pca_dims`, and
+-- `features`. `kind` is the canonical ActivityKind string; `pca_dims` is
+-- variable-length (k = 1..7 per kind). All vector columns except the text
+-- checkpoint are nullable while the corpus is mid-embed.
 CREATE TABLE activity_embeddings (
-    activity_id  TEXT NOT NULL,
-    kind         TEXT NOT NULL,
-    embedding    DOUBLE PRECISION[] NOT NULL,   -- raw 384-dim embedding vector
-    pca_dims     DOUBLE PRECISION[] NOT NULL,   -- per-kind PCA-reduced (k dims)
-    features     DOUBLE PRECISION[] NOT NULL,   -- normalized feature vector
+    activity_id    TEXT NOT NULL,
+    kind           TEXT NOT NULL,
+    text_embedding DOUBLE PRECISION[],   -- raw text embedding; the embed job's per-batch checkpoint
+    embedding      DOUBLE PRECISION[],   -- fused text+image vector; written by the reduce job
+    pca_dims       DOUBLE PRECISION[],   -- per-kind PCA-reduced (k dims); written by the reduce job
+    features       DOUBLE PRECISION[],   -- normalized feature vector; written by the reduce job
     PRIMARY KEY (activity_id, kind)
 );
 
@@ -37,6 +41,9 @@ CREATE TABLE activity_images (
 );
 -- Download job scans for not-yet-fetched images.
 CREATE INDEX idx_activity_images_pending ON activity_images (activity_id) WHERE content_hash IS NULL;
+-- Embed job scans for downloaded-but-not-yet-embedded images.
+CREATE INDEX idx_activity_images_unembedded
+    ON activity_images (activity_id) WHERE content_hash IS NOT NULL AND embedding IS NULL;
 
 -- Pairwise comparisons from the Web UI. winner_id/loser_id reference activities
 -- across three source tables (tours, events, sites); no single FK can enforce

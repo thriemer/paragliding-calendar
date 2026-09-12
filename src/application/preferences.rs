@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use anyhow::Result;
 use tokio::sync::{Mutex, RwLock};
 
-use crate::application::{feature_job, preference_fit, preference_scorer::PreferenceScorer};
+use crate::application::{embed_job, preference_fit, preference_scorer::PreferenceScorer, reduce_job};
 use crate::domain::{
     activities::{ActivityKind, kind_from_category},
     embedding::ActivityEmbedding,
@@ -27,6 +27,7 @@ use crate::domain::{
         Embedder, EmbeddingRepository, HappeningRepository, ImageRepository, ImageStore,
         PreferenceRepository, SiteRepository, TourRepository,
     },
+    preference_fit::ValidationMetrics,
     preferences::{PreferenceCandidate, select_pair},
     tour::Tour,
 };
@@ -65,6 +66,7 @@ pub struct PreferenceSummary {
     pub comparisons_done: i64,
     pub ratings_done: i64,
     pub kinds: Vec<KindSummary>,
+    pub validation: ValidationMetrics,
 }
 
 /// Immutable scored-candidate snapshot, sorted ascending by score so that
@@ -93,6 +95,9 @@ pub struct PreferenceService {
     /// `REFIT_INTERVAL`-th vote the model is re-derived; between refits the
     /// accumulated comparisons are stored in the DB but not yet fitted.
     pending_refit: AtomicU32,
+    /// Cross-validation metrics from the most recent refit, recomputed every
+    /// time the model is updated.
+    validation: RwLock<ValidationMetrics>,
 }
 
 impl PreferenceService {
@@ -119,6 +124,7 @@ impl PreferenceService {
             snapshot: RwLock::new(None),
             counts: Mutex::new(HashMap::new()),
             pending_refit: AtomicU32::new(0),
+            validation: RwLock::new(ValidationMetrics::default()),
         }
     }
 
@@ -158,14 +164,47 @@ impl PreferenceService {
         Ok(())
     }
 
+    /// Record a rating-4 for both activities (signals both are liked), re-fit,
+    /// and return the next pair.
+    pub async fn like_both(&self, a_id: &str, b_id: &str) -> Result<VoteOutcome> {
+        self.prefs.record_rating(a_id, 4).await?;
+        self.prefs.record_rating(b_id, 4).await?;
+        self.refit().await;
+        let comparisons_done = self.prefs.count_comparisons().await?;
+        let next = self.select().await?;
+        Ok(VoteOutcome {
+            next,
+            comparisons_done,
+        })
+    }
+
+    /// Record a rating-2 for both activities (signals both are disliked), re-fit,
+    /// and return the next pair.
+    pub async fn dislike_both(&self, a_id: &str, b_id: &str) -> Result<VoteOutcome> {
+        self.prefs.record_rating(a_id, 2).await?;
+        self.prefs.record_rating(b_id, 2).await?;
+        self.refit().await;
+        let comparisons_done = self.prefs.count_comparisons().await?;
+        let next = self.select().await?;
+        Ok(VoteOutcome {
+            next,
+            comparisons_done,
+        })
+    }
+
     /// Re-fit the Bradley-Terry model from the accumulated feedback, reload the
     /// plan-time scorer, and drop the cached candidate snapshot so the next
     /// `/compare` re-ranks against the new scores. Failures are logged, not
     /// propagated — a fit hiccup must not fail the vote that triggered it.
     async fn refit(&self) {
-        if let Err(e) = preference_fit::refit(self.prefs.as_ref(), self.embeddings.as_ref()).await {
-            tracing::error!(error = ?e, "preferences: re-fit failed");
-            return;
+        match preference_fit::refit(self.prefs.as_ref(), self.embeddings.as_ref()).await {
+            Ok((_models, metrics)) => {
+                *self.validation.write().await = metrics;
+            }
+            Err(e) => {
+                tracing::error!(error = ?e, "preferences: re-fit failed");
+                return;
+            }
         }
         if let Err(e) = self
             .scorer
@@ -216,10 +255,13 @@ impl PreferenceService {
             .collect();
         kinds.sort_by(|a, b| cmp_desc(a.base_pref, b.base_pref));
 
+        let validation = *self.validation.read().await;
+
         Ok(PreferenceSummary {
             comparisons_done,
             ratings_done,
             kinds,
+            validation,
         })
     }
 
@@ -266,16 +308,24 @@ impl PreferenceService {
     /// separate, standalone [`image_job`] (see `main.rs`), decoupled from embedding
     /// so a re-embed never re-downloads.
     pub async fn re_embed(&self, embedder: &dyn Embedder, batch_size: usize) -> Result<usize> {
-        let saved = feature_job::run(
+        embed_job::run(
             self.tours.as_ref(),
             self.events.as_ref(),
             self.sites.as_ref(),
             embedder,
             self.embeddings.as_ref(),
-            self.prefs.as_ref(),
             self.images.as_ref(),
             self.image_store.as_ref(),
             batch_size,
+        )
+        .await?;
+        let saved = reduce_job::run(
+            self.tours.as_ref(),
+            self.events.as_ref(),
+            self.sites.as_ref(),
+            self.embeddings.as_ref(),
+            self.images.as_ref(),
+            self.prefs.as_ref(),
         )
         .await?;
         self.scorer

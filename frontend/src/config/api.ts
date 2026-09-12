@@ -19,6 +19,8 @@ export const API = {
   preferencesCompare: api("/api/preferences/compare"),
   preferencesVote: api("/api/preferences/vote"),
   preferencesRate: api("/api/preferences/rate"),
+  preferencesLikeBoth: api("/api/preferences/like-both"),
+  preferencesDislikeBoth: api("/api/preferences/dislike-both"),
   preferencesMatrix: api("/api/preferences/matrix"),
   preferencesReEmbed: api("/api/preferences/re-embed"),
   /** Resolve a content hash to its served image URL (base-path aware). */

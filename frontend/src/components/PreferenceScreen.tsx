@@ -34,6 +34,8 @@ export function PreferenceScreen({ onBack }: Props) {
             <PreferencePair
               pair={prefs.pair}
               onVote={prefs.vote}
+              onLikeBoth={prefs.likeBoth}
+              onDislikeBoth={prefs.dislikeBoth}
               onSkip={prefs.skip}
               disabled={prefs.voting}
             />

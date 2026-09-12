@@ -2,8 +2,9 @@ import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { ApiSite } from "../hooks/useSites";
+import { ApiActivity } from "../hooks/useSites";
 import { UserSettings } from "../hooks/useSettings";
+import { kindLabel, kindColor } from "../utils/activityKind";
 import { Legend } from "./Legend";
 import "../utils/leaflet";
 import styles from "./SitesMap.module.css";
@@ -44,8 +45,8 @@ const circlePathOptions = {
 type MapView = { center: [number, number]; zoom: number };
 
 interface SitesMapProps {
-  sites: ApiSite[];
-  onSiteClick?: (site: ApiSite) => void;
+  activities: ApiActivity[];
+  onSiteClick?: (activity: ApiActivity) => void;
   mapView: MapView | null;
   onMapViewChange: (view: MapView) => void;
   settings?: UserSettings;
@@ -56,7 +57,6 @@ function MapController({ onMapViewChange }: { onMapViewChange: (view: MapView) =
   const cbRef = useRef(onMapViewChange);
   cbRef.current = onMapViewChange;
 
-  // Normalize Leaflet's LatLng to a plain tuple so consumers can index it.
   const report = useCallback(() => {
     const c = map.getCenter();
     cbRef.current({ center: [c.lat, c.lng], zoom: map.getZoom() });
@@ -76,7 +76,7 @@ function MapController({ onMapViewChange }: { onMapViewChange: (view: MapView) =
 
 type SiteType = "winch" | "hang" | "both" | "none";
 
-function getSiteType(site: ApiSite): SiteType {
+function getSiteType(site: ApiActivity): SiteType {
   const types = new Set(site.launches.map((l) => l.site_type));
   const hasWinch = types.has("Winch");
   const hasHang = types.has("Hang");
@@ -87,7 +87,7 @@ function getSiteType(site: ApiSite): SiteType {
   return "none";
 }
 
-function getMarkerIcon(type: SiteType): L.Icon {
+function getParaglidingIcon(type: SiteType): L.Icon {
   if (type === "winch") return winchIcon;
   if (type === "hang") return hangIcon;
   if (type === "both") return bothIcon;
@@ -206,33 +206,33 @@ const LaunchMarker = memo(function LaunchMarker({
   );
 });
 
-const SiteOverviewMarker = memo(function SiteOverviewMarker({
-  site,
+const ParaglidingOverviewMarker = memo(function ParaglidingOverviewMarker({
+  activity,
   launch,
   onEdit,
 }: {
-  site: ApiSite;
-  launch: ApiSite["launches"][number];
+  activity: ApiActivity;
+  launch: ApiActivity["launches"][number];
   onEdit?: (siteName: string) => void;
 }) {
-  const type = getSiteType(site);
+  const type = getSiteType(activity);
   return (
     <Marker
       position={[launch.location.latitude, launch.location.longitude]}
-      icon={getMarkerIcon(type)}
+      icon={getParaglidingIcon(type)}
     >
       <Popup>
-        <strong>{site.name}</strong>
+        <strong>{activity.title}</strong>
         <br />
         Type: {siteTypeLabel(type)}
         <br />
-        {site.country}
+        {activity.country}
         <br />
         Elevation: {launch.elevation}m
         {onEdit && (
           <>
             <br />
-            <PopupEditButton onClick={() => onEdit(site.name)} />
+            <PopupEditButton onClick={() => onEdit(activity.id)} />
           </>
         )}
       </Popup>
@@ -240,42 +240,57 @@ const SiteOverviewMarker = memo(function SiteOverviewMarker({
   );
 });
 
-export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, settings }: SitesMapProps) {
-  const { launchesWithOverlap, landingsWithOverlap, center } = useMemo(() => {
-    const launches: LaunchData[] = sites
-      .flatMap((site) =>
-        site.launches.map((l) => ({
-          location: { lat: l.location.latitude, lng: l.location.longitude },
-          elevation: l.elevation,
-          siteName: site.name,
-          siteCountry: site.country,
-          siteType: l.site_type,
-        })),
-      )
-      .filter((loc) => loc.location.lat != null && loc.location.lng != null);
+const ActivityMarker = memo(function ActivityMarker({
+  activity,
+  onEdit,
+}: {
+  activity: ApiActivity;
+  onEdit?: (id: string) => void;
+}) {
+  const color = kindColor(activity.kind);
+  const markerMap: Record<string, string> = {
+    "#0288d1": blueMarker,
+    "#388e3c": greenMarker,
+    "#f57c00": orangeMarker,
+    "#d32f2f": redMarker,
+    "#5d4037": violetMarker,
+    "#00838f": greyMarker,
+  };
+  const icon = createColoredIcon(markerMap[color] ?? greyMarker);
+  return (
+    <Marker
+      position={[activity.latitude, activity.longitude]}
+      icon={icon}
+    >
+      <Popup>
+        <strong>{activity.title}</strong>
+        <br />
+        {kindLabel(activity.kind)}
+        {activity.description && (
+          <>
+            <br />
+            {activity.description.slice(0, 100)}
+            {activity.description.length > 100 ? "…" : ""}
+          </>
+        )}
+        {onEdit && (
+          <>
+            <br />
+            <PopupEditButton onClick={() => onEdit(activity.id)} />
+          </>
+        )}
+      </Popup>
+    </Marker>
+  );
+});
 
-    const landings: LandingData[] = sites
-      .flatMap((site) =>
-        site.landings.map((l) => ({
-          location: { lat: l.location.latitude, lng: l.location.longitude },
-          elevation: l.elevation,
-          siteName: site.name,
-          siteCountry: site.country,
-        })),
-      )
-      .filter((loc) => loc.location.lat != null && loc.location.lng != null);
-
-    const launchesWithOverlap: LaunchWithOverlap[] = launches.map((launch) => ({
-      ...launch,
-      hasLandingAtSameLocation: landings.some((landing) => coordsMatch(launch.location, landing.location)),
-    }));
-
-    const landingsWithOverlap: LandingWithOverlap[] = landings.map((landing) => ({
-      ...landing,
-      hasLaunchAtSameLocation: launches.some((launch) => coordsMatch(launch.location, landing.location)),
-    }));
-
-    const allPositions = [...launches, ...landings].map((l) => l.location);
+export function SitesMap({ activities, onSiteClick, mapView, onMapViewChange, settings }: SitesMapProps) {
+  const { paraglidingSites, otherActivities, center } = useMemo(() => {
+    const paraglidingSites = activities.filter((a) => a.kind === "paragliding");
+    const otherActivities = activities.filter((a) => a.kind !== "paragliding");
+    const allPositions = activities
+      .filter((a) => a.latitude != null && a.longitude != null)
+      .map((a) => ({ lat: a.latitude, lng: a.longitude }));
     const center: [number, number] =
       allPositions.length > 0
         ? [
@@ -283,28 +298,61 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, setting
             allPositions.reduce((sum, p) => sum + p.lng, 0) / allPositions.length,
           ]
         : [47.0, 10.0];
+    return { paraglidingSites, otherActivities, center };
+  }, [activities]);
 
-    return { launchesWithOverlap, landingsWithOverlap, center };
-  }, [sites]);
+  const { launchesWithOverlap, landingsWithOverlap } = useMemo(() => {
+    const paraglidingSites = activities.filter((a) => a.kind === "paragliding");
+    const launches: LaunchData[] = paraglidingSites
+      .flatMap((site) =>
+        site.launches.map((l) => ({
+          location: { lat: l.location.latitude, lng: l.location.longitude },
+          elevation: l.elevation,
+          siteName: site.title,
+          siteCountry: site.country,
+          siteType: l.site_type,
+        })),
+      )
+      .filter((loc) => loc.location.lat != null && loc.location.lng != null);
+    const landings: LandingData[] = paraglidingSites
+      .flatMap((site) =>
+        site.landings.map((l) => ({
+          location: { lat: l.location.latitude, lng: l.location.longitude },
+          elevation: l.elevation,
+          siteName: site.title,
+          siteCountry: site.country,
+        })),
+      )
+      .filter((loc) => loc.location.lat != null && loc.location.lng != null);
+    const launchesWithOverlap: LaunchWithOverlap[] = launches.map((launch) => ({
+      ...launch,
+      hasLandingAtSameLocation: landings.some((landing) => coordsMatch(launch.location, landing.location)),
+    }));
+    const landingsWithOverlap: LandingWithOverlap[] = landings.map((landing) => ({
+      ...landing,
+      hasLaunchAtSameLocation: launches.some((launch) => coordsMatch(launch.location, landing.location)),
+    }));
+    return { launchesWithOverlap, landingsWithOverlap };
+  }, [activities]);
 
   const isZoomedIn = mapView ? mapView.zoom >= 11 : false;
   const mapCenter = mapView?.center ?? center;
   const hasLocationSettings =
     settings != null && settings.location_latitude != null && settings.location_longitude != null;
 
-  const sitesRef = useRef(sites);
-  sitesRef.current = sites;
+  const activitiesRef = useRef(activities);
+  activitiesRef.current = activities;
   const onSiteClickRef = useRef(onSiteClick);
   onSiteClickRef.current = onSiteClick;
 
-  const handleEditSite = useCallback((siteName: string) => {
+  const handleEditActivity = useCallback((id: string) => {
     const cb = onSiteClickRef.current;
     if (!cb) return;
-    const site = sitesRef.current.find((s) => s.name === siteName);
-    if (site) cb(site);
+    const activity = activitiesRef.current.find((a) => a.id === id);
+    if (activity) cb(activity);
   }, []);
 
-  const editHandler = onSiteClick ? handleEditSite : undefined;
+  const editHandler = onSiteClick ? handleEditActivity : undefined;
 
   return (
     <div className={styles.mapContainer}>
@@ -356,20 +404,36 @@ export function SitesMap({ sites, onSiteClick, mapView, onMapViewChange, setting
                 onEdit={editHandler}
               />
             ))}
-          </>
-        ) : (
-          sites.map((site) => {
-            const launch = site.launches[0];
-            if (!launch) return null;
-            return (
-              <SiteOverviewMarker
-                key={site.name}
-                site={site}
-                launch={launch}
+            {otherActivities.map((activity) => (
+              <ActivityMarker
+                key={activity.id}
+                activity={activity}
                 onEdit={editHandler}
               />
-            );
-          })
+            ))}
+          </>
+        ) : (
+          <>
+            {paraglidingSites.map((site) => {
+              const launch = site.launches[0];
+              if (!launch) return null;
+              return (
+                <ParaglidingOverviewMarker
+                  key={site.id}
+                  activity={site}
+                  launch={launch}
+                  onEdit={editHandler}
+                />
+              );
+            })}
+            {otherActivities.map((activity) => (
+              <ActivityMarker
+                key={activity.id}
+                activity={activity}
+                onEdit={editHandler}
+              />
+            ))}
+          </>
         )}
       </MapContainer>
       <Legend isZoomedIn={isZoomedIn} hasLocationSettings={!!hasLocationSettings} />

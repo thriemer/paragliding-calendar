@@ -22,13 +22,34 @@ use crate::{
         preferences::{CandidatePair, ComparisonMatrix, VoteOutcome},
     },
     domain::{
+        activities::kind_from_category,
         location::Location,
-        paragliding::{ParaglidingSite, flight::Track},
+        paragliding::{self, ParaglidingSite, flight::Track},
+        preference_fit::ValidationMetrics,
         preferences::{PreferenceCandidate, display_score},
         settings::UserSettings,
         weather::WeatherModel,
     },
 };
+
+#[derive(Serialize)]
+struct ActivityMapItem {
+    id: String,
+    kind: String,
+    title: String,
+    latitude: f64,
+    longitude: f64,
+    description: String,
+    image_urls: Vec<String>,
+    launches: Vec<paragliding::ParaglidingLaunch>,
+    landings: Vec<paragliding::ParaglidingLanding>,
+    country: Option<String>,
+    data_source: String,
+    parking_location: Option<Location>,
+    mute_alerts: Option<bool>,
+    rating: Option<u8>,
+    preferred_weather_model: Option<String>,
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct ElevationResponse {
@@ -162,6 +183,8 @@ pub fn router() -> Router<AppState> {
         .route("/preferences", get(get_preferences_summary))
         .route("/preferences/compare", get(get_preferences_compare))
         .route("/preferences/vote", post(post_preferences_vote))
+        .route("/preferences/like-both", post(post_preferences_like_both))
+        .route("/preferences/dislike-both", post(post_preferences_dislike_both))
         .route("/preferences/rate", post(post_preferences_rate))
         .route("/preferences/matrix", get(get_preferences_matrix))
         .route("/preferences/re-embed", post(post_preferences_reembed))
@@ -204,13 +227,72 @@ async fn trigger_calendar_job(State(state): State<AppState>) -> StatusCode {
 #[instrument(skip(state))]
 async fn get_sites(
     State(state): State<AppState>,
-) -> Result<Json<Vec<ParaglidingSite>>, StatusCode> {
+) -> Result<Json<Vec<ActivityMapItem>>, StatusCode> {
     let sites = state
         .site_repo
         .find_all()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(sites))
+
+    let tours = state
+        .outdoor_repo
+        .find_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut items: Vec<ActivityMapItem> = Vec::with_capacity(sites.len() + tours.len());
+
+    for site in sites {
+        let (lat, lon) = site
+            .launches
+            .first()
+            .map(|l| (l.location.latitude, l.location.longitude))
+            .unwrap_or((0.0, 0.0));
+
+        items.push(ActivityMapItem {
+            id: site.name.clone(),
+            kind: "paragliding".to_string(),
+            title: site.name.clone(),
+            latitude: lat,
+            longitude: lon,
+            description: String::new(),
+            image_urls: vec![],
+            launches: site.launches,
+            landings: site.landings,
+            country: site.country,
+            data_source: site.data_source,
+            parking_location: site.parking_location,
+            mute_alerts: site.mute_alerts,
+            rating: site.rating,
+            preferred_weather_model: site.preferred_weather_model,
+        });
+    }
+
+    for tour in tours {
+        let Some(kind) = kind_from_category(&tour.category) else {
+            continue;
+        };
+
+        items.push(ActivityMapItem {
+            id: tour.id,
+            kind: kind.as_str().to_string(),
+            title: tour.title,
+            latitude: tour.location.latitude,
+            longitude: tour.location.longitude,
+            description: tour.description,
+            image_urls: tour.image_urls,
+            launches: vec![],
+            landings: vec![],
+            country: None,
+            data_source: String::new(),
+            parking_location: None,
+            mute_alerts: None,
+            rating: None,
+            preferred_weather_model: None,
+        });
+    }
+
+    Ok(Json(items))
 }
 
 #[instrument(skip(state, site), fields(site = %site.name))]
@@ -468,6 +550,57 @@ struct RateResponse {
     ok: bool,
 }
 
+#[derive(Deserialize)]
+struct BothRequest {
+    pair_id: String,
+}
+
+#[instrument(skip(state, req))]
+async fn post_preferences_like_both(
+    State(state): State<AppState>,
+    Json(req): Json<BothRequest>,
+) -> Result<Json<VoteResponseDto>, StatusCode> {
+    let (a, b) = decode_pair(&req.pair_id).ok_or(StatusCode::BAD_REQUEST)?;
+    let VoteOutcome {
+        next,
+        comparisons_done,
+    } = state
+        .preferences
+        .like_both(&a, &b)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = ?e, "preferences like_both failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Json(VoteResponseDto {
+        next: next.as_ref().map(PairDto::from),
+        progress: ProgressDto { comparisons_done },
+    }))
+}
+
+#[instrument(skip(state, req))]
+async fn post_preferences_dislike_both(
+    State(state): State<AppState>,
+    Json(req): Json<BothRequest>,
+) -> Result<Json<VoteResponseDto>, StatusCode> {
+    let (a, b) = decode_pair(&req.pair_id).ok_or(StatusCode::BAD_REQUEST)?;
+    let VoteOutcome {
+        next,
+        comparisons_done,
+    } = state
+        .preferences
+        .dislike_both(&a, &b)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = ?e, "preferences dislike_both failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Json(VoteResponseDto {
+        next: next.as_ref().map(PairDto::from),
+        progress: ProgressDto { comparisons_done },
+    }))
+}
+
 #[instrument(skip(state, req), fields(activity = %req.activity_id, rating = req.rating))]
 async fn post_preferences_rate(
     State(state): State<AppState>,
@@ -502,10 +635,32 @@ struct KindSummaryDto {
 }
 
 #[derive(Serialize)]
+struct ValidationDto {
+    pairwise_accuracy: Option<f64>,
+    pairwise_count: usize,
+    rating_mse: Option<f64>,
+    rating_count: usize,
+    k: usize,
+}
+
+impl From<ValidationMetrics> for ValidationDto {
+    fn from(m: ValidationMetrics) -> Self {
+        Self {
+            pairwise_accuracy: m.pairwise_accuracy,
+            pairwise_count: m.pairwise_count,
+            rating_mse: m.rating_mse,
+            rating_count: m.rating_count,
+            k: m.k,
+        }
+    }
+}
+
+#[derive(Serialize)]
 struct SummaryDto {
     comparisons_done: i64,
     ratings_done: i64,
     kinds: BTreeMap<String, KindSummaryDto>,
+    validation: ValidationDto,
 }
 
 #[instrument(skip(state))]
@@ -549,6 +704,7 @@ async fn get_preferences_summary(
         comparisons_done: summary.comparisons_done,
         ratings_done: summary.ratings_done,
         kinds,
+        validation: summary.validation.into(),
     }))
 }
 

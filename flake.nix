@@ -21,7 +21,10 @@
         nixosModules.travelai = import ./module.nix {inherit self;};
 
         devShells.default = pkgs.mkShell {
-          buildInputs = [pkgs.nodejs pkgs.postgresql pkgs.rust-analyzer pkgs.cargo pkgs.rustc];
+          buildInputs = [pkgs.nodejs pkgs.postgresql pkgs.rust-analyzer pkgs.cargo pkgs.rustc pkgs.onnxruntime];
+          # `ort` uses load-dynamic: it dlopen()s this exact .so at runtime instead
+          # of downloading an FHS-linked binary that can't run on NixOS.
+          ORT_DYLIB_PATH = "${pkgs.onnxruntime}/lib/libonnxruntime.so";
         };
       }
     );

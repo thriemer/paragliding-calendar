@@ -32,11 +32,12 @@ fn init_production_telemetry(otel_endpoint: String, service_name: String) -> Res
     let resource = Resource::builder()
         .with_service_name(service_name.clone())
         .build();
+    let base = otel_endpoint.trim_end_matches('/');
 
     // Trace exporter
     let http_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
-        .with_endpoint(otel_endpoint.clone())
+        .with_endpoint(format!("{base}/v1/traces"))
         .with_protocol(Protocol::HttpJson)
         .build()?;
 
@@ -52,7 +53,7 @@ fn init_production_telemetry(otel_endpoint: String, service_name: String) -> Res
     // Metrics exporter
     let metrics_exporter = opentelemetry_otlp::MetricExporter::builder()
         .with_http()
-        .with_endpoint(otel_endpoint.clone())
+        .with_endpoint(format!("{base}/v1/metrics"))
         .with_protocol(Protocol::HttpJson)
         .build()?;
 
@@ -65,7 +66,7 @@ fn init_production_telemetry(otel_endpoint: String, service_name: String) -> Res
     // Logs exporter (if supported)
     let logs_exporter = opentelemetry_otlp::LogExporter::builder()
         .with_http()
-        .with_endpoint(otel_endpoint)
+        .with_endpoint(format!("{base}/v1/logs"))
         .with_protocol(Protocol::HttpJson)
         .build()?;
 

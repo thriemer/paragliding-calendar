@@ -37,6 +37,24 @@ pub const L2_LAMBDA: f64 = 0.01;
 const LBFGS_MEMORY: usize = 7;
 const MAX_ITERS: u64 = 200;
 
+/// Metrics from k-fold cross-validation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ValidationMetrics {
+    /// Fraction of held-out pairwise comparisons where the model predicted the
+    /// correct winner (score(winner) > score(loser)). `None` when there were
+    /// fewer than 2 comparisons to validate.
+    pub pairwise_accuracy: Option<f64>,
+    /// Number of pairwise comparisons validated.
+    pub pairwise_count: usize,
+    /// Mean squared error between predicted log-odds score and the rating target
+    /// on held-out ratings. `None` when there were fewer than 2 ratings.
+    pub rating_mse: Option<f64>,
+    /// Number of ratings validated.
+    pub rating_count: usize,
+    /// Number of folds used.
+    pub k: usize,
+}
+
 /// Everything the solver consumes. `scaffold` fixes which kinds exist, how many
 /// feature weights each has, and the feature order (names + normalizers carried
 /// through untouched). `features` maps an `activity_id` to its kind and
@@ -86,6 +104,165 @@ pub fn fit(data: &TrainingData, alpha: f64, lambda: f64) -> Vec<KindModel> {
     };
 
     layout.unpack(&data.scaffold, &params)
+}
+
+/// Run k-fold cross-validation on the training data. Shuffles and splits
+/// comparisons + ratings into `k` folds, trains on k−1 folds each round, and
+/// computes the average pairwise accuracy and rating MSE on the held-out fold.
+/// The final model is **not** retrained — this is purely diagnostic.
+pub fn cross_validate(
+    data: &TrainingData,
+    k: usize,
+    alpha: f64,
+    lambda: f64,
+) -> ValidationMetrics {
+    let n_cmp = data.comparisons.len();
+    let n_rat = data.ratings.len();
+    if n_cmp < 2 && n_rat < 2 {
+        return ValidationMetrics {
+            pairwise_accuracy: None,
+            pairwise_count: 0,
+            rating_mse: None,
+            rating_count: 0,
+            k,
+        };
+    }
+
+    let mut rng = rand::rng();
+
+    // Shuffle and split comparison indices into k folds.
+    let cmp_folds = build_folds(n_cmp, k, &mut rng);
+    // Shuffle and split rating indices into k folds.
+    let rat_folds = build_folds(n_rat, k, &mut rng);
+
+    let n_folds = cmp_folds.len().max(rat_folds.len());
+    if n_folds < 2 {
+        return ValidationMetrics {
+            pairwise_accuracy: None,
+            pairwise_count: 0,
+            rating_mse: None,
+            rating_count: 0,
+            k,
+        };
+    }
+
+    let mut correct = 0u64;
+    let mut total_cmp = 0u64;
+    let mut sq_error = 0.0;
+    let mut total_rat = 0u64;
+
+    for fold in 0..n_folds {
+        // Build training data from all folds except this one.
+        let train_cmp: Vec<(String, String)> = data
+            .comparisons
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !cmp_folds.get(fold).map_or(false, |f| f.contains(i)))
+            .map(|(_, c)| c.clone())
+            .collect();
+        let train_rat: Vec<(String, i16)> = data
+            .ratings
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !rat_folds.get(fold).map_or(false, |f| f.contains(i)))
+            .map(|(_, r)| r.clone())
+            .collect();
+
+        let train_data = TrainingData {
+            scaffold: data.scaffold.clone(),
+            features: data.features.clone(),
+            comparisons: train_cmp,
+            ratings: train_rat,
+        };
+
+        let model = fit(&train_data, alpha, lambda);
+
+        // Predict each held-out comparison.
+        if let Some(fold_indices) = cmp_folds.get(fold) {
+            for idx in fold_indices {
+                if let Some((w, l)) = data.comparisons.get(*idx) {
+                    let score_w = predict_score(&model, &data.features, w);
+                    let score_l = predict_score(&model, &data.features, l);
+                    if let (Some(sw), Some(sl)) = (score_w, score_l) {
+                        if sw > sl {
+                            correct += 1;
+                        }
+                        total_cmp += 1;
+                    }
+                }
+            }
+        }
+
+        // Evaluate each held-out rating.
+        if let Some(fold_indices) = rat_folds.get(fold) {
+            for idx in fold_indices {
+                if let Some((id, r)) = data.ratings.get(*idx) {
+                    let target = (*r as f64) - 3.0;
+                    if let Some(score) = predict_score(&model, &data.features, id) {
+                        let d = score - target;
+                        sq_error += d * d;
+                        total_rat += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    ValidationMetrics {
+        pairwise_accuracy: if total_cmp >= 2 {
+            Some(correct as f64 / total_cmp as f64)
+        } else {
+            None
+        },
+        pairwise_count: total_cmp as usize,
+        rating_mse: if total_rat >= 2 {
+            Some(sq_error / total_rat as f64)
+        } else {
+            None
+        },
+        rating_count: total_rat as usize,
+        k: n_folds,
+    }
+}
+
+/// Shuffle `n` indices and split into roughly equal folds, at most `k` folds.
+/// Returns fewer folds when `n < k` (each fold gets at least 1 item).
+fn build_folds(n: usize, k: usize, rng: &mut impl rand::Rng) -> Vec<Vec<usize>> {
+    use rand::seq::SliceRandom;
+    if n < 2 {
+        return Vec::new();
+    }
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.shuffle(rng);
+    let n_folds = k.min(n);
+    let base = n / n_folds;
+    let remainder = n % n_folds;
+    let mut folds = Vec::with_capacity(n_folds);
+    let mut cursor = 0;
+    for i in 0..n_folds {
+        let size = base + if i < remainder { 1 } else { 0 };
+        folds.push(indices[cursor..cursor + size].to_vec());
+        cursor += size;
+    }
+    folds
+}
+
+/// Score a single activity using the learned model. Returns `None` when the
+/// activity has no feature vector or the kind has no model entry.
+fn predict_score(
+    model: &[KindModel],
+    features: &std::collections::HashMap<String, (crate::domain::activities::ActivityKind, Vec<f64>)>,
+    id: &str,
+) -> Option<f64> {
+    let (kind, feats) = features.get(id)?;
+    let km = model.iter().find(|m| m.kind == *kind)?;
+    let mut score = km.base_pref;
+    for (i, fw) in km.features.iter().enumerate() {
+        if let Some(&v) = feats.get(i) {
+            score += fw.weight * v;
+        }
+    }
+    Some(score)
 }
 
 /// Parameter layout `[base_pref(kind_0..K), weights(kind_0), weights(kind_1), …]`.
@@ -363,6 +540,47 @@ mod tests {
             para.base_pref,
             hike.base_pref
         );
+    }
+
+    #[test]
+    fn cross_validate_returns_high_accuracy_with_consistent_data() {
+        let mut features = HashMap::new();
+        features.insert("hi".to_string(), (ActivityKind::Hiking, vec![2.0]));
+        features.insert("lo".to_string(), (ActivityKind::Hiking, vec![-2.0]));
+        features.insert("mid".to_string(), (ActivityKind::Hiking, vec![0.0]));
+        let data = TrainingData {
+            scaffold: vec![scaffold_one_kind(ActivityKind::Hiking, &["landscape"])],
+            features,
+            comparisons: vec![
+                ("hi".into(), "lo".into());
+                20
+            ]
+            .into_iter()
+            .chain(vec![("hi".into(), "mid".into()); 10])
+            .chain(vec![("mid".into(), "lo".into()); 10])
+            .collect(),
+            ratings: vec![],
+        };
+        let metrics = cross_validate(&data, 3, RATING_WEIGHT, L2_LAMBDA);
+        assert!(metrics.pairwise_count >= 2);
+        assert!(
+            metrics.pairwise_accuracy.unwrap_or(0.0) > 0.5,
+            "expected >50% accuracy with consistent data, got {:?}",
+            metrics.pairwise_accuracy
+        );
+    }
+
+    #[test]
+    fn cross_validate_returns_none_with_too_few_comparisons() {
+        let data = TrainingData {
+            scaffold: vec![scaffold_one_kind(ActivityKind::Hiking, &["a"])],
+            features: HashMap::new(),
+            comparisons: vec![("x".into(), "y".into())],
+            ratings: vec![],
+        };
+        let metrics = cross_validate(&data, 5, RATING_WEIGHT, L2_LAMBDA);
+        assert_eq!(metrics.pairwise_count, 0);
+        assert!(metrics.pairwise_accuracy.is_none());
     }
 
     #[test]

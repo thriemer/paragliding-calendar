@@ -1,12 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ApiSite, sitesQueryKey } from "../hooks/useSites";
+import { ApiActivity, sitesQueryKey } from "../hooks/useSites";
 import { API } from "../config/api";
 
 export function useUpdateSite() {
   const queryClient = useQueryClient();
 
   const update = useMutation({
-    mutationFn: async (site: ApiSite) => {
+    mutationFn: async (site: ApiActivity) => {
       const response = await fetch(API.sites, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -31,7 +31,7 @@ export function useUpdateSite() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: sitesQueryKey }),
   });
 
-  const updateSite = async (site: ApiSite): Promise<boolean> => {
+  const updateSite = async (site: ApiActivity): Promise<boolean> => {
     try {
       await update.mutateAsync(site);
       return true;

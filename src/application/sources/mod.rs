@@ -2,8 +2,10 @@ pub mod events;
 pub mod paragliding;
 pub mod tours;
 
+#[cfg(feature = "new-activities")]
 pub use events::EventActivitySource;
 pub use paragliding::ParaglidingActivitySource;
+#[cfg(feature = "new-activities")]
 pub use tours::TourActivitySource;
 
 /// Append a source URL to a description `body`, separated by a blank line so Google Calendar

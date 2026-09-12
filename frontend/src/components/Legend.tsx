@@ -1,13 +1,15 @@
+import { kindLabel, kindColor } from "../utils/activityKind";
 import styles from "./SitesMap.module.css";
 
-// Swatch colors match the leaflet-color-markers pins used in SitesMap.
 const PIN = {
-  winch: "#2A81CB", // blue
-  hang: "#2AAD27", // green
-  both: "#9C2BCB", // violet
-  landing: "#CB2B3E", // red
-  user: "#CB8427", // orange
+  winch: "#2A81CB",
+  hang: "#2AAD27",
+  both: "#9C2BCB",
+  landing: "#CB2B3E",
+  user: "#CB8427",
 };
+
+const ACTIVITY_KINDS = ["paragliding", "hiking", "biking", "running", "mountain_climbing", "kayaking"];
 
 interface LegendProps {
   isZoomedIn: boolean;
@@ -60,6 +62,12 @@ export function Legend({ isZoomedIn, hasLocationSettings }: LegendProps) {
           </div>
         </>
       )}
+      {ACTIVITY_KINDS.map((kind) => (
+        <div key={kind} className={styles.legendItem}>
+          <span className={styles.legendColor} style={{ backgroundColor: kindColor(kind) }}></span>
+          {kindLabel(kind)}
+        </div>
+      ))}
     </div>
   );
 }

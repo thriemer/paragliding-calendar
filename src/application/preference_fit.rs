@@ -12,21 +12,22 @@ use std::collections::HashMap;
 use anyhow::Result;
 
 use crate::domain::{
-    preference_fit::{L2_LAMBDA, RATING_WEIGHT, TrainingData, fit},
+    preference_fit::{L2_LAMBDA, RATING_WEIGHT, TrainingData, ValidationMetrics, cross_validate, fit},
     preferences::KindModel,
     ports::{EmbeddingRepository, PreferenceRepository},
 };
 
 /// Re-fit and persist the preference model. Returns the learned per-kind models
-/// (empty if there is no scaffold yet — i.e. before the first embedding pass).
+/// alongside cross-validation metrics (empty if there is no scaffold yet — i.e.
+/// before the first embedding pass).
 pub async fn refit(
     prefs: &dyn PreferenceRepository,
     embeddings: &dyn EmbeddingRepository,
-) -> Result<Vec<KindModel>> {
+) -> Result<(Vec<KindModel>, ValidationMetrics)> {
     let scaffold = prefs.load_model().await?;
     if scaffold.is_empty() {
         // No feature scaffold installed yet → nothing to fit against.
-        return Ok(Vec::new());
+        return Ok((Vec::new(), ValidationMetrics::default()));
     }
 
     let features: HashMap<String, (crate::domain::activities::ActivityKind, Vec<f64>)> = embeddings
@@ -44,9 +45,10 @@ pub async fn refit(
         comparisons,
         ratings,
     };
+    let metrics = cross_validate(&data, 5, RATING_WEIGHT, L2_LAMBDA);
     let models = fit(&data, RATING_WEIGHT, L2_LAMBDA);
     prefs.save_model(&models).await?;
-    Ok(models)
+    Ok((models, metrics))
 }
 
 #[cfg(test)]
@@ -108,7 +110,8 @@ mod tests {
                 .unwrap();
         }
 
-        let models = refit(repo.as_ref(), repo.as_ref()).await.unwrap();
+        let (models, metrics) = refit(repo.as_ref(), repo.as_ref()).await.unwrap();
+        assert!(metrics.pairwise_count >= 2, "expected CV on comparisons");
         let hiking = models.iter().find(|m| m.kind == ActivityKind::Hiking).unwrap();
         assert!(
             hiking.features[0].weight > 0.3,
@@ -125,7 +128,8 @@ mod tests {
     #[tokio::test]
     async fn refit_without_scaffold_is_a_noop() {
         let repo = Arc::new(PostgresRepository::new(test_pool().await));
-        let models = refit(repo.as_ref(), repo.as_ref()).await.unwrap();
+        let (models, metrics) = refit(repo.as_ref(), repo.as_ref()).await.unwrap();
         assert!(models.is_empty());
+        assert_eq!(metrics.pairwise_count, 0);
     }
 }

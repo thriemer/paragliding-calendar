@@ -70,11 +70,21 @@ in {
         User = "travelai";
         Group = "travelai";
         WorkingDirectory = "${cfg.package}/bin";
+        # Writable, persistent dir (/var/lib/travelai) for the downloaded
+        # embedding model — WorkingDirectory is the read-only Nix store.
+        StateDirectory = "travelai";
         EnvironmentFile = "${cfg.secretsFilePath}";
         Environment = [
           "PORT=${toString cfg.port}"
           "RUST_LOG=${cfg.logLevel}"
           "OAUTH_REDIRECT_URL=${cfg.redirectUrl}"
+          # Where the embedder downloads and loads its model (UForm v3 ONNX).
+          "EMBEDDING_CACHE_DIR=/var/lib/travelai/models"
+          # `ort` uses load-dynamic: dlopen libonnxruntime from here at runtime.
+          "ORT_DYLIB_PATH=${pkgs.onnxruntime}/lib/libonnxruntime.so"
+          # Writable, persistent dir for downloaded activity images (content-
+          # addressed) — the Nix store WorkingDirectory is read-only.
+          "IMAGE_STORE_DIR=/var/lib/travelai/images"
         ] ++ lib.optionals (cfg.otelEndpoint != "") [
           "OTEL_EXPORTER_OTLP_ENDPOINT=${cfg.otelEndpoint}"
           "OTEL_SERVICE_NAME=travelai"

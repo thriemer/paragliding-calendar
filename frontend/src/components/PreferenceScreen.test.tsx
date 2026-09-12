@@ -9,7 +9,12 @@ const pair = {
   b: { id: "t2", kind: "event", title: "Event B", description: "d", stats: {}, image_hashes: [], current_score: 2 },
 };
 
-const summary = { comparisons_done: 2, ratings_done: 0, kinds: {} };
+const summary = {
+  comparisons_done: 2,
+  ratings_done: 0,
+  kinds: {},
+  validation: { pairwise_accuracy: null, pairwise_count: 0, rating_mse: null, rating_count: 0, k: 0 },
+};
 
 function mockFetch() {
   vi.stubGlobal(
@@ -43,7 +48,7 @@ describe("PreferenceScreen", () => {
     renderScreen();
     await waitFor(() => expect(screen.getByText("Tour A")).toBeTruthy());
     // Metrics section is visible alongside the pair.
-    expect(screen.getByText(/comparisons/)).toBeTruthy();
+    expect(screen.getByText(/^\d+ comparisons$/)).toBeTruthy();
     expect(screen.getByText("Re-embed activities")).toBeTruthy();
   });
 

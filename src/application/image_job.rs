@@ -6,7 +6,7 @@
 //! `activity_images` rows, then download the ones we don't have yet. Downloads
 //! are bounded-concurrency and idempotent (a row keeps `content_hash IS NULL`
 //! until its bytes land, so a failed fetch is simply retried next run). Embedding
-//! is a separate pass in [`crate::application::feature_job`].
+//! is a separate pass in [`crate::application::embed_job`].
 
 use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};

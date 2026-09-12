@@ -1,25 +1,32 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { SitesMap } from "./SitesMap";
-import type { ApiSite, SiteType } from "./../hooks/useSites";
+import type { ApiActivity, SiteType } from "./../hooks/useSites";
 import type { UserSettings } from "./../hooks/useSettings";
 
-const mkSite = (
-  name: string,
+const mkActivity = (
+  id: string,
+  kind: string,
   launches: Array<{ lat: number; lng: number; site_type: SiteType }> = [],
   landings: Array<{ lat: number; lng: number }> = [],
-): ApiSite => ({
-  name,
+): ApiActivity => ({
+  id,
+  kind,
+  title: id,
+  latitude: launches[0]?.lat ?? 0,
+  longitude: launches[0]?.lng ?? 0,
+  description: "",
+  image_urls: [],
   country: "DE",
   launches: launches.map((l) => ({
-    location: { latitude: l.lat, longitude: l.lng, name, country: "DE" },
+    location: { latitude: l.lat, longitude: l.lng, name: id, country: "DE" },
     direction_degrees_start: 0,
     direction_degrees_stop: 360,
     elevation: 1000,
     site_type: l.site_type,
   })),
   landings: landings.map((l) => ({
-    location: { latitude: l.lat, longitude: l.lng, name, country: "DE" },
+    location: { latitude: l.lat, longitude: l.lng, name: id, country: "DE" },
     elevation: 800,
   })),
   data_source: "API",
@@ -29,7 +36,7 @@ describe("SitesMap", () => {
   test("renders map container with default zoom when no view provided", () => {
     render(
       <SitesMap
-        sites={[]}
+        activities={[]}
         mapView={null}
         onMapViewChange={() => {}}
       />,
@@ -38,40 +45,52 @@ describe("SitesMap", () => {
     expect(map.getAttribute("data-zoom")).toBe("6");
   });
 
-  test("centers map on default coords when no sites", () => {
+  test("centers map on default coords when no activities", () => {
     render(
-      <SitesMap sites={[]} mapView={null} onMapViewChange={() => {}} />,
+      <SitesMap activities={[]} mapView={null} onMapViewChange={() => {}} />,
     );
     const map = screen.getByTestId("map-container");
     expect(map.getAttribute("data-center")).toBe("[47,10]");
   });
 
-  test("renders overview markers (one per site) when zoom < 11", () => {
-    const sites = [
-      mkSite("S1", [{ lat: 47, lng: 10, site_type: "Hang" }]),
-      mkSite("S2", [
+  test("renders overview markers when zoom < 11", () => {
+    const activities = [
+      mkActivity("S1", "paragliding", [{ lat: 47, lng: 10, site_type: "Hang" }]),
+      mkActivity("S2", "paragliding", [
         { lat: 48, lng: 11, site_type: "Winch" },
         { lat: 48.1, lng: 11.1, site_type: "Hang" },
       ]),
     ];
     render(
-      <SitesMap sites={sites} mapView={{ center: [47, 10], zoom: 6 }} onMapViewChange={() => {}} />,
+      <SitesMap activities={activities} mapView={{ center: [47, 10], zoom: 6 }} onMapViewChange={() => {}} />,
     );
-    // One overview marker per site, regardless of launch count.
     const markers = screen.getAllByTestId("marker");
     expect(markers.length).toBe(2);
   });
 
-  test("renders launch+landing markers when zoom >= 11", () => {
-    const sites = [
-      mkSite(
+  test("renders launch+landing markers when zoom >= 11 and paragliding kind", () => {
+    const activities = [
+      mkActivity(
         "S1",
+        "paragliding",
         [{ lat: 47, lng: 10, site_type: "Hang" }],
         [{ lat: 47.01, lng: 10.01 }],
       ),
     ];
     render(
-      <SitesMap sites={sites} mapView={{ center: [47, 10], zoom: 12 }} onMapViewChange={() => {}} />,
+      <SitesMap activities={activities} mapView={{ center: [47, 10], zoom: 12 }} onMapViewChange={() => {}} />,
+    );
+    const markers = screen.getAllByTestId("marker");
+    expect(markers.length).toBe(2);
+  });
+
+  test("renders non-paragliding activities as single markers", () => {
+    const activities = [
+      mkActivity("H1", "hiking", [], []),
+      mkActivity("B1", "biking", [], []),
+    ];
+    render(
+      <SitesMap activities={activities} mapView={{ center: [47, 10], zoom: 6 }} onMapViewChange={() => {}} />,
     );
     const markers = screen.getAllByTestId("marker");
     expect(markers.length).toBe(2);
@@ -90,7 +109,7 @@ describe("SitesMap", () => {
     };
     render(
       <SitesMap
-        sites={[]}
+        activities={[]}
         mapView={{ center: [47, 10], zoom: 6 }}
         onMapViewChange={() => {}}
         settings={settings}
@@ -114,7 +133,7 @@ describe("SitesMap", () => {
     };
     render(
       <SitesMap
-        sites={[]}
+        activities={[]}
         mapView={{ center: [47, 10], zoom: 6 }}
         onMapViewChange={() => {}}
         settings={settings}
@@ -123,12 +142,12 @@ describe("SitesMap", () => {
     expect(screen.getByTestId("circle")).toBeTruthy();
   });
 
-  test("clicking edit in popup invokes onSiteClick with the matching site", () => {
-    const sites = [mkSite("S1", [{ lat: 47, lng: 10, site_type: "Hang" }])];
+  test("clicking edit in popup invokes onSiteClick with the matching activity", () => {
+    const activities = [mkActivity("S1", "paragliding", [{ lat: 47, lng: 10, site_type: "Hang" }])];
     const onSiteClick = vi.fn();
     render(
       <SitesMap
-        sites={sites}
+        activities={activities}
         mapView={{ center: [47, 10], zoom: 6 }}
         onMapViewChange={() => {}}
         onSiteClick={onSiteClick}
@@ -137,6 +156,6 @@ describe("SitesMap", () => {
     const editBtn = screen.getByRole("button", { name: "Edit" });
     editBtn.click();
     expect(onSiteClick).toHaveBeenCalledTimes(1);
-    expect(onSiteClick.mock.calls[0]?.[0]?.name).toBe("S1");
+    expect(onSiteClick.mock.calls[0]?.[0]?.title).toBe("S1");
   });
 });

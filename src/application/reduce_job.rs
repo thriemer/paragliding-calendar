@@ -1,26 +1,26 @@
-//! Batch feature-extraction pipeline ("FeatureRegistry" in the plan).
+//! Reduce job: the cheap whole-corpus half of the feature pipeline.
 //!
-//! Collects every activity, embeds its description, reduces the per-kind
-//! embeddings with PCA, z-score-normalizes the concatenated feature vectors
-//! across the whole corpus, and persists the result to `activity_embeddings`.
+//! Reads the raw text/image embeddings that [`crate::application::embed_job`]
+//! checkpointed, fuses them, fits per-kind PCA + z-score over the whole corpus,
+//! and writes the reduced feature vectors (`embedding`/`pca_dims`/`features`).
+//! Then installs the per-kind preference-model scaffold and re-fits.
 //!
-//! Whole-corpus batch only: PCA bases and normalizers are fit over the entire
-//! per-kind corpus, so there is no incremental mode. The registry state
-//! (bases/normalizers) lives only for the duration of a run — planning reads the
-//! stored feature vectors directly.
+//! Whole-corpus and idempotent: PCA bases and normalizers are fit over the
+//! entire per-kind corpus, so there is no incremental mode — but it reads
+//! already-computed embeddings and is cheap, so re-running it from scratch every
+//! time is fine and needs no checkpointing of its own.
 
 use anyhow::Result;
 use ndarray::Array2;
 use std::collections::HashMap;
 
+use crate::application::embed_job::{RawActivity, collect};
 use crate::domain::{
-    activities::{ActivityKind, kind_from_category},
-    embedding::ActivityEmbedding,
+    activities::ActivityKind,
     features::{Normalizer, fit_project_pca},
-    image::ImageEmbedding,
     ports::{
-        ActivityEmbeddingRow, Embedder, EmbeddingRepository, HappeningRepository, ImageRepository,
-        ImageStore, PreferenceRepository, SiteRepository, TourRepository,
+        ActivityEmbeddingRow, EmbeddingRepository, HappeningRepository, ImageRepository,
+        PreferenceRepository, SiteRepository, TourRepository,
     },
     preferences::{FeatureWeight, KindModel},
 };
@@ -28,190 +28,80 @@ use crate::domain::{
 const PCA_TARGET_VARIANCE: f64 = 0.80;
 const PCA_MAX_K: usize = 7;
 
-/// A single activity gathered before embedding: identity + kind + the text and
-/// raw features from its [`ActivityEmbedding`] impl.
-struct RawActivity {
-    id: String,
-    kind: ActivityKind,
-    description: String,
-    features: Vec<(String, f64)>,
-}
-
-/// Run the whole pipeline against the given ports. The composition root
-/// constructs the (lazy, failure-isolated) embedder and passes it in.
-///
-/// After storing the feature vectors it installs the per-kind preference-model
-/// scaffold (feature names + normalizers, weights reset to 0) and re-fits the
-/// Bradley-Terry model: re-embedding changes the PCA bases and normalizers, so
-/// any previously learned weights are stale and must be re-derived from the
-/// stored comparisons/ratings (PLAN.md Phase 3).
+/// Reduce every activity that has a stored text embedding into its normalized
+/// feature vector, then refit the preference model. Returns the number of
+/// feature rows written.
 pub async fn run(
     tours: &dyn TourRepository,
     events: &dyn HappeningRepository,
     sites: &dyn SiteRepository,
-    embedder: &dyn Embedder,
     store: &dyn EmbeddingRepository,
-    prefs: &dyn PreferenceRepository,
     images: &dyn ImageRepository,
-    image_store: &dyn ImageStore,
-    batch_size: usize,
+    prefs: &dyn PreferenceRepository,
 ) -> Result<usize> {
     let raw = collect(tours, events, sites).await?;
     if raw.is_empty() {
-        tracing::info!("activity_features: no activities to embed");
+        tracing::info!("reduce_job: no activities to reduce");
         return Ok(0);
     }
 
-    let descriptions: Vec<String> = raw.iter().map(|r| r.description.clone()).collect();
-    let text_embeddings = embed_in_batches(embedder, &descriptions, batch_size).await?;
+    // Text checkpoints keyed for lookup; activities without one are not yet
+    // embedded and are dropped from this pass.
+    let text_map: HashMap<(String, ActivityKind), Vec<f64>> = store
+        .raw_text_embeddings()
+        .await?
+        .into_iter()
+        .map(|(id, kind, v)| ((id, kind), v))
+        .collect();
 
-    // Re-embed every stored image, cache the vectors back into `activity_images`,
-    // and reduce each activity's gallery to one mean visual vector. Failures (no
-    // images, or a text-only embedder) degrade to text-only fusion.
-    let image_vecs = embed_images_by_activity(embedder, images, image_store).await;
-    let embeddings = fuse_text_and_images(&raw, text_embeddings, &image_vecs);
+    // Mean image vector per activity from the stored per-image CLIP vectors.
+    let image_means = image_means_by_activity(images).await?;
 
-    let (rows, scaffold) = build_rows(&raw, &embeddings, PCA_TARGET_VARIANCE, PCA_MAX_K);
+    // Align each activity with its text vector, in a stable order.
+    let mut kept: Vec<RawActivity> = Vec::with_capacity(raw.len());
+    let mut text_embeddings: Vec<Vec<f64>> = Vec::with_capacity(raw.len());
+    for r in raw {
+        if let Some(t) = text_map.get(&(r.id.clone(), r.kind)) {
+            text_embeddings.push(t.clone());
+            kept.push(r);
+        }
+    }
+    if kept.is_empty() {
+        tracing::info!("reduce_job: no text embeddings stored yet, nothing to reduce");
+        return Ok(0);
+    }
+
+    let embeddings = fuse_text_and_images(&kept, text_embeddings, &image_means);
+    let (rows, scaffold) = build_rows(&kept, &embeddings, PCA_TARGET_VARIANCE, PCA_MAX_K);
     let saved = store.upsert_batch(rows).await?;
-    tracing::info!(saved, "activity_features: stored feature vectors");
+    tracing::info!(saved, "reduce_job: stored feature vectors");
 
     // Install the scaffold (resets weights to 0 for the new normalization), then
     // re-derive the weights from the accumulated feedback.
     prefs.save_model(&scaffold).await?;
     match crate::application::preference_fit::refit(prefs, store).await {
-        Ok(models) => tracing::info!(kinds = models.len(), "activity_features: refit preference model"),
-        Err(e) => tracing::error!(error = ?e, "activity_features: preference refit failed"),
+        Ok((models, _metrics)) => tracing::info!(kinds = models.len(), "reduce_job: refit preference model"),
+        Err(e) => tracing::error!(error = ?e, "reduce_job: preference refit failed"),
     }
     Ok(saved)
 }
 
-/// Gather every activity from the three sources. Tours whose category doesn't
-/// map to a kind are skipped; activities with any non-finite raw feature are
-/// dropped with a warning so one bad row can't poison corpus statistics.
-async fn collect(
-    tours: &dyn TourRepository,
-    events: &dyn HappeningRepository,
-    sites: &dyn SiteRepository,
-) -> Result<Vec<RawActivity>> {
-    let mut raw = Vec::new();
-
-    for tour in tours.find_all().await? {
-        if let Some(kind) = kind_from_category(&tour.category) {
-            push_if_finite(&mut raw, kind, &tour);
-        }
-    }
-    for happening in events.find_all().await? {
-        push_if_finite(&mut raw, ActivityKind::Event, &happening);
-    }
-    for site in sites.find_all().await? {
-        push_if_finite(&mut raw, ActivityKind::Paragliding, &site);
-    }
-
-    Ok(raw)
-}
-
-fn push_if_finite(raw: &mut Vec<RawActivity>, kind: ActivityKind, a: &impl ActivityEmbedding) {
-    let features = a.features();
-    if !features.iter().all(|(_, v)| v.is_finite()) {
-        tracing::warn!(id = %a.activity_id(), "activity_features: skipping non-finite features");
-        return;
-    }
-    raw.push(RawActivity {
-        id: a.activity_id(),
-        kind,
-        description: a.description(),
-        features,
-    });
-}
-
-async fn embed_in_batches(
-    embedder: &dyn Embedder,
-    descriptions: &[String],
-    batch_size: usize,
-) -> Result<Vec<Vec<f64>>> {
-    let total = descriptions.len();
-    let mut out = Vec::with_capacity(total);
-    for chunk in descriptions.chunks(batch_size.max(1)) {
-        out.extend(embedder.embed_batch(chunk).await?);
-        tracing::info!(
-            "activity_features: embedded {}/{} ({}%)",
-            out.len(),
-            total,
-            out.len() * 100 / total.max(1)
-        );
-    }
-    Ok(out)
-}
-
-/// Re-embed every downloaded image (batched — the vision tower runs at full
-/// width), persist the per-image vectors back to `activity_images`, and collapse
-/// each activity's gallery to the mean of its image vectors. Returns
-/// `activity_id → mean image vector`; an empty map means text-only fusion (no
-/// images downloaded, or the embedder can't do images). Never fails the pipeline.
-async fn embed_images_by_activity(
-    embedder: &dyn Embedder,
+/// Collapse each activity's stored per-image CLIP vectors into one mean vector.
+/// Per-image vectors are L2-normalized first so one high-magnitude image can't
+/// dominate the gallery centroid. An empty map means text-only fusion.
+async fn image_means_by_activity(
     images: &dyn ImageRepository,
-    image_store: &dyn ImageStore,
-) -> HashMap<String, Vec<f64>> {
-    match embed_images_inner(embedder, images, image_store).await {
-        Ok(map) => map,
-        Err(e) => {
-            tracing::warn!(error = ?e, "activity_features: image embedding skipped, using text-only");
-            HashMap::new()
-        }
-    }
-}
-
-async fn embed_images_inner(
-    embedder: &dyn Embedder,
-    images: &dyn ImageRepository,
-    image_store: &dyn ImageStore,
 ) -> Result<HashMap<String, Vec<f64>>> {
-    let downloaded = images.all_downloaded().await?;
-    if downloaded.is_empty() {
+    let stored = images.all_image_embeddings().await?;
+    if stored.is_empty() {
         return Ok(HashMap::new());
     }
-
-    // Load bytes; skip any whose blob is missing (keeps the batch aligned).
-    let mut bytes: Vec<Vec<u8>> = Vec::with_capacity(downloaded.len());
-    let mut kept = Vec::with_capacity(downloaded.len());
-    for img in downloaded {
-        match image_store.get(&img.content_hash).await {
-            Ok(b) => {
-                bytes.push(b);
-                kept.push(img);
-            }
-            Err(e) => tracing::warn!(hash = %img.content_hash, error = ?e, "activity_features: image bytes missing"),
-        }
-    }
-    if bytes.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    let vectors = embedder.embed_image_batch(&bytes).await?;
-    tracing::info!(count = vectors.len(), "activity_features: embedded images");
-
-    // Cache the vectors back into activity_images (refreshed every re-embed).
-    let rows: Vec<ImageEmbedding> = kept
-        .iter()
-        .zip(&vectors)
-        .map(|(img, v)| ImageEmbedding {
-            activity_id: img.activity_id.clone(),
-            kind: img.kind,
-            position: img.position,
-            embedding: v.clone(),
-        })
-        .collect();
-    images.store_embeddings(&rows).await?;
-
-    // Mean of each activity's image vectors. Per-image vectors are L2-normalized
-    // first so one high-magnitude image can't dominate the gallery centroid.
     let mut grouped: HashMap<String, Vec<Vec<f64>>> = HashMap::new();
-    for (img, v) in kept.into_iter().zip(vectors) {
+    for img in stored {
         grouped
             .entry(img.activity_id)
             .or_default()
-            .push(l2_normalize(&v));
+            .push(l2_normalize(&img.embedding));
     }
     Ok(grouped
         .into_iter()
@@ -336,7 +226,7 @@ fn build_rows(
             pca_dims = k,
             variance_captured = variance_captured,
             total_features = normalizer.feature_order().len(),
-            "activity_features: fitted kind"
+            "reduce_job: fitted kind"
         );
         for (row, &i) in idxs.iter().enumerate() {
             rows.push(ActivityEmbeddingRow {
@@ -371,6 +261,7 @@ fn build_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::embed_job;
 
     fn raw(id: &str, kind: ActivityKind, features: Vec<(&str, f64)>) -> RawActivity {
         RawActivity {
@@ -452,16 +343,24 @@ mod tests {
         happening::Happening,
         location::Location,
         paragliding::{ParaglidingLaunch, ParaglidingSite, SiteType},
+        ports::{EmbeddingRepository, HappeningRepository, SiteRepository, TourRepository},
         tour::Tour,
     };
     use crate::test_support::test_pool;
     use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    struct FakeEmbedder;
+    /// Fake embedder that also counts how many descriptions it has embedded, so a
+    /// test can assert a resumed run only touches the remainder.
+    #[derive(Default)]
+    struct CountingEmbedder {
+        embedded: AtomicUsize,
+    }
 
     #[async_trait]
-    impl Embedder for FakeEmbedder {
+    impl crate::domain::ports::Embedder for CountingEmbedder {
         async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f64>>> {
+            self.embedded.fetch_add(texts.len(), Ordering::Relaxed);
             Ok(texts
                 .iter()
                 .map(|t| {
@@ -538,12 +437,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn pipeline_embeds_every_kind_end_to_end() {
-        let repo = PostgresRepository::new(test_pool().await);
-
+    async fn seed(repo: &PostgresRepository) {
         TourRepository::save_batch(
-            &repo,
+            repo,
             vec![
                 tour("t1", "Wanderung"),
                 tour("t2", "Mountainbike"),
@@ -552,29 +448,31 @@ mod tests {
         )
         .await
         .unwrap();
-        HappeningRepository::save_batch(&repo, vec![happening("e1"), happening("e2")])
+        HappeningRepository::save_batch(repo, vec![happening("e1"), happening("e2")])
             .await
             .unwrap();
         for s in [site("s1", 1200.0), site("s2", 900.0)] {
-            SiteRepository::save(&repo, s).await.unwrap();
+            SiteRepository::save(repo, s).await.unwrap();
         }
+    }
 
-        let image_store = crate::adapters::blob::FsImageStore::new(
-            std::env::temp_dir().join(format!("travelai_fj_imgs_{}", std::process::id())),
-        );
-        let saved = run(
-            &repo,
-            &repo,
-            &repo,
-            &FakeEmbedder,
-            &repo,
-            &repo,
-            &repo,
-            &image_store,
-            8,
+    fn image_store() -> crate::adapters::blob::FsImageStore {
+        crate::adapters::blob::FsImageStore::new(
+            std::env::temp_dir().join(format!("travelai_rj_imgs_{}", std::process::id())),
         )
-        .await
-        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn embed_then_reduce_covers_every_kind_end_to_end() {
+        let repo = PostgresRepository::new(test_pool().await);
+        seed(&repo).await;
+        let store = image_store();
+        let embedder = CountingEmbedder::default();
+
+        embed_job::run(&repo, &repo, &repo, &embedder, &repo, &repo, &store, 8)
+            .await
+            .unwrap();
+        let saved = run(&repo, &repo, &repo, &repo, &repo, &repo).await.unwrap();
         // t3 "Skitour" maps to no kind → skipped: 2 tours + 2 events + 2 sites.
         assert_eq!(saved, 6);
 
@@ -582,18 +480,39 @@ mod tests {
         assert_eq!(all.len(), 6);
         assert!(all.iter().all(|r| r.embedding.len() == 384));
         assert!(all.iter().all(|r| !r.features.is_empty()));
-        // Within a kind, feature-vector length is consistent.
-        let mut by_kind: std::collections::HashMap<ActivityKind, usize> = Default::default();
+        let mut by_kind: HashMap<ActivityKind, usize> = Default::default();
         for r in &all {
             let entry = by_kind.entry(r.kind).or_insert(r.features.len());
-            assert_eq!(
-                *entry,
-                r.features.len(),
-                "inconsistent len for {:?}",
-                r.kind
-            );
+            assert_eq!(*entry, r.features.len(), "inconsistent len for {:?}", r.kind);
         }
         assert!(by_kind.contains_key(&ActivityKind::Paragliding));
         assert!(by_kind.contains_key(&ActivityKind::Event));
+    }
+
+    #[tokio::test]
+    async fn embed_is_resumable_and_skips_already_embedded() {
+        let repo = PostgresRepository::new(test_pool().await);
+        seed(&repo).await;
+        let store = image_store();
+        let embedder = CountingEmbedder::default();
+
+        // First run embeds all six embeddable activities.
+        let first = embed_job::run(&repo, &repo, &repo, &embedder, &repo, &repo, &store, 8)
+            .await
+            .unwrap();
+        assert_eq!(first, 6);
+        assert_eq!(embedder.embedded.load(Ordering::Relaxed), 6);
+
+        // A re-run (as after a restart) re-embeds nothing — the checkpoint covers
+        // the whole corpus.
+        let second = embed_job::run(&repo, &repo, &repo, &embedder, &repo, &repo, &store, 8)
+            .await
+            .unwrap();
+        assert_eq!(second, 0);
+        assert_eq!(embedder.embedded.load(Ordering::Relaxed), 6, "no re-embedding on resume");
+
+        // Reduce still produces the full corpus from the checkpoints.
+        let saved = run(&repo, &repo, &repo, &repo, &repo, &repo).await.unwrap();
+        assert_eq!(saved, 6);
     }
 }

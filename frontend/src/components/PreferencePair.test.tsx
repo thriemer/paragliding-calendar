@@ -27,7 +27,7 @@ const pair: PreferencePairData = {
 
 describe("PreferencePair", () => {
   test("renders both activities with kind labels and stats", () => {
-    render(<PreferencePair pair={pair} onVote={vi.fn()} onSkip={vi.fn()} />);
+    render(<PreferencePair pair={pair} onVote={vi.fn()} onLikeBoth={vi.fn()} onDislikeBoth={vi.fn()} onSkip={vi.fn()} />);
     expect(screen.getByText("Rundwanderung Schrecksee")).toBeTruthy();
     expect(screen.getByText("Tegelberg")).toBeTruthy();
     expect(screen.getByText("Hiking")).toBeTruthy();
@@ -37,7 +37,7 @@ describe("PreferencePair", () => {
   });
 
   test("renders the primary image only for activities that have one", () => {
-    render(<PreferencePair pair={pair} onVote={vi.fn()} onSkip={vi.fn()} />);
+    render(<PreferencePair pair={pair} onVote={vi.fn()} onLikeBoth={vi.fn()} onDislikeBoth={vi.fn()} onSkip={vi.fn()} />);
     // A has images (primary hash → served URL); B has none.
     const img = screen.getByAltText("Rundwanderung Schrecksee") as HTMLImageElement;
     expect(img.tagName).toBe("IMG");
@@ -48,7 +48,7 @@ describe("PreferencePair", () => {
   });
 
   test("the carousel cycles through the whole gallery and wraps around", () => {
-    render(<PreferencePair pair={pair} onVote={vi.fn()} onSkip={vi.fn()} />);
+    render(<PreferencePair pair={pair} onVote={vi.fn()} onLikeBoth={vi.fn()} onDislikeBoth={vi.fn()} onSkip={vi.fn()} />);
     const shown = () =>
       (screen.getByAltText("Rundwanderung Schrecksee") as HTMLImageElement).src;
 
@@ -66,20 +66,26 @@ describe("PreferencePair", () => {
   });
 
   test("shows the full description, untruncated", () => {
-    render(<PreferencePair pair={pair} onVote={vi.fn()} onSkip={vi.fn()} />);
+    render(<PreferencePair pair={pair} onVote={vi.fn()} onLikeBoth={vi.fn()} onDislikeBoth={vi.fn()} onSkip={vi.fn()} />);
     // The 400-char description must render in full (no ellipsis) so the user
     // can read it before deciding — critical for events, which carry no stats.
     const full = screen.getByText("x".repeat(400));
     expect(full.textContent).toBe("x".repeat(400));
   });
 
-  test("Prefer A / Prefer B / Skip fire the right callbacks", () => {
+  test("Prefer A / Like Both / Dislike Both / Prefer B / Skip fire the right callbacks", () => {
     const onVote = vi.fn();
+    const onLikeBoth = vi.fn();
+    const onDislikeBoth = vi.fn();
     const onSkip = vi.fn();
-    render(<PreferencePair pair={pair} onVote={onVote} onSkip={onSkip} />);
+    render(<PreferencePair pair={pair} onVote={onVote} onLikeBoth={onLikeBoth} onDislikeBoth={onDislikeBoth} onSkip={onSkip} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Prefer A" }));
     expect(onVote).toHaveBeenCalledWith("t1");
+    fireEvent.click(screen.getByRole("button", { name: "Like Both" }));
+    expect(onLikeBoth).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Dislike Both" }));
+    expect(onDislikeBoth).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Prefer B" }));
     expect(onVote).toHaveBeenCalledWith("s1");
     fireEvent.click(screen.getByRole("button", { name: "Skip" }));
@@ -87,9 +93,11 @@ describe("PreferencePair", () => {
   });
 
   test("disables all actions while a vote is in flight", () => {
-    render(<PreferencePair pair={pair} onVote={vi.fn()} onSkip={vi.fn()} disabled />);
+    render(<PreferencePair pair={pair} onVote={vi.fn()} onLikeBoth={vi.fn()} onDislikeBoth={vi.fn()} onSkip={vi.fn()} disabled />);
     expect(screen.getByRole("button", { name: "Prefer A" })).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", { name: "Skip" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Like Both" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Dislike Both" })).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: "Prefer B" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Skip" })).toHaveProperty("disabled", true);
   });
 });
